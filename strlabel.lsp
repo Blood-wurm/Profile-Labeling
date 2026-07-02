@@ -4,43 +4,38 @@
 ;;; Requires strtools-lib.lsp (the shared engine) to be loaded first.
 ;;;
 ;;; What it does, per the agreed spec:
-;;;   - You calibrate the profile grid once, pick the proposed ground line,
-;;;     name each storm centerline, and name the line THIS profile follows.
+;;;   - You calibrate the profile grid once, select the Carlson surface (.tin),
+;;;     select one or more Carlson centerline files (.cl), and name the line
+;;;     THIS profile follows.
 ;;;   - Then you pick plan-view structure blocks one at a time. For each, it
 ;;;     computes line membership + station + ID from geometry, looks up type
-;;;     and size from the block name, samples G.L. off the ground line, and
+;;;     and size from the block name, samples G.L. from the TIN surface, and
 ;;;     draws the vertical text stack + station line up in the profile.
 ;;;
 ;;; Inverts are NOT drawn here (second-pass tool). This command draws only the
 ;;; top-of-grid label family.
 ;;;
-;;; STATUS: not yet run in a live drawing. Test on a scratch copy first.
+;;; STATUS: updated to Carlson Road/DTM APIs. Test on a scratch copy first.
 ;;; ==========================================================================
 
 ;;; --------------------------------------------------------------------------
 ;;; TUNABLES  --  firm-standard constants and the honest assumptions.
 ;;; --------------------------------------------------------------------------
 
-(setq *st-layer*  "STORM-TEXT_P")   ; label layer (assumed to already exist)
-(setq *st-style*  "L080")           ; text style
+(setq *st-layer* "STORM-TEXT_P")   ; label layer (assumed to already exist)
+(setq *st-style* "L080")           ; text style
 (setq *st-height* 1.60)             ; text height (model units)
 (setq *st-prefix* "CONST.")         ; row prefix; edit rare exceptions by hand
 
 ;; ASSUMPTION: the combined ID lists lines in the SAME order as the STA rows
-;; (the profiled/primary line first). Your junction sample image showed the
-;; ID in the opposite order (AA-3/AC-2 with AC as the first STA row). If the
-;; ID should be reversed or alphabetized, that change lives in
-;; strlabel:process-structure where `names` is built -- flag it and I'll adjust.
+;; (the profiled/primary line first).
 
 
 ;;; ==========================================================================
 ;;; SETUP  --  one-time context for a labeling run
 ;;; ==========================================================================
 
-;; (strlabel:read-grid) -> xform list  (see strtools-lib SECTION 3 for layout)
-;;   Pick + prompt calibration. Version-proof: works regardless of Carlson
-;;   build. If Carlson exposes the grid parameters to LISP, this is the ONE
-;;   function to swap -- everything downstream reads the returned xform list.
+;; (strlabel:read-grid) -> xform list  (Matches Section 3 in strtools-lib.lsp)
 (defun strlabel:read-grid ( / ll top sta0 elev0 hs vs)
   (setq ll (getpoint "\nPick grid LOWER-LEFT corner: "))
   (setq top (getpoint ll "\nPick a point on the grid TOP border: "))
@@ -52,14 +47,24 @@
   (if (null hs) (setq hs 1.0))
   (initget 1)
   (setq vs (getreal "\nVertical scale (world units per elevation-foot): "))
-  (list (car ll) (cadr ll) sta0 elev0 hs vs (cadr top)))
+  ;; Returns exact 5-element array expected by the backend engine:
+  (list (car ll) sta0 hs (cadr top) vs))
 
-;; (strlabel:pick-lines) -> list of (ename name)
-(defun strlabel:pick-lines ( / tbl e nm)
+;; (strlabel:load-lines) -> list of (clfile name start end)
+;;   Loops file selection so multiple .cl files can be loaded for junctions.
+(defun strlabel:load-lines ( / tbl file defname nm rng)
   (setq tbl '())
-  (while (setq e (entsel "\nSelect a storm centerline (Enter to finish): "))
-    (setq nm (getstring "\nLine name (e.g. AA): "))
-    (setq tbl (cons (list (car e) (strcase nm)) tbl)))
+  (while (setq file (getfiled "Select Carlson Centerline (.CL) File (Cancel when done)" 
+                              (if file file "") "cl" 0))
+    (if (setq rng (st:cl-range file))
+      (progn
+        (setq defname (strcase (vl-filename-base file)))
+        (setq nm (getstring (strcat "\nLine name for " defname " <" defname ">: ")))
+        (if (= nm "") (setq nm defname) (setq nm (strcase nm)))
+        (setq tbl (cons (list file nm (car rng) (cadr rng)) tbl))
+        (prompt (strcat "\nLoaded line '" nm "' (Sta " (st:fmt-station (car rng)) 
+                        " to " (st:fmt-station (cadr rng)) ").")))
+      (prompt (strcat "\nError: Could not read station range from " file))))
   (reverse tbl))
 
 ;; (strlabel:gather-inlets) -> list of block enames whose name is a known type
@@ -80,35 +85,37 @@
     (subst (cons name (cons val (cdr cell))) cell idx)
     (cons (list name val) idx)))
 
-;; (strlabel:index-stations inlets line-table eps) -> (name . sorted-stations)*
+;; (strlabel:index-stations inlets line-table) -> (name . sorted-stations)*
 ;;   Builds, per line, the ascending list of every structure station on it,
 ;;   so any structure can be ranked without re-scanning the drawing.
-(defun strlabel:index-stations (inlets line-table eps / idx pt hits)
+(defun strlabel:index-stations (inlets line-table / idx pt hits)
   (setq idx '())
   (foreach e inlets
     (setq pt   (cdr (assoc 10 (entget e)))
-          hits (st:lines-at-point pt line-table eps))
-    (foreach h hits                         ; h = (name type station)
-      (setq idx (st:idx-add idx (car h) (caddr h)))))
+          hits (st:lines-at-point pt line-table))
+    (foreach h hits                         ; h = (name station)
+      (setq idx (st:idx-add idx (car h) (cadr h)))))
   (mapcar '(lambda (pair) (cons (car pair) (vl-sort (cdr pair) '<))) idx))
 
 ;; (strlabel:setup) -> context alist | nil
-(defun strlabel:setup ( / xf ground lines primary inlets index)
+(defun strlabel:setup ( / xf tin lines primary inlets index)
   (setq xf (strlabel:read-grid))
-  (setq ground (car (entsel "\nSelect the PROPOSED GROUND profile polyline: ")))
-  (setq lines (strlabel:pick-lines))
-  (if (null lines)
-    (progn (prompt "\nNo centerlines selected -- aborting.") nil)
+  (if (setq tin (getfiled "Select Carlson Surface (.TIN) File" "" "tin" 0))
     (progn
-      (setq primary (strcase (getstring "\nName of the line THIS profile follows: ")))
-      (prompt "\nIndexing structures for ranking...")
-      (setq inlets (strlabel:gather-inlets)
-            index  (strlabel:index-stations inlets lines *st-eps*))
-      (list (cons 'xform   xf)
-            (cons 'lines   lines)
-            (cons 'primary primary)
-            (cons 'ground  ground)
-            (cons 'index   index)))))
+      (st:tin-load tin)
+      (setq lines (strlabel:load-lines))
+      (if (null lines)
+        (progn (prompt "\nNo centerlines selected -- aborting.") (st:tin-unload) nil)
+        (progn
+          (setq primary (strcase (getstring "\nName of the line THIS profile follows: ")))
+          (prompt "\nIndexing structures for ranking...")
+          (setq inlets (strlabel:gather-inlets)
+                index  (strlabel:index-stations inlets lines))
+          (list (cons 'xform   xf)
+                (cons 'lines   lines)
+                (cons 'primary primary)
+                (cons 'tin     tin)
+                (cons 'index   index)))))))
 
 
 ;;; ==========================================================================
@@ -122,21 +129,22 @@
     '(lambda (li)
        (st:rank-on-line (cadr li)
                         (cdr (assoc (car li) index))
-                        *st-rank-ascending* *st-eps*))
+                        *st-rank-ascending* *st-range-eps*))
     line-infos))
 
 ;; (strlabel:process-structure block-ename context) -> nil
 (defun strlabel:process-structure (block-ename context
                                    / ed pt name xf gtop primary hits primhit
                                      others line-infos names ranks
-                                     type size id gl px basept topy)
+                                     type size id gl-val gl-str px basept topy
+                                     offset gap1 gapn)
   (setq ed      (entget block-ename)
         pt      (cdr (assoc 10 ed))
         name    (cdr (assoc 2 ed))
         xf      (cdr (assoc 'xform context))
         gtop    (st:grid-top-y xf)
         primary (cdr (assoc 'primary context))
-        hits    (st:lines-at-point pt (cdr (assoc 'lines context)) *st-eps*))
+        hits    (st:lines-at-point pt (cdr (assoc 'lines context))))
   (setq primhit (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
   (cond
     ((null hits)
@@ -147,24 +155,26 @@
                      " but the profiled line is '" primary "'; skipped.")))
     (T
      (setq others     (vl-remove primhit hits)
-           line-infos (cons (list (car primhit) (caddr primhit))
-                            (mapcar '(lambda (h) (list (car h) (caddr h))) others))
+           line-infos (cons primhit others)
            names      (mapcar 'car line-infos)
            ranks      (strlabel:ranks-for line-infos context)
            type       (st:blockname->type name *st-type-table*)
            size       (st:blockname->size name *st-type-table*)
            id         (st:combine-id names ranks)
-           gl         (st:ground-elev-at-station
-                        (caddr primhit) (cdr (assoc 'ground context)) xf)
-           px         (st:station->profile-x (caddr primhit) xf))
-     (if (null gl)
-       (prompt "\n  Ground line not found at this station -- skipped.")
+           gl-val     (st:tin-z pt)
+           px         (st:station->profile-x (cadr primhit) xf))
+     (if (null gl-val)
+       (prompt "\n  Structure X,Y is off the DTM surface -- skipped.")
        (progn
-         (setq basept (list (+ px *st-text-offset*) gtop 0.0)
+         (setq gl-str (st:fmt-elev gl-val 2)
+               offset (* *st-height* *st-offset-factor*)
+               gap1   (* *st-height* *st-gap-first-factor*)
+               gapn   (* *st-height* *st-gap-rest-factor*))
+         (setq basept (list (+ px offset) gtop 0.0)
                topy   (st:draw-label-stack
                         basept
-                        (st:build-label-rows line-infos type size id *st-prefix* gl)
-                        *st-layer* *st-style* *st-height*))
+                        (st:build-label-rows line-infos type size id *st-prefix* gl-str)
+                        *st-layer* *st-style* *st-height* gap1 gapn))
          (st:draw-station-line px gtop topy *st-layer*)
          (prompt (strcat "\n  Labeled " id "."))))))
   (princ))
@@ -175,6 +185,7 @@
 ;;; ==========================================================================
 
 (defun c:STRLABEL ( / ctx e ent ed)
+  (st:load-apis)
   (setq ctx (strlabel:setup))
   (if ctx
     (progn
@@ -187,7 +198,9 @@
           ((null (st:type-entry (cdr (assoc 2 ed)) *st-type-table*))
            (prompt (strcat "\n  Unknown structure block "
                            (cdr (assoc 2 ed)) " -- skipped.")))
-          (T (strlabel:process-structure ent ctx))))))
+          (T (strlabel:process-structure ent ctx))))
+      ;; Clean up loaded TIN surface when command completes normally
+      (st:tin-unload)))
   (princ))
 
 (princ "\nstrlabel.lsp loaded.  Command: STRLABEL")
