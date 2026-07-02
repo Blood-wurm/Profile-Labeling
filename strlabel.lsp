@@ -136,8 +136,8 @@
 (defun strlabel:process-structure (block-ename context
                                    / ed pt name xf gtop primary hits primhit
                                      others line-infos names ranks
-                                     type size id gl-val gl-str px basept topy
-                                     offset gap1 gapn)
+                                     type size id gl-val gl-str px basey topy
+                                     offset gapn)
   (setq ed      (entget block-ename)
         pt      (cdr (assoc 10 ed))
         name    (cdr (assoc 2 ed))
@@ -168,13 +168,14 @@
        (progn
          (setq gl-str (st:fmt-elev gl-val 2)
                offset (* *st-height* *st-offset-factor*)
-               gap1   (* *st-height* *st-gap-first-factor*)
                gapn   (* *st-height* *st-gap-rest-factor*))
-         (setq basept (list (+ px offset) gtop 0.0)
-               topy   (st:draw-label-stack
-                        basept
+         ;; text baseline sits `offset` above the grid top (the vertical gap);
+         ;; the station line still runs from the grid top up to the text top.
+         (setq basey (+ gtop offset)
+               topy  (st:draw-label-stack
+                        px basey
                         (st:build-label-rows line-infos type size id *st-prefix* gl-str)
-                        *st-layer* *st-style* *st-height* gap1 gapn))
+                        *st-layer* *st-style* *st-height* offset gapn))
          (st:draw-station-line px gtop topy *st-layer*)
          (prompt (strcat "\n  Labeled " id "."))))))
   (princ))
@@ -203,7 +204,38 @@
       (st:tin-unload)))
   (princ))
 
-(princ "\nstrlabel.lsp loaded.  Command: STRLABEL")
+;;; ==========================================================================
+;;; TEMPORARY DIAGNOSTIC  --  remove once the over-count is understood
+;;; ==========================================================================
+;;; STRDIAG: pick ONE .cl file; for every inlet block in the drawing it prints
+;;; the block name, its station on that line, and its offset. Lines with offset
+;;; within *st-offset-tol* are marked "<== COUNTED" -- these are what the index
+;;; is assigning to that line. Spurious/nearby blocks show up here immediately.
+
+(defun c:STRDIAG ( / clfile inlets pt res sta off flag)
+  (st:load-apis)
+  (if (setq clfile (getfiled "Select ONE Centerline (.CL) to test" "" "cl" 0))
+    (progn
+      (setq inlets (strlabel:gather-inlets))
+      (prompt (strcat "\n--- Offsets to " (vl-filename-base clfile)
+                      " (tol = " (rtos *st-offset-tol* 2 3) ") ---"))
+      (foreach e inlets
+        (setq pt  (cdr (assoc 10 (entget e)))
+              res (st:cl-locate-safe clfile pt))
+        (if res
+          (progn
+            (setq sta  (car res)
+                  off  (abs (cadr res))
+                  flag (if (<= off *st-junction-dist*) "  <== COUNTED" ""))
+            (prompt (strcat "\n  " (cdr (assoc 2 (entget e)))
+                            "  sta " (st:fmt-station sta)
+                            "  off " (rtos off 2 4) flag)))
+          (prompt (strcat "\n  " (cdr (assoc 2 (entget e)))
+                          "  (not locatable on this line)"))))
+      (prompt "\n--- end ---")))
+  (princ))
+
+(princ "\nstrlabel.lsp loaded.  Commands: STRLABEL, STRDIAG (diagnostic)")
 (princ)
 ;;; ==========================================================================
 ;;; end of strlabel.lsp

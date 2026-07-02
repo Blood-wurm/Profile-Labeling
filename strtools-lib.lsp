@@ -19,6 +19,9 @@
 ;; Updated to match the exact Carlson SCAD_2007_CIVIL console output:
 (setq *st-dtm-fn* 'cf:dtm_api)
 (setq *st-road-fn* 'cf:road_api)
+;; New tolerance settings for coordinate matching:
+(setq *st-micro-snap-tol* 0.15)  ; Direct coordinate coincidence tolerance for skewed outfalls/termini
+(setq *st-junction-dist* 1.50)  ; Maximum distance to consider multiple centerlines sharing a junction
 
 ;; Membership: a structure is "on" a line if its perpendicular offset from that
 ;; centerline is within this tolerance (feet). Structures are snapped, so this
@@ -45,9 +48,8 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 1  --  Carlson API loading + wrappers
+;;; SECTION 1  --  Carlson API Loading + Silent Error-Trapped Wrappers
 ;;; ==========================================================================
-;; (st:load-apis) -> loads TRI4 (DTM) and EWORKS (Road). Never unload them.
 (defun st:load-apis ( / dir)
   (setq dir (if (boundp 'lspdir$) lspdir$ ""))
   (vl-catch-all-apply 'scload (list (strcat dir "tri4")))
@@ -55,51 +57,90 @@
   (princ))
 
 ;; DTM wrappers -----------------------------------------------------------
-(defun st:tin-load (file)
-  (apply *st-dtm-fn* (list "load_tin" file)))
-
-(defun st:tin-unload ()
-  (apply *st-dtm-fn* (list "unload_tin")))
-
-;; (st:tin-z pt2d) -> elevation | nil  (nil if point is off the surface)
-(defun st:tin-z (pt2d)
-  (apply *st-dtm-fn* (list "tin_z" pt2d)))
+(defun st:tin-load (file)   (apply *st-dtm-fn* (list "load_tin" file)))
+(defun st:tin-unload ()     (apply *st-dtm-fn* (list "unload_tin")))
+(defun st:tin-z (pt)        (apply *st-dtm-fn* (list "tin_z" (list (car pt) (cadr pt)))))
 
 ;; Road wrappers ----------------------------------------------------------
-;; (st:cl-locate clfile pt2d) -> (station offset projected-point) | nil
-(defun st:cl-locate (clfile pt2d)
-  (apply *st-road-fn* (list "cl_location_at_pt" clfile pt2d)))
+(defun st:cl-range (clfile / rng)
+  (setq rng (vl-catch-all-apply *st-road-fn* (list "cl_sta_range" clfile)))
+  (if (and (not (vl-catch-all-error-p rng)) rng) rng nil))
 
-;; (st:cl-range clfile) -> (start-station end-station) | nil
-(defun st:cl-range (clfile)
-  (apply *st-road-fn* (list "cl_sta_range" clfile)))
-
+;; (st:cl-locate-safe clfile pt) -> (station offset projected-point) | nil
+;; Silences Carlson C++ console spam and provides radial fallback for line termini.
+(defun st:cl-locate-safe (clfile pt / pt2d res rng sta0 stan pt0 ptn d0 dn)
+  (setq pt2d (list (car pt) (cadr pt)))
+  
+  ;; 1. Attempt standard orthogonal projection inside a silent error trap
+  (setq res (vl-catch-all-apply *st-road-fn* (list "cl_location_at_pt" clfile pt2d)))
+  (if (and (not (vl-catch-all-error-p res)) res)
+    res
+    
+    ;; 2. Radial Terminus Fallback: If orthogonal fails (bend/overshoot), check endpoints
+    (if (setq rng (st:cl-range clfile))
+      (progn
+        (setq sta0 (car rng) stan (cadr rng))
+        (setq pt0  (car (vl-catch-all-apply *st-road-fn* (list "cl_location_at_sta" clfile sta0)))
+              ptn  (car (vl-catch-all-apply *st-road-fn* (list "cl_location_at_sta" clfile stan))))
+        (if (and (listp pt0) (listp ptn))
+          (progn
+            (setq d0 (distance pt2d (list (car pt0) (cadr pt0)))
+                  dn (distance pt2d (list (car ptn) (cadr ptn))))
+            (cond
+              ((<= d0 *st-offset-tol*) (list sta0 d0 pt0))
+              ((<= dn *st-offset-tol*) (list stan dn ptn))
+              (T nil))))))))
 
 ;;; ==========================================================================
-;;; SECTION 2  --  Membership + stationing  (via Road API)
+;;; SECTION 2  --  Dynamic Multi-Line Binding & Stationing
 ;;; ==========================================================================
-;;; cl-table entries: (clfile name start end)   -- start/end cached at setup.
-
 ;; (st:on-line-p entry pt2d) -> station | nil
-;;   On the line if offset within tolerance AND station within the line's range.
 (defun st:on-line-p (entry pt2d / res sta off lo hi)
-  (setq res (st:cl-locate (car entry) pt2d))
+  (setq res (st:cl-locate-safe (car entry) pt2d))
   (if res
     (progn
-      (setq sta (car res) off (cadr res)
+      (setq sta (car res) off (abs (cadr res))
             lo  (nth 2 entry) hi (nth 3 entry))
-      (if (and (<= (abs off) *st-offset-tol*)
+      (if (and (<= off *st-offset-tol*)
                (>= sta (- lo *st-range-eps*))
                (<= sta (+ hi *st-range-eps*)))
         sta))))
 
-;; (st:lines-at-point pt2d cl-table) -> list of (name station)
-;;   Every centerline the point sits on. 1 = single-line, 2+ = junction.
-(defun st:lines-at-point (pt2d cl-table / out sta)
-  (setq out '())
+;; (st:lines-at-point pt2d cl-table) -> list of unique (name station)
+;; Evaluates all loaded centerlines simultaneously, binds the closest line,
+;; and dynamically appends any additional lines sharing the junction.
+(defun st:lines-at-point (pt2d cl-table / hits res sta off nm min-off out seen)
+  (setq hits '() seen '() out '())
+  
+  ;; 1. Scan all loaded centerlines without generating console errors
   (foreach e cl-table
-    (if (setq sta (st:on-line-p e pt2d))
-      (setq out (cons (list (cadr e) sta) out))))
+    (setq nm (cadr e))
+    (if (and (not (member nm seen))
+             (setq res (st:cl-locate-safe (car e) pt2d)))
+      (progn
+        (setq sta (car res) off (abs (cadr res))
+              lo  (nth 2 e) hi (nth 3 e))
+        ;; Must be ON the line (small offset) AND within its station range
+        (if (and (<= off *st-offset-tol*)
+                 (>= sta (- lo *st-range-eps*))
+                 (<= sta (+ hi *st-range-eps*)))
+          (progn
+            (setq seen (cons nm seen))
+            (setq hits (cons (list off nm sta) hits)))))))
+  
+  ;; 2. Sort all valid hits from lowest offset distance to highest
+  (setq hits (vl-sort hits '(lambda (a b) (< (car a) (car b)))))
+  
+  ;; 3. Dynamic Binding: Keep the winning line + any lines within the junction threshold
+  (if hits
+    (progn
+      (setq min-off (car (car hits)))
+      (foreach h hits
+        (if (or (= h (car hits))                              ; Always keep absolute closest line
+                (<= (car h) *st-junction-dist*)               ; Keep shared tie-in lines (up to 4+)
+                (<= (abs (- (car h) min-off)) *st-micro-snap-tol*)) ; Keep co-located baselines
+          (setq out (cons (list (cadr h) (caddr h)) out))))))
+  
   (reverse out))
 
 ;; (st:rank-on-line station all-stations ascending eps) -> integer (1-based)
@@ -110,7 +151,6 @@
       (if (< s (- station eps)) (setq n (1+ n)))
       (if (> s (+ station eps)) (setq n (1+ n)))))
   (1+ n))
-
 
 ;;; ==========================================================================
 ;;; SECTION 3  --  Profile transform  (horizontal only; vertical deferred)
@@ -252,25 +292,30 @@
   (setq box (textbox (list (cons 1 str) (cons 40 ht) (cons 7 style) (cons 41 1.0))))
   (if box (- (car (cadr box)) (car (car box))) (* (strlen str) ht)))
 
-;; (st:draw-text pt str layer style ht rot) -> ename  (left / baseline, rot rad)
+;; (st:draw-text pt str layer style ht rot) -> ename  (MIDDLE-LEFT, rot rad)
 (defun st:draw-text (pt str layer style ht rot)
   (entmakex
     (list '(0 . "TEXT") (cons 8 layer) (cons 7 style)
           (cons 10 pt) (cons 11 pt) (cons 40 ht)
-          (cons 1 str) (cons 50 rot) (cons 72 0) (cons 73 0))))
+          (cons 1 str) (cons 50 rot) (cons 72 0) (cons 73 2))))
 
-;; (st:draw-label-stack base-pt rows layer style ht gap1 gapn) -> top-y
-;;   Rows as side-by-side vertical columns advancing +X: first gap gap1, rest
-;;   gapn. All share base Y, read upward. Returns Y of the tallest column top.
-(defun st:draw-label-stack (base-pt rows layer style ht gap1 gapn / x y i maxlen tl rot)
-  (setq x (car base-pt) y (cadr base-pt) i 0 maxlen 0.0 rot (/ pi 2.0))
+;; (st:draw-label-stack line-x base-y rows layer style ht offset gapn) -> top-y
+;;   Columns straddle the station line at line-x:
+;;     row 1        -> line-x - offset          (left of the line)
+;;     rows 2..n    -> line-x + offset, then + gapn each   (right of the line)
+;;   So row1->row2 spans 2*offset across the line; rows after step by gapn.
+;;   All share base-y and read upward. Returns Y of the tallest column top.
+(defun st:draw-label-stack (line-x base-y rows layer style ht offset gapn / x i maxlen tl rot)
+  (setq i 0 maxlen 0.0 rot (/ pi 2.0))
   (foreach str rows
-    (if (> i 0) (setq x (+ x (if (= i 1) gap1 gapn))))
-    (st:draw-text (list x y 0.0) str layer style ht rot)
+    (setq x (if (= i 0)
+              (- line-x offset)                       ; row 1: left of the line
+              (+ line-x offset (* (1- i) gapn))))  ; rows 2+: right; +ht clears glyphs off the line
+    (st:draw-text (list x base-y 0.0) str layer style ht rot)
     (setq tl (st:text-length str style ht))
     (if (> tl maxlen) (setq maxlen tl))
     (setq i (1+ i)))
-  (+ y maxlen))
+  (+ base-y maxlen))
 
 ;; (st:draw-station-line x grid-top-y top-y layer) -> ename
 (defun st:draw-station-line (x grid-top-y top-y layer)
