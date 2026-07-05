@@ -19,14 +19,22 @@
 ;; Updated to match the exact Carlson SCAD_2007_CIVIL console output:
 (setq *st-dtm-fn* 'cf:dtm_api)
 (setq *st-road-fn* 'cf:road_api)
-;; New tolerance settings for coordinate matching:
-(setq *st-micro-snap-tol* 0.15)  ; Direct coordinate coincidence tolerance for skewed outfalls/termini
-(setq *st-junction-dist* 1.50)  ; Maximum distance to consider multiple centerlines sharing a junction
 
 ;; Membership: a structure is "on" a line if its perpendicular offset from that
-;; centerline is within this tolerance (feet). Structures are snapped, so this
-;; is small; loosen only if snapped structures read as off-line.
-(setq *st-offset-tol* 30.0)
+;; centerline is within this tolerance (feet). This is the SINGLE small
+;; membership tolerance -- structures are snapped onto their centerlines, so
+;; offset is ~0. It also groups co-located baselines at a junction (two lines
+;; whose offsets differ by less than this read as the same tie-in). Loosen only
+;; if snapped structures start reading as off-line.
+(setq *st-offset-tol* 0.15)
+
+(setq *st-junction-dist* 1.50)  ; Maximum distance to consider multiple centerlines sharing a junction
+
+;; Corridor pre-filter: before asking the Road API to project a point onto a
+;; line, require the point to be within this distance (feet) of that line's
+;; matched drawing polyline. Skips the API call -- and its "unable to locate
+;; point along centerline" console spam -- for lines a structure isn't near.
+(setq *st-corridor* 0.2)
 
 ;; Station range slack (feet) -- allows a structure sitting exactly at a line's
 ;; end to still count as on it.
@@ -40,8 +48,7 @@
 ;; scale-correct. At 1"=20': height 1.60, offset 1.60, gaps 3.20 / 2.40.
 (setq *st-text-paper-height* 0.08)   ; plotted text height (inches)
 (setq *st-offset-factor* 1.0)    ; station-line -> text offset, x height
-(setq *st-gap-first-factor* 2.0)    ; gap between row 1 and row 2, x height
-(setq *st-gap-rest-factor* 1.5)    ; every gap after, x height
+(setq *st-gap-rest-factor* 1.5)    ; gap between adjacent rows, x height
 
 ;; Horizontal grid assumed 1:1 in model space (1 unit = 1 station foot).
 (setq *st-hscale-fixed* 1.0)
@@ -92,30 +99,62 @@
               (T nil))))))))
 
 ;;; ==========================================================================
+;;; SECTION 1.5  --  Corridor geometry  (pure)
+;;; ==========================================================================
+;;; A line's "corridor" is the neighborhood of its matched drawing polyline.
+;;; Points outside it can't be on the line, so we never bother the Road API
+;;; with them -- this is what silences the projection-failure console spam.
+;;; verts = list of (x y) vertices in polyline order.
+
+;; (st:pt-seg-dist p a b) -> real   distance from 2D point p to segment a-b
+(defun st:pt-seg-dist (p a b / px py ax ay bx by dx dy t len2)
+  (setq px (car p)  py (cadr p)
+        ax (car a)  ay (cadr a)
+        bx (car b)  by (cadr b)
+        dx (- bx ax) dy (- by ay)
+        len2 (+ (* dx dx) (* dy dy)))
+  (if (<= len2 1e-12)
+    (distance (list px py) (list ax ay))            ; degenerate segment -> point
+    (progn
+      (setq t (/ (+ (* (- px ax) dx) (* (- py ay) dy)) len2))
+      (setq t (max 0.0 (min 1.0 t)))                ; clamp onto the segment
+      (distance (list px py) (list (+ ax (* t dx)) (+ ay (* t dy)))))))
+
+;; (st:pt-poly-dist p verts) -> real   min distance from p to the polyline
+(defun st:pt-poly-dist (p verts / best d prev)
+  (setq best nil prev nil)
+  (foreach v verts
+    (if prev
+      (progn
+        (setq d (st:pt-seg-dist p prev v))
+        (if (or (null best) (< d best)) (setq best d))))
+    (setq prev v))
+  (cond (best best)
+        (verts (distance (list (car p) (cadr p))    ; single-vertex polyline
+                         (list (caar verts) (cadar verts))))
+        (T 1e30)))                                   ; no vertices -> "infinitely far"
+
+;; (st:in-corridor-p pt verts) -> T | nil   (pt may be 3D; first two ordinates used)
+(defun st:in-corridor-p (pt verts)
+  (<= (st:pt-poly-dist (list (car pt) (cadr pt)) verts) *st-corridor*))
+
+
+;;; ==========================================================================
 ;;; SECTION 2  --  Dynamic Multi-Line Binding & Stationing
 ;;; ==========================================================================
-;; (st:on-line-p entry pt2d) -> station | nil
-(defun st:on-line-p (entry pt2d / res sta off lo hi)
-  (setq res (st:cl-locate-safe (car entry) pt2d))
-  (if res
-    (progn
-      (setq sta (car res) off (abs (cadr res))
-            lo  (nth 2 entry) hi (nth 3 entry))
-      (if (and (<= off *st-offset-tol*)
-               (>= sta (- lo *st-range-eps*))
-               (<= sta (+ hi *st-range-eps*)))
-        sta))))
-
 ;; (st:lines-at-point pt2d cl-table) -> list of unique (name station)
 ;; Evaluates all loaded centerlines simultaneously, binds the closest line,
 ;; and dynamically appends any additional lines sharing the junction.
-(defun st:lines-at-point (pt2d cl-table / hits res sta off nm min-off out seen)
+(defun st:lines-at-point (pt2d cl-table / hits res sta off nm verts min-off out seen)
   (setq hits '() seen '() out '())
-  
-  ;; 1. Scan all loaded centerlines without generating console errors
+
+  ;; 1. Scan all loaded centerlines without generating console errors.
+  ;;    The corridor pre-filter (or null verts -> test as before) gates the API
+  ;;    call so off-corridor lines never trigger projection-failure spam.
   (foreach e cl-table
-    (setq nm (cadr e))
+    (setq nm (cadr e) verts (nth 4 e))
     (if (and (not (member nm seen))
+             (or (null verts) (st:in-corridor-p pt2d verts))
              (setq res (st:cl-locate-safe (car e) pt2d)))
       (progn
         (setq sta (car res) off (abs (cadr res))
@@ -138,7 +177,7 @@
       (foreach h hits
         (if (or (= h (car hits))                              ; Always keep absolute closest line
                 (<= (car h) *st-junction-dist*)               ; Keep shared tie-in lines (up to 4+)
-                (<= (abs (- (car h) min-off)) *st-micro-snap-tol*)) ; Keep co-located baselines
+                (<= (abs (- (car h) min-off)) *st-offset-tol*)) ; Keep co-located baselines
           (setq out (cons (list (cadr h) (caddr h)) out))))))
   
   (reverse out))
@@ -310,7 +349,7 @@
   (foreach str rows
     (setq x (if (= i 0)
               (- line-x offset)                       ; row 1: left of the line
-              (+ line-x offset (* (1- i) gapn))))  ; rows 2+: right; +ht clears glyphs off the line
+              (+ line-x offset (* (1- i) gapn))))  ; rows 2+: right of the line, stepping right by gapn
     (st:draw-text (list x base-y 0.0) str layer style ht rot)
     (setq tl (st:text-length str style ht))
     (if (> tl maxlen) (setq maxlen tl))
@@ -323,6 +362,66 @@
     (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 layer)
           '(100 . "AcDbPolyline") '(90 . 2) '(70 . 0)
           (cons 10 (list x grid-top-y)) (cons 10 (list x top-y)))))
+
+;;; --------------------------------------------------------------------------
+;;; Corridor matching (setup-time)  --  bind each .cl file to its drawing
+;;; polyline so st:in-corridor-p can pre-filter without the Road API.
+;;; --------------------------------------------------------------------------
+
+;; (st:pt2d-near a b tol) -> T | nil   (compares first two ordinates only)
+(defun st:pt2d-near (a b tol)
+  (<= (distance (list (car a) (cadr a)) (list (car b) (cadr b))) tol))
+
+;; (st:poly-verts ename) -> list of vertex points (LWPOLYLINE / LINE / POLYLINE)
+(defun st:poly-verts (ename / ed etype out sub sd)
+  (setq ed (entget ename) etype (cdr (assoc 0 ed)) out '())
+  (cond
+    ((= etype "LWPOLYLINE")
+     (foreach pair ed (if (= (car pair) 10) (setq out (cons (cdr pair) out))))
+     (reverse out))
+    ((= etype "LINE")
+     (list (cdr (assoc 10 ed)) (cdr (assoc 11 ed))))
+    ((= etype "POLYLINE")                              ; heavy polyline: walk VERTEX chain
+     (setq sub (entnext ename))
+     (while (and sub (setq sd (entget sub)) (= (cdr (assoc 0 sd)) "VERTEX"))
+       (setq out (cons (cdr (assoc 10 sd)) out) sub (entnext sub)))
+     (reverse out))
+    (T nil)))
+
+;; (st:cl-endpoints clfile) -> (p-start p-end) | nil   (from the .cl station range)
+(defun st:cl-endpoints (clfile / rng r0 rn p0 pn)
+  (if (setq rng (st:cl-range clfile))
+    (progn
+      (setq r0 (vl-catch-all-apply *st-road-fn* (list "cl_location_at_sta" clfile (car rng)))
+            rn (vl-catch-all-apply *st-road-fn* (list "cl_location_at_sta" clfile (cadr rng))))
+      (setq p0 (if (and (not (vl-catch-all-error-p r0)) (listp r0)) (car r0))
+            pn (if (and (not (vl-catch-all-error-p rn)) (listp rn)) (car rn)))
+      (if (and (listp p0) (listp pn)) (list p0 pn)))))
+
+;; (st:find-cl-polyline p0 pn tol) -> verts | nil
+;;   First drawing polyline whose two ends coincide with p0/pn (either order).
+(defun st:find-cl-polyline (p0 pn tol / ss i e vs verts a b)
+  (setq ss (ssget "_X" '((0 . "LWPOLYLINE,LINE,POLYLINE"))) i 0)
+  (if ss
+    (while (and (< i (sslength ss)) (null verts))
+      (setq e  (ssname ss i)
+            vs (st:poly-verts e))
+      (if (and vs (> (length vs) 1))
+        (progn
+          (setq a (car vs) b (last vs))
+          (if (or (and (st:pt2d-near a p0 tol) (st:pt2d-near b pn tol))
+                  (and (st:pt2d-near a pn tol) (st:pt2d-near b p0 tol)))
+            (setq verts vs))))
+      (setq i (1+ i))))
+  verts)
+
+;; (st:attach-corridor entry) -> (clfile name start end verts)
+;;   verts is nil when no drawing polyline matches -> membership falls back to
+;;   the plain Road-API test in st:lines-at-point.
+(defun st:attach-corridor (entry / ends verts)
+  (if (setq ends (st:cl-endpoints (car entry)))
+    (setq verts (st:find-cl-polyline (car ends) (cadr ends) *st-corridor*)))
+  (append entry (list verts)))
 
 
 (princ "\nstrtools-lib.lsp loaded (Carlson API build).")

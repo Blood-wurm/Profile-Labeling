@@ -50,21 +50,30 @@
   ;; Returns exact 5-element array expected by the backend engine:
   (list (car ll) sta0 hs (cadr top) vs))
 
-;; (strlabel:load-lines) -> list of (clfile name start end)
-;;   Loops file selection so multiple .cl files can be loaded for junctions.
-(defun strlabel:load-lines ( / tbl file defname nm rng)
-  (setq tbl '())
-  (while (setq file (getfiled "Select Carlson Centerline (.CL) File (Cancel when done)" 
-                              (if file file "") "cl" 0))
+;; (strlabel:load-lines) -> list of (clfile name start end verts)
+;;   Selects the first .cl file, then asks at the command line whether to load
+;;   another (for junctions).  Each entry is bound to its drawing polyline via
+;;   st:attach-corridor so membership can pre-filter without Road-API spam.
+(defun strlabel:load-lines ( / tbl file defname nm rng entry more ans)
+  (setq tbl '() more T)
+  (while (and more
+              (setq file (getfiled "Select Carlson Centerline (.CL) File"
+                                   (if file file "") "cl" 0)))
     (if (setq rng (st:cl-range file))
       (progn
         (setq defname (strcase (vl-filename-base file)))
         (setq nm (getstring (strcat "\nLine name for " defname " <" defname ">: ")))
         (if (= nm "") (setq nm defname) (setq nm (strcase nm)))
-        (setq tbl (cons (list file nm (car rng) (cadr rng)) tbl))
-        (prompt (strcat "\nLoaded line '" nm "' (Sta " (st:fmt-station (car rng)) 
-                        " to " (st:fmt-station (cadr rng)) ").")))
-      (prompt (strcat "\nError: Could not read station range from " file))))
+        (setq entry (st:attach-corridor (list file nm (car rng) (cadr rng))))
+        (setq tbl (cons entry tbl))
+        (prompt (strcat "\nLoaded line '" nm "' (Sta " (st:fmt-station (car rng))
+                        " to " (st:fmt-station (cadr rng)) ")"
+                        (if (nth 4 entry) "." "  [no corridor polyline matched]."))))
+      (prompt (strcat "\nError: Could not read station range from " file)))
+    ;; After each file, drop to a native keyword prompt for the next one.
+    (initget "Yes No")
+    (setq ans (getkword "\nSelect another centerline? [Yes/No] <No>: "))
+    (if (/= ans "Yes") (setq more nil)))
   (reverse tbl))
 
 ;; (strlabel:gather-inlets) -> list of block enames whose name is a known type
@@ -98,7 +107,7 @@
   (mapcar '(lambda (pair) (cons (car pair) (vl-sort (cdr pair) '<))) idx))
 
 ;; (strlabel:setup) -> context alist | nil
-(defun strlabel:setup ( / xf tin lines primary inlets index)
+(defun strlabel:setup ( / xf tin lines primary mode inlets index)
   (setq xf (strlabel:read-grid))
   (if (setq tin (getfiled "Select Carlson Surface (.TIN) File" "" "tin" 0))
     (progn
@@ -108,13 +117,19 @@
         (progn (prompt "\nNo centerlines selected -- aborting.") (st:tin-unload) nil)
         (progn
           (setq primary (strcase (getstring "\nName of the line THIS profile follows: ")))
+          ;; Labeling mode: All = every structure on the line; Pick = one at a time.
+          (initget "All Pick")
+          (setq mode (getkword "\nLabel [All/Pick] structures on this line <Pick>: "))
+          (if (null mode) (setq mode "Pick"))
           (prompt "\nIndexing structures for ranking...")
           (setq inlets (strlabel:gather-inlets)
                 index  (strlabel:index-stations inlets lines))
           (list (cons 'xform   xf)
                 (cons 'lines   lines)
                 (cons 'primary primary)
+                (cons 'mode    mode)
                 (cons 'tin     tin)
+                (cons 'inlets  inlets)
                 (cons 'index   index)))))))
 
 
@@ -185,57 +200,53 @@
 ;;; COMMAND
 ;;; ==========================================================================
 
-(defun c:STRLABEL ( / ctx e ent ed)
+;; (strlabel:label-pick context) -> nil   Pick mode: label structures one at a
+;;   time from interactive selection.
+(defun strlabel:label-pick (context / e ent ed)
+  (prompt "\nPick structures to label (Enter to finish).")
+  (while (setq e (entsel "\nSelect structure: "))
+    (setq ent (car e) ed (entget ent))
+    (cond
+      ((/= (cdr (assoc 0 ed)) "INSERT")
+       (prompt "\n  Not a block -- skipped."))
+      ((null (st:type-entry (cdr (assoc 2 ed)) *st-type-table*))
+       (prompt (strcat "\n  Unknown structure block "
+                       (cdr (assoc 2 ed)) " -- skipped.")))
+      (T (strlabel:process-structure ent context))))
+  (princ))
+
+;; (strlabel:label-all context) -> nil   All mode: label every structure whose
+;;   membership includes the profiled line, sorted by station.  Draws regardless
+;;   of existing labels (no erase -- that pass is deferred).
+(defun strlabel:label-all (context / lines primary inlets pt hits ph pending)
+  (setq lines   (cdr (assoc 'lines context))
+        primary (cdr (assoc 'primary context))
+        inlets  (cdr (assoc 'inlets context))
+        pending '())
+  (foreach e inlets
+    (setq pt   (cdr (assoc 10 (entget e)))
+          hits (st:lines-at-point pt lines)
+          ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
+    (if ph (setq pending (cons (list (cadr ph) e) pending))))
+  (setq pending (vl-sort pending '(lambda (a b) (< (car a) (car b)))))
+  (prompt (strcat "\nLabeling " (itoa (length pending))
+                  " structure(s) on '" primary "'..."))
+  (foreach pr pending (strlabel:process-structure (cadr pr) context))
+  (princ))
+
+(defun c:STRLABEL ( / ctx)
   (st:load-apis)
   (setq ctx (strlabel:setup))
   (if ctx
     (progn
-      (prompt "\nPick structures to label (Enter to finish).")
-      (while (setq e (entsel "\nSelect structure: "))
-        (setq ent (car e) ed (entget ent))
-        (cond
-          ((/= (cdr (assoc 0 ed)) "INSERT")
-           (prompt "\n  Not a block -- skipped."))
-          ((null (st:type-entry (cdr (assoc 2 ed)) *st-type-table*))
-           (prompt (strcat "\n  Unknown structure block "
-                           (cdr (assoc 2 ed)) " -- skipped.")))
-          (T (strlabel:process-structure ent ctx))))
+      (if (= (cdr (assoc 'mode ctx)) "All")
+        (strlabel:label-all ctx)
+        (strlabel:label-pick ctx))
       ;; Clean up loaded TIN surface when command completes normally
       (st:tin-unload)))
   (princ))
 
-;;; ==========================================================================
-;;; TEMPORARY DIAGNOSTIC  --  remove once the over-count is understood
-;;; ==========================================================================
-;;; STRDIAG: pick ONE .cl file; for every inlet block in the drawing it prints
-;;; the block name, its station on that line, and its offset. Lines with offset
-;;; within *st-offset-tol* are marked "<== COUNTED" -- these are what the index
-;;; is assigning to that line. Spurious/nearby blocks show up here immediately.
-
-(defun c:STRDIAG ( / clfile inlets pt res sta off flag)
-  (st:load-apis)
-  (if (setq clfile (getfiled "Select ONE Centerline (.CL) to test" "" "cl" 0))
-    (progn
-      (setq inlets (strlabel:gather-inlets))
-      (prompt (strcat "\n--- Offsets to " (vl-filename-base clfile)
-                      " (tol = " (rtos *st-offset-tol* 2 3) ") ---"))
-      (foreach e inlets
-        (setq pt  (cdr (assoc 10 (entget e)))
-              res (st:cl-locate-safe clfile pt))
-        (if res
-          (progn
-            (setq sta  (car res)
-                  off  (abs (cadr res))
-                  flag (if (<= off *st-junction-dist*) "  <== COUNTED" ""))
-            (prompt (strcat "\n  " (cdr (assoc 2 (entget e)))
-                            "  sta " (st:fmt-station sta)
-                            "  off " (rtos off 2 4) flag)))
-          (prompt (strcat "\n  " (cdr (assoc 2 (entget e)))
-                          "  (not locatable on this line)"))))
-      (prompt "\n--- end ---")))
-  (princ))
-
-(princ "\nstrlabel.lsp loaded.  Commands: STRLABEL, STRDIAG (diagnostic)")
+(princ "\nstrlabel.lsp loaded.  Command: STRLABEL")
 (princ)
 ;;; ==========================================================================
 ;;; end of strlabel.lsp
