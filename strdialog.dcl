@@ -14,8 +14,8 @@
 // The dialog carries key "pick_title" so the driver can retitle it per use
 // via (set_tile "pick_title" <title>).
 strlabel_pick : dialog {
-  key   = "pick_title";
   label = "Select";
+  : text { key = "pick_title"; label = ""; }
   : list_box {
     key             = "items";
     width           = 34;

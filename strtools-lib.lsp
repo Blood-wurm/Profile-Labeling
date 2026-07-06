@@ -107,7 +107,7 @@
 ;;; verts = list of (x y) vertices in polyline order.
 
 ;; (st:pt-seg-dist p a b) -> real   distance from 2D point p to segment a-b
-(defun st:pt-seg-dist (p a b / px py ax ay bx by dx dy t len2)
+(defun st:pt-seg-dist (p a b / px py ax ay bx by dx dy u len2)
   (setq px (car p)  py (cadr p)
         ax (car a)  ay (cadr a)
         bx (car b)  by (cadr b)
@@ -116,9 +116,9 @@
   (if (<= len2 1e-12)
     (distance (list px py) (list ax ay))            ; degenerate segment -> point
     (progn
-      (setq t (/ (+ (* (- px ax) dx) (* (- py ay) dy)) len2))
-      (setq t (max 0.0 (min 1.0 t)))                ; clamp onto the segment
-      (distance (list px py) (list (+ ax (* t dx)) (+ ay (* t dy)))))))
+      (setq u (/ (+ (* (- px ax) dx) (* (- py ay) dy)) len2))
+      (setq u (max 0.0 (min 1.0 u)))                ; clamp onto the segment
+      (distance (list px py) (list (+ ax (* u dx)) (+ ay (* u dy)))))))
 
 ;; (st:pt-poly-dist p verts) -> real   min distance from p to the polyline
 (defun st:pt-poly-dist (p verts / best d prev)
@@ -247,12 +247,13 @@
     ("MH"   "MANHOLE"        nil)
     ("HDWL" "HDWL"           T)))
 
-;; (st:name-prefix name) -> leading token before first "_" or digit
+;; (st:name-prefix name) -> leading token before first "-", "_", or digit
 (defun st:name-prefix (name / i c out)
   (setq i 1 out "")
   (while (and (<= i (strlen name))
               (setq c (substr name i 1))
               (/= c "_")
+			  (/= c "-")
               (not (st:digit-p c)))
     (setq out (strcat out c) i (1+ i)))
   out)

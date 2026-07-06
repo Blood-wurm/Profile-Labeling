@@ -9,7 +9,7 @@
 ;;; Options > Files > Support File Search Path and the path here won't matter.)
 ;;; ==========================================================================
 
-(setq *strtools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/")
+(setq *strtools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/.strlabel/V2/")
 
 (progn
   (load (strcat *strtools-dir* "strtools-lib.lsp"))   ; engine -- loads first

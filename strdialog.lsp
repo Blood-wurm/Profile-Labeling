@@ -133,8 +133,13 @@
 ;;; ==========================================================================
 
 ;; (strlabel:layer-list) -> list of layer-name strings
-;;   (layerlist) is the built-in; wrapped so the caller reads one source.
-(defun strlabel:layer-list () (acad_strlsort (layerlist)))
+(defun strlabel:layer-list ( / e nm out)
+  (setq e (tblnext "LAYER" T) out '())
+  (while e
+    (setq nm (cdr (assoc 2 e)))
+    (if (and nm (/= nm "")) (setq out (cons nm out)))
+    (setq e (tblnext "LAYER")))
+  (acad_strlsort (reverse out)))
 
 ;; (strlabel:style-list) -> list of text-style-name strings (no Carlson call
 ;;   exists, so we walk the STYLE symbol table ourselves)
@@ -213,11 +218,7 @@
 
 ;; (strlabel:dcl-file) -> path to strdialog.dcl (support path, then tools dir)
 (defun strlabel:dcl-file ()
-  (cond
-    ((findfile "strdialog.dcl"))
-    ((and (boundp '*strtools-dir*) *strtools-dir*
-          (findfile (strcat *strtools-dir* "strdialog.dcl"))))
-    (T "strdialog.dcl")))
+  (strcat *strtools-dir* "strdialog.dcl"))
 
 ;; (strlabel:show-dialog) -> settings alist | nil
 ;;   dcl_id and cur are locals here; the action callbacks reach them via
