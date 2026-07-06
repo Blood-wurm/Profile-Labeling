@@ -50,9 +50,12 @@
   ;; Returns exact 5-element array expected by the backend engine:
   (list (car ll) sta0 hs (cadr top) vs))
 
-;; (strlabel:load-lines) -> list of (clfile name start end)
+;; (strlabel:load-lines) -> list of (clfile name start end verts)
 ;;   Loops file selection so multiple .cl files can be loaded for junctions.
-(defun strlabel:load-lines ( / tbl file defname nm rng)
+;;   Each entry is bound to its drawing polyline via st:attach-corridor so the
+;;   pre-filter can skip Road-API calls for far lines. A line whose polyline is
+;;   not matched gets verts = nil and behaves exactly as it did pre-corridor.
+(defun strlabel:load-lines ( / tbl file defname nm rng entry)
   (setq tbl '())
   (while (setq file (getfiled "Select Carlson Centerline (.CL) File (Cancel when done)" 
                               (if file file "") "cl" 0))
@@ -61,9 +64,11 @@
         (setq defname (strcase (vl-filename-base file)))
         (setq nm (getstring (strcat "\nLine name for " defname " <" defname ">: ")))
         (if (= nm "") (setq nm defname) (setq nm (strcase nm)))
-        (setq tbl (cons (list file nm (car rng) (cadr rng)) tbl))
+        (setq entry (st:attach-corridor (list file nm (car rng) (cadr rng))))
+        (setq tbl (cons entry tbl))
         (prompt (strcat "\nLoaded line '" nm "' (Sta " (st:fmt-station (car rng)) 
-                        " to " (st:fmt-station (cadr rng)) ").")))
+                        " to " (st:fmt-station (cadr rng)) ")"
+                        (if (nth 4 entry) "." "  [no corridor polyline matched]."))))
       (prompt (strcat "\nError: Could not read station range from " file))))
   (reverse tbl))
 
