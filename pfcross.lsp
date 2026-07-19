@@ -1,39 +1,46 @@
 ;;; ==========================================================================
-;;; pfcross.lsp  --  Pipe-crossing tools:  C:PFXFIND  +  C:PFXLABEL
+;;; pfcross.lsp  --  Pipe-crossing tools:  C:PFXFIND + C:PFXLABEL + C:PFXGRID
 ;;; --------------------------------------------------------------------------
-;;; Requires pftools-lib.lsp and pfdialog.lsp loaded first (reuses the .cl
-;;; wrappers, xform seams, draw helpers, browse + folder-scan dialogs).
+;;; Requires pftools-lib.lsp, pfanchor.lsp, and pfdialog.lsp loaded first
+;;; (engine, anchor/ledger/table module, grid dialog + browse helpers).
 ;;;
 ;;; TOOL 1  --  PFXFIND   (plan only, no grids)
 ;;;   Pick the TARGET .cl, check off candidate crossing .cl files from the
-;;;   target's folder, and the tool intersects drawn plan polylines segment-
-;;;   by-segment to find every real crossing on curved alignments. For each
-;;;   hit it reads BOTH stations off the Road API and stores the result in
-;;;   *pfx-crossings* for PFXLABEL.
+;;;   target's folder; intersects true .cl geometry (sampled, arcs followed)
+;;;   to find every real crossing, refines each hit to ~0.1 ft, and reads
+;;;   both stations off the Road API.
+;;;   PERSISTENCE: when the target profile has a grid anchor, results MERGE
+;;;   into its ledger (new records added, existing records keep their read
+;;;   elevations -- re-running discovery is never destructive) and the
+;;;   crossings table rebuilds.  With no anchor yet, results are held in
+;;;   session and persist automatically when the target grid is first
+;;;   defined in PFXLABEL.
 ;;;
-;;; TOOL 2  --  PFXLABEL  (one crossing per run, two grids)
-;;;   Pick a crossing from PFXFIND's table, define the SOURCE (crossing
-;;;   line's) grid and the TARGET grid (corner picks + grid dialog), then:
-;;;     1. probe BOTH grids vertically at their own stations -> each pipe's
-;;;        invert elevation (lowest bore line) + pipe size (bore spacing);
-;;;     2. on EACH grid draw: a station line from 30 below the grid bottom
-;;;        to the grid top, vertical station text at its lower end, and BOTH
-;;;        pipes as PF-PIPE_NN blocks (Y-scaled by that grid's exaggeration)
-;;;        at their true elevations -- the grid's own pipe on its ALIGN-*
-;;;        layer, the crossing pipe on its utility layer -- each with a
-;;;        two-row label (standard line label / NN" PIPE);
-;;;     3. rebuild the crossings table at the target grid's top-left on
-;;;        PF-TABLE (all crossings on record; elevations fill in as they're
-;;;        labeled).  PF-TABLE is TOOL-OWNED: every entity on it is erased
-;;;        on rebuild -- put nothing else on that layer.  The invert ticks
-;;;        + elevation text stay on PF-TEMP, which is NEVER erased.
+;;; TOOL 2  --  PFXLABEL  (the loop: all sources, then the target, once)
+;;;   Prints every crossing on record with derived status, then labels ONE
+;;;   crossing (1-N) or [All] outstanding:
+;;;     - source grids are keyed PER SOURCE FILE: one grid definition per
+;;;       distinct source, however many crossings share it;
+;;;     - grids are READ from anchors when registered (zero picks) and
+;;;       picked + registered on the way out when not (pick once, ever);
+;;;     - in All mode an UNREGISTERED source is SKIPPED AND REPORTED (CLI +
+;;;       table STATUS column) -- label it individually once to register;
+;;;     - the target grid is defined/read ONCE for the whole pass;
+;;;     - partial failures (cancelled pick, unreadable pipe) skip that
+;;;       crossing and the pass finishes; everything reports at the end;
+;;;     - probed inverts persist to the ledger; the table block rebuilds
+;;;       (replaced BY HANDLE -- no layer-scoped erase exists anywhere).
+;;;   One undo group wraps every write in the pass -- anchors, ledger,
+;;;   labels, table.  One U reverses it; Esc is unwound by the handler.
 ;;;
-;;; HANDOFF: in-session globals (*pfx-crossings*), same pattern as the
-;;; transient *pflabel-* run inputs.  PFXFIND must run before PFXLABEL in
-;;; the same session.  A crossings FILE is a named seam for later.
+;;; TOOL 3  --  PFXGRID   (optional; never a gate)
+;;;   Register or update a profile's grid anchor directly.
 ;;;
-;;; STATUS: batch-A rewrite (blocks + sizes + standard labels + PF-TABLE).
-;;; Dynamic scaling enabled (1.6 text height standard for H:20).
+;;; COMPLETENESS MODEL: TARGET-ONLY.  A crossing is "labeled" when its
+;;; station line stands on the target grid (exact X + top-Y match, see
+;;; pfanchor.lsp).  Source-side annotation is drawn but not tracked.
+;;;
+;;; STATUS: ledger rewrite -- test on a scratch copy first.
 ;;; ==========================================================================
 
 (vl-load-com)
@@ -50,7 +57,7 @@
 (setq *pfx-grid-layers* '("PF-GRID-MJR" "PF-GRID-MNR" "PF-HBOX"
                           "PF-GROUND_X" "PF-XING" "PF-TEMP" "PF-TABLE"))
 
-;; Text: style must exist in the drawing; height is now dynamically calculated
+;; Text: style must exist in the drawing; height is dynamically calculated
 ;; relative to the plot scale (1.6 standard at H:20).
 (setq *pfx-style*  "L080")
 
@@ -78,12 +85,10 @@
 
 ;; Refinement step (feet).  Once a crossing is found, both lines are re-
 ;; sampled at THIS interval within +/- one sample step of the hit and re-
-;; intersected, so stations on arcs are exact to ~0.1 ft.  Cheap: runs only
-;; per crossing found, ~80 calls each.
+;; intersected, so stations on arcs are exact to ~0.1 ft.
 (setq *pfx-refine-step* 0.1)
 
 ;; Placeholder when the block definition is missing from the drawing.
-;; Base scalar -- multiplied by the grid's sf at draw time.
 (setq *pfx-circle-radius* 1.0)
 
 ;; Layer derivation: layers follow the utility TYPE.
@@ -106,13 +111,19 @@
     ("SANITARY" . "PROPOSED SANITARY CROSSING")
     ("STORM"    . "STORM CROSSING")))
 
-;; Crossings table (6 columns) -- PF-TABLE is TOOL-OWNED and blanket-cleared
-;; on every rebuild.  The invert ticks/elev text live on PF-TEMP (untouched).
-(setq *pfx-table-layer*  "PF-TABLE")
-(setq *pfx-tick-layer*   "PF-TEMP")
-(setq *pfx-table-margin* 2.0)                  ; offset from the grid corner (base scalar)
-(setq *pfx-table-step*   3.20)                 ; row-to-row spacing (base scalar)
-(setq *pfx-table-cols*   '(0.0 8.0 32.0 68.0 96.0 120.0))  ; #, LINE, TGT STA, TGT INV, SRC STA, SRC INV
+;; The invert ticks + elevation text stay on PF-TEMP, which is NEVER erased.
+(setq *pfx-tick-layer* "PF-TEMP")
+
+;; SESSION PENDING BUFFER.  Holds PFXFIND results ONLY while the target
+;; profile has no grid anchor yet; merged into the ledger (and cleared) the
+;; moment the target anchor exists.  The LEDGER is the system of record.
+(if (not (boundp '*pfx-crossings*)) (setq *pfx-crossings* nil))
+
+;; SESSION LAST TARGET.  Which profile PFXLABEL is working on, so repeat
+;; runs continue the same target instead of re-asking.  The 'Target' option
+;; at the crossing prompt clears it to switch profiles.
+(if (not (boundp '*pfx-last-target*)) (setq *pfx-last-target* nil))
+
 
 ;;; ==========================================================================
 ;;; SECTION 1  --  Pure helpers
@@ -162,11 +173,8 @@
   (+ (pf:xf-datum xform)
      (/ (- y (pf:xf-basey xform)) (pf:xf-vscale xform))))
 
-;; (pfx:xf-hplot xf) -> horizontal PLOT scale (8th xform element, appended by
-;;   pfx:get-grid; drives the sf scale factor -- named seam, no raw nth 7s)
+;; xform 8th element = horizontal PLOT scale (drives the sf scale factor).
 (defun pfx:xf-hplot (xf) (nth 7 xf))
-
-;; (pfx:xf-sf xf) -> scale factor for this grid (1.0 at the H:20 standard)
 (defun pfx:xf-sf (xf) (/ (pfx:xf-hplot xf) 20.0))
 
 (defun pfx:nearest-size (inches / best bd d)
@@ -181,10 +189,6 @@
 (defun pfx:size-rowtext (n) (strcat (itoa n) "\" PIPE"))
 
 ;; (pfx:sample-cl clfile) -> list of (x y) | nil
-;;   Walks the .cl at *pfx-sample-step* via cl_location_at_sta (the proven
-;;   pf:cl-endpoints call, in a loop), always including the exact end
-;;   station.  TRUE alignment geometry -- arcs included -- straight from the
-;;   .cl, independent of what's drawn.
 (defun pfx:sample-cl (clfile / rng sta0 stan sta pts r)
   (if (setq rng (pf:cl-range clfile))
     (progn
@@ -202,8 +206,6 @@
       (if (> (length pts) 1) (reverse pts)))))
 
 ;; (pfx:sample-range clfile s0 s1 step) -> list of (x y) | nil
-;;   Like pfx:sample-cl but over [s0, s1] (clamped to the .cl's range) at
-;;   `step`, always including the exact end of the window.
 (defun pfx:sample-range (clfile s0 s1 step / rng lo hi sta pts r)
   (if (setq rng (pf:cl-range clfile))
     (progn
@@ -224,9 +226,6 @@
       (if (> (length pts) 1) (reverse pts)))))
 
 ;; (pfx:refine-x tfile tsta sfile ssta) -> (x y) | nil
-;;   Local refinement: re-sample both lines at *pfx-refine-step* within
-;;   +/- one *pfx-sample-step* of the coarse hit and re-intersect.  nil when
-;;   either window fails to sample (caller keeps the coarse result).
 (defun pfx:refine-x (tfile tsta sfile ssta / tv sv)
   (setq tv (pfx:sample-range tfile (- tsta *pfx-sample-step*)
                              (+ tsta *pfx-sample-step*) *pfx-refine-step*)
@@ -239,8 +238,6 @@
 ;;     1. .cl sampling (true alignment, arcs followed)
 ;;     2. drawn-polyline vertices  (WARNING: arc bulges read as chords)
 ;;     3. endpoint chord           (WARNING: straight-line approximation)
-;;   2 and 3 announce themselves -- a chord-based result can both miss real
-;;   crossings on curves and report false ones, so it must never be silent.
 (defun pfx:get-verts (clfile / pts rng entry verts ends)
   (cond
     ((setq pts (pfx:sample-cl clfile)) pts)
@@ -282,6 +279,7 @@
 (defun pfx:sta-at (clfile xy / res)
   (if (setq res (pf:cl-locate-safe clfile xy))
     (car res)))
+
 
 ;;; ==========================================================================
 ;;; SECTION 2  --  Vertical probe  (invert + size reader)
@@ -343,6 +341,7 @@
                        "placeholder circle will be used.")))
      (list (pfx:y->elev y1 xform) size))))
 
+
 ;;; ==========================================================================
 ;;; SECTION 3  --  Drawing boundary  (SIDE-EFFECTING)
 ;;; ==========================================================================
@@ -380,12 +379,11 @@
 
 ;; (pfx:text-right pt str layer rot ht style)   Middle Right justification
 (defun pfx:text-right (pt str layer rot ht style)
-  ;; Fall back to the dialog/default style if `style` isn't in the drawing
   (if (null (tblsearch "STYLE" style))
     (progn
-      (prompt (strcat "\n  Warning: Style '" style "' not found. Falling back to default."))
+      (prompt (strcat "\n  Warning: Style '" style
+                      "' not found. Falling back to default."))
       (setq style (pfx:active-style))))
-
   (if (null
         (entmakex
           (list '(0 . "TEXT") (cons 8 layer) (cons 7 style)
@@ -421,13 +419,17 @@
             (pfx:std-label file) la 0.0 ht))
 
 ;; (pfx:draw-grid-side xform own-file own-sta own-pipe other-file other-pipe)
+;;   Station lines land on *pfa-xing-layer* -- the layer reconciliation
+;;   scans -- with their top vertex at exactly this grid's top-Y.  That
+;;   X + top-Y pair is the "labeled" signature; do not change one without
+;;   the other (see pfanchor.lsp SECTION 4).
 (defun pfx:draw-grid-side (xform own-file own-sta own-pipe other-file
                            other-pipe / x ybot line-la vtxt-la y sf ht)
   (setq sf      (pfx:xf-sf xform)
         ht      (* 1.60 sf)
         x       (pf:station->profile-x own-sta xform)
         ybot    (- (pf:xf-basey xform) (* *pfx-line-ext* sf))
-        line-la "PF-XING"
+        line-la *pfa-xing-layer*
         vtxt-la "PF-XING-TEXT")
 
   (pfx:ensure-layer line-la)
@@ -437,28 +439,22 @@
   (pf:draw-station-line x ybot (pf:grid-top-y xform) line-la)
 
   ;; vertical station text at the lower end, reading upward
-  ;; Middle Right insertion anchors text to ybot and grows upwards.
   (pfx:text-right (list x ybot 0.0)
-                  (strcat (pf:fmt-station own-sta) " " (pfx:cross-desc other-file))
+                  (strcat (pf:fmt-station own-sta) " "
+                          (pfx:cross-desc other-file))
                   vtxt-la (/ pi 2.0) ht *pfx-vtext-style*)
 
-  ;; the grid's OWN pipe (redundant) -> pipe block + marker + vertical elev on PF-TEMP
+  ;; the grid's OWN pipe (redundant) -> block + invert tick on PF-TEMP
   (if own-pipe
     (progn
       (setq y (pf:elev->profile-y (car own-pipe) xform))
-
-      ;; 1. Restore the block insertion to its ALIGN layer
       (pfx:ensure-layer (pfx:align-layer own-file))
       (pfx:insert-pipe (list x y) (cadr own-pipe)
                        (pfx:align-layer own-file) (pf:xf-vscale xform) sf)
-
-      ;; 2. Invert marker and elevation label
       (pfx:ensure-layer *pfx-tick-layer*)
-      ;; Marker: horizontal tick across the station line
       (entmakex (list '(0 . "LINE") (cons 8 *pfx-tick-layer*)
                       (cons 10 (list (- x (* ht 0.75)) y 0.0))
                       (cons 11 (list (+ x (* ht 0.75)) y 0.0))))
-      ;; Elevation label snapped to invert, reading vertical
       (pfx:text (list (+ x (* ht 0.5)) y 0.0)
                 (rtos (car own-pipe) 2 2) *pfx-tick-layer* (/ pi 2.0) ht)))
 
@@ -472,78 +468,25 @@
       (pfx:label-pipe x y other-file (cadr other-pipe) sf ht)))
   (princ))
 
-;;; ==========================================================================
-;;; SECTION 4  --  PF-TABLE crossings table  (TOOL-OWNED layer)
-;;; ==========================================================================
-
-;; (pfx:clear-table)   erase every entity on PF-TABLE.  Safe ONLY because
-;;   PF-TABLE is exclusively this tool's output; nothing else goes there.
-(defun pfx:clear-table ( / ss i)
-  (setq ss (ssget "_X" (list (cons 8 *pfx-table-layer*))))
-  (if ss
-    (progn
-      (setq i 0)
-      (while (< i (sslength ss))
-        (entdel (ssname ss i))
-        (setq i (1+ i)))
-      (prompt (strcat "\nCleared " (itoa (sslength ss))
-                      " old entit(ies) off " *pfx-table-layer* ".")))))
-
-(defun pfx:table-row (x0 y cells tcols ht / i)
-  (setq i 0)
-  (foreach c cells
-    (if (and c (/= c ""))
-      (pfx:text (list (+ x0 (nth i tcols)) y 0.0)
-                c *pfx-table-layer* 0.0 ht))
-    (setq i (1+ i)))
-  (princ))
-
-(defun pfx:draw-table (tgt-xf / x0 y0 i sf ht tmarg tstep tcols)
-  (pfx:ensure-layer *pfx-table-layer*)
-  (setq sf    (pfx:xf-sf tgt-xf)
-        ht    (* 1.60 sf)
-        tmarg (* *pfx-table-margin* sf)
-        tstep (* *pfx-table-step* sf)
-        tcols (mapcar '(lambda (x) (* x sf)) *pfx-table-cols*)
-        x0    (+ (pf:xf-leftx tgt-xf) tmarg)
-        y0    (+ (pf:grid-top-y tgt-xf) tmarg
-                 (* (+ (length *pfx-crossings*) 1) tstep)))
-
-  (pfx:table-row x0 y0
-    (list (strcat "CROSSINGS -- TARGET '" (pfx:xing-tbase (car *pfx-crossings*)) "'")) tcols ht)
-
-  (pfx:table-row x0 (- y0 tstep)
-    (list "#" "LINE" "TGT STATION" "TGT INV ELEV" "SRC STA" "SRC INV ELEV") tcols ht)
-
-  (setq i 0)
-  (foreach e *pfx-crossings*
-    (setq i (1+ i))
-    (pfx:table-row x0 (- y0 (* (1+ i) tstep))
-      (list (itoa i)
-            (pfx:xing-sbase e)
-            (pf:fmt-station (pfx:xing-tsta e))
-            (if (pfx:xing-telev e) (rtos (pfx:xing-telev e) 2 2) "--")
-            (pf:fmt-station (pfx:xing-ssta e))
-            (if (pfx:xing-selev e) (rtos (pfx:xing-selev e) 2 2) "--"))
-      tcols ht))
-  (princ))
 
 ;;; ==========================================================================
-;;; SECTION 5  --  Grid capture  (corner picks + grid dialog, per role)
+;;; SECTION 4  --  Grid acquisition  (anchor first, pick as fallback)
 ;;; ==========================================================================
 
-(defun pfx:get-grid (role / ll top g)
+;; (pfx:pick-grid-xform role) -> 8-element xform | nil
+;;   Corner picks + grid dialog (the pre-anchor pick path, unchanged).
+(defun pfx:pick-grid-xform (role / ll top g)
   (prompt (strcat "\n== Define the " role " grid =="))
   (setq ll (getpoint (strcat "\nPick " role " grid LOWER-LEFT corner: ")))
   (if (null ll)
-    (progn (prompt "\nNo point picked -- aborting.") nil)
+    (progn (prompt "\nNo point picked -- cancelled.") nil)
     (progn
       (setq top (getpoint ll (strcat "\nPick a point on the " role
                                      " grid TOP border: ")))
       (cond
-        ((null top) (prompt "\nNo point picked -- aborting.") nil)
+        ((null top) (prompt "\nNo point picked -- cancelled.") nil)
         ((null (setq g (pflabel:show-grid-dialog)))
-         (prompt "\nGrid dialog cancelled -- aborting.") nil)
+         (prompt "\nGrid dialog cancelled.") nil)
         (T
          ;; xform = (left-x sta0 hscale top-y base-y datum vscale hplot)
          (list (car ll) (nth 0 g) *pf-hscale-fixed*
@@ -551,62 +494,185 @@
                (/ (nth 2 g) (nth 3 g))
                (nth 2 g)))))))
 
+;; (pfx:anchored-xform anchor role) -> xform | nil
+;;   Reads the registered grid; sanity-probes the corner.  On a failed probe
+;;   the user may re-pick (anchor updated IN PLACE, ledger preserved) or
+;;   trust the stored grid.  Caller must hold an open undo group (a re-pick
+;;   writes).  nil = unreadable attributes, or re-pick chosen then cancelled.
+(defun pfx:anchored-xform (anchor role / xf)
+  (setq xf (pfa:anchor->xform anchor))
+  (cond
+    ((null xf)
+     (prompt (strcat "\n" role ": anchor attributes unreadable."))
+     nil)
+    ((not (pfa:probe-corner (list (pf:xf-leftx xf) (pf:xf-basey xf))))
+     (prompt (strcat "\n" role ": no grid line found at the stored anchor "
+                     "corner (grid may have moved without its anchor)."))
+     (initget "Yes No")
+     (if (= (getkword (strcat "\nRe-pick the " role
+                              " grid? [Yes/No] <No>: ")) "Yes")
+       (progn
+         (setq xf (pfx:pick-grid-xform role))
+         (if xf
+           (progn
+             (pfa:reanchor anchor xf)
+             ;; round-trip through the anchor so draw-time and every future
+             ;; reconciliation compute bit-identical X values
+             (pfa:anchor->xform anchor))))
+       xf))
+    (T xf)))
+
+
 ;;; ==========================================================================
-;;; SECTION 6  --  TOOL 1:  C:PFXFIND   (crossing finder, plan only)
+;;; SECTION 5  --  Working list + status printing
 ;;; ==========================================================================
+;;; Working entries are pfanchor 10-lists:
+;;;   (key tfile tbase sfile sbase xy tsta ssta telev selev)
 
-(if (not (boundp '*pfx-crossings*)) (setq *pfx-crossings* nil))
-
-(defun pfx:xing-tfile (e) (nth 0 e))
-(defun pfx:xing-tbase (e) (nth 1 e))
-(defun pfx:xing-sfile (e) (nth 2 e))
-(defun pfx:xing-sbase (e) (nth 3 e))
-(defun pfx:xing-xy    (e) (nth 4 e))
-(defun pfx:xing-tsta  (e) (nth 5 e))
-(defun pfx:xing-ssta  (e) (nth 6 e))
-(defun pfx:xing-telev (e) (if (> (length e) 7) (nth 7 e)))
-(defun pfx:xing-selev (e) (if (> (length e) 8) (nth 8 e)))
-
-(defun pfx:xing-store-elevs (e telev selev / new)
-  (setq new (list (nth 0 e) (nth 1 e) (nth 2 e) (nth 3 e)
-                  (nth 4 e) (nth 5 e) (nth 6 e) telev selev))
-  (setq *pfx-crossings* (subst new e *pfx-crossings*))
-  new)
-
-(defun pfx:print-crossings ( / i)
-  (if (null *pfx-crossings*)
+;; (pfx:print-crossings work recon) -> nil
+(defun pfx:print-crossings (work recon / i e st)
+  (if (null work)
     (prompt "\nNo crossings on record -- run PFXFIND.")
     (progn
-      (setq i 0)
       (prompt (strcat "\nCrossings vs target '"
-                      (pfx:xing-tbase (car *pfx-crossings*)) "':"))
-      (foreach e *pfx-crossings*
-        (setq i (1+ i))
-        (prompt (strcat "\n  " (itoa i) ".  " (pfx:xing-sbase e)
-                        "   target sta " (pf:fmt-station (pfx:xing-tsta e))
-                        "   source sta " (pf:fmt-station (pfx:xing-ssta e))
-                        (if (pfx:xing-telev e)
-                          (strcat "   TGT inv " (rtos (pfx:xing-telev e) 2 2))
+                      (pfa:xr-tbase (car work)) "':"))
+      (setq i 0)
+      (foreach e work
+        (setq i (1+ i)
+              st (cond
+                   ((null recon) "")
+                   ((cdr (assoc (pfa:xr-key e) recon)) "   [LABELED]")
+                   (T "   [OUTSTANDING]")))
+        (prompt (strcat "\n  " (itoa i) ".  " (pfa:xr-sbase e)
+                        "   target sta " (pf:fmt-station (pfa:xr-tsta e))
+                        "   source sta " (pf:fmt-station (pfa:xr-ssta e))
+                        (if (pfa:xr-telev e)
+                          (strcat "   TGT inv " (rtos (pfa:xr-telev e) 2 2))
                           "")
-                        (if (pfx:xing-selev e)
-                          (strcat "   SRC inv " (rtos (pfx:xing-selev e) 2 2))
-                          ""))))))
+                        (if (pfa:xr-selev e)
+                          (strcat "   SRC inv " (rtos (pfa:xr-selev e) 2 2))
+                          "")
+                        st)))))
   (princ))
 
-(defun c:PFXFIND ( / dcl_id tgt tverts dir files self chosen out
-                     f path sverts xy tsta ssta xy2 tsta2 ssta2)
+;; (pfx:ledger-has-source anchor sbase) -> T | nil
+(defun pfx:ledger-has-source (anchor sbase / found e)
+  (setq found nil)
+  (foreach e (pfa:xing-list anchor)
+    (if (= (strcase (pfa:xr-sbase e)) (strcase sbase)) (setq found T)))
+  found)
+
+;; (pfx:anchored-targets) -> list of (tfile line util count)
+;;   Every registered profile in the drawing that has crossings on record
+;;   AND a stored target .cl path -- i.e. everything PFXLABEL can run on
+;;   without a file dialog.
+(defun pfx:anchored-targets ( / out e at recs meta tfile)
+  (setq out '())
+  (foreach e (pfa:all-anchors)
+    (setq recs (pfa:xing-list e))
+    (if recs
+      (progn
+        (setq at    (pfa:read-attribs e)
+              meta  (pfa:meta-get e)
+              tfile (if (assoc 1 meta) (cdr (assoc 1 meta)) ""))
+        (if (/= tfile "")
+          (setq out (cons (list tfile
+                                (pfa:att "LINE" at)
+                                (pfa:att "UTIL" at)
+                                (length recs))
+                          out))))))
+  (reverse out))
+
+;; (pfx:resolve-target) -> target .cl path | nil
+;;   Exhausts what is already known before ever opening a file dialog:
+;;     1. pending PFXFIND results        -> their target
+;;     2. last target this session       -> reuse silently (named)
+;;     3. ONE registered profile w/ crossings -> use it (named)
+;;     4. several                        -> short numbered pick (+ Browse)
+;;     5. nothing on record              -> browse (the only cold-start path)
+(defun pfx:resolve-target ( / cands i c pick)
+  (cond
+    (*pfx-crossings* (pfa:xr-tfile (car *pfx-crossings*)))
+    (*pfx-last-target*
+     (prompt (strcat "\nTarget: " (pfx:type-of *pfx-last-target*)
+                     " '" (pfx:name-of *pfx-last-target*)
+                     "'   ('Target' at the crossing prompt switches profiles)"))
+     *pfx-last-target*)
+    (T
+     (setq cands (pfx:anchored-targets))
+     (cond
+       ((null cands)
+        (pflabel:browse "Select TARGET Centerline (.CL) File"
+                        '*pflabel-dir-cl* "cl"))
+       ((= (length cands) 1)
+        (prompt (strcat "\nTarget: " (nth 2 (car cands))
+                        " '" (nth 1 (car cands))
+                        "'   (only registered profile with crossings on record)"))
+        (car (car cands)))
+       (T
+        (prompt "\nRegistered profiles with crossings on record:")
+        (setq i 0)
+        (foreach c cands
+          (setq i (1+ i))
+          (prompt (strcat "\n  " (itoa i) ".  " (nth 2 c) " '" (nth 1 c)
+                          "'   (" (itoa (nth 3 c)) " crossing(s))")))
+        (initget 6 "Browse")
+        (setq pick (getint (strcat "\nTarget profile [Browse] <1-"
+                                   (itoa (length cands)) ">: ")))
+        (cond
+          ((null pick) nil)
+          ((= pick "Browse")
+           (pflabel:browse "Select TARGET Centerline (.CL) File"
+                           '*pflabel-dir-cl* "cl"))
+          ((and (numberp pick) (>= pick 1) (<= pick (length cands)))
+           (car (nth (1- pick) cands)))
+          (T nil)))))))
+
+
+;;; ==========================================================================
+;;; SECTION 6  --  Error handler  (shared by all three commands)
+;;; ==========================================================================
+
+(if (not (boundp '*pfx-undo-open*)) (setq *pfx-undo-open* nil))
+
+(defun pfx:*error* (msg)
+  (if (and msg
+           (/= msg "Function cancelled")
+           (/= msg "quit / exit abort"))
+    (prompt (strcat "\nPFX error: " msg)))
+  (if *pfx-undo-open*
+    (progn (command-s "_.UNDO" "_End") (setq *pfx-undo-open* nil)))
+  (setq *error* *pfx-prev-error*)
+  (princ))
+
+
+;;; ==========================================================================
+;;; SECTION 7  --  TOOL 1:  C:PFXFIND   (discovery -> ledger)
+;;; ==========================================================================
+
+(defun c:PFXFIND ( / dcl_id tgt tverts dir files self chosen out f path
+                     sverts xy tsta ssta xy2 tsta2 ssta2 i line util anchor
+                     e st cnt-new cnt-upd cnt-mov xform recon)
+  (setq *pfx-prev-error* *error*
+        *error*          pfx:*error*
+        *pfx-undo-open*  nil)
   (pf:load-apis)
   (setq tgt (pflabel:browse "Select TARGET Centerline (.CL) File"
                             '*pflabel-dir-cl* "cl"))
   (cond
     ((null tgt) (prompt "\nNo target selected -- cancelled."))
     ((null (setq tverts (pfx:get-verts tgt)))
-     (prompt (strcat "\nCould not read plan geometry from " tgt " -- aborting.")))
+     (prompt (strcat "\nCould not read plan geometry from " tgt
+                     " -- aborting.")))
     (T
-     (setq dir   (strcat (vl-filename-directory tgt) "\\")
-           files (acad_strlsort (vl-directory-files dir "*.cl" 1))
-           self  (strcase (strcat (pfx:basename tgt) ".CL"))
-           files (vl-remove-if '(lambda (f) (= (strcase f) self)) files))
+     (setq *pfx-last-target* tgt)       ; session continuity for PFXLABEL
+     (setq line   (pfx:name-of tgt)
+           util   (pfx:type-of tgt)
+           anchor (pfa:find-anchor line util)
+           dir    (strcat (vl-filename-directory tgt) "\\")
+           files  (acad_strlsort (vl-directory-files dir "*.cl" 1))
+           self   (strcase (strcat (pfx:basename tgt) ".CL"))
+           files  (vl-remove-if '(lambda (f) (= (strcase f) self)) files))
      (if (null files)
        (prompt "\nNo other .cl files in that folder -- nothing to test.")
        (progn
@@ -619,6 +685,7 @@
              (if (null chosen)
                (prompt "\nNo candidates checked -- cancelled.")
                (progn
+                 ;; ---- discovery (proven geometry, unchanged) ------------
                  (setq out '())
                  (foreach i chosen
                    (setq f      (nth i files)
@@ -626,17 +693,19 @@
                          sverts (pfx:get-verts path))
                    (cond
                      ((null sverts)
-                      (prompt (strcat "\n  " f " -- could not read plan geometry; skipped.")))
+                      (prompt (strcat "\n  " f
+                                      " -- could not read plan geometry; skipped.")))
                      ((null (setq xy (pfx:poly-x tverts sverts)))
-                      (prompt (strcat "\n  " f " -- does not cross the target.")))
+                      (prompt (strcat "\n  " f " -- does not cross the target."))
+                      ;; stale-record heads-up: never silently deleted
+                      (if (and anchor
+                               (pfx:ledger-has-source anchor (pfx:basename path)))
+                        (prompt (strcat "\n      NOTE: the ledger holds a "
+                                        "crossing on record for this source; "
+                                        "it may be stale (record kept)."))))
                      (T
                       (setq tsta (pfx:sta-at tgt  xy)
                             ssta (pfx:sta-at path xy))
-                      ;; Refine: re-intersect at fine step around the coarse
-                      ;; hit; on success re-read both stations off the exact
-                      ;; XY.  Falls back to the coarse values silently only
-                      ;; when refinement can't sample (coarse is still good
-                      ;; to ~half the sample step).
                       (if (and tsta ssta
                                (setq xy2 (pfx:refine-x tgt tsta path ssta)))
                         (progn
@@ -646,9 +715,12 @@
                             (setq xy xy2 tsta tsta2 ssta ssta2))))
                       (if (and tsta ssta)
                         (progn
-                          (setq out (cons (list tgt (pfx:basename tgt)
+                          (setq out (cons (list (pfa:xing-key
+                                                  (pfx:basename path) tsta)
+                                                tgt (pfx:basename tgt)
                                                 path (pfx:basename path)
-                                                xy tsta ssta)
+                                                (pfx:pt2 xy) tsta ssta
+                                                nil nil)
                                           out))
                           (prompt (strcat "\n  " f " -- CROSSES at target sta "
                                           (pf:fmt-station tsta)
@@ -657,84 +729,311 @@
                         (prompt (strcat "\n  " f
                                         " -- crossing found but a station read "
                                         "failed; skipped."))))))
-                 (setq *pfx-crossings* (reverse out))
-                 (prompt (strcat "\n" (itoa (length *pfx-crossings*))
-                                 " crossing(s) stored."))
-                 (pfx:print-crossings)))))))))
-  (princ))
-
-;;; ==========================================================================
-;;; SECTION 7  --  TOOL 2:  C:PFXLABEL   (invert reader + labeler)
-;;; ==========================================================================
-
-(if (not (boundp '*pfx-undo-open*)) (setq *pfx-undo-open* nil))
-
-(defun pfx:*error* (msg)
-  (if (and msg
-           (/= msg "Function cancelled")
-           (/= msg "quit / exit abort"))
-    (prompt (strcat "\nPFXLABEL error: " msg)))
-  (if *pfx-undo-open*
-    (progn (command-s "_.UNDO" "_End") (setq *pfx-undo-open* nil)))
+                 (setq out (reverse out))
+                 ;; ---- persist (anchored) or pend (session) --------------
+                 (cond
+                   ((and anchor out)
+                    (command "_.UNDO" "_Begin")
+                    (setq *pfx-undo-open* T)
+                    (setq cnt-new 0 cnt-upd 0 cnt-mov 0)
+                    (foreach e out
+                      (setq st (pfa:xing-merge anchor e))
+                      (cond
+                        ((eq st 'NEW)   (setq cnt-new (1+ cnt-new)))
+                        ((eq st 'MOVED) (setq cnt-mov (1+ cnt-mov)))
+                        (T              (setq cnt-upd (1+ cnt-upd)))))
+                    (setq *pfx-crossings* nil)
+                    (if (setq xform (pfa:anchor->xform anchor))
+                      (pfa:rebuild-table anchor xform (pfx:active-style) nil))
+                    (command "_.UNDO" "_End")
+                    (setq *pfx-undo-open* nil)
+                    (prompt (strcat "\n" (itoa (length out))
+                                    " crossing(s) merged into the " util
+                                    " '" line "' ledger  (" (itoa cnt-new)
+                                    " new, " (itoa cnt-upd) " updated, "
+                                    (itoa cnt-mov) " station-moved).  "
+                                    "Elevations on record were preserved."))
+                    (setq recon (if xform
+                                  (pfa:recon xform (pfa:xing-list anchor))))
+                    (pfx:print-crossings (pfa:xing-list anchor) recon))
+                   (out
+                    (setq *pfx-crossings* out)
+                    (prompt (strcat "\n" (itoa (length out))
+                                    " crossing(s) stored IN SESSION -- no grid "
+                                    "anchor yet for " util " '" line "'.  They "
+                                    "persist to the ledger when the target grid "
+                                    "is first defined (PFXLABEL or PFXGRID + "
+                                    "re-run)."))
+                    (pfx:print-crossings out nil))
+                   (T (prompt "\nNo crossings found.")))))))))))
   (setq *error* *pfx-prev-error*)
   (princ))
 
-(defun c:PFXLABEL ( / n pick e src-xf tgt-xf src-pipe tgt-pipe)
+
+;;; ==========================================================================
+;;; SECTION 8  --  TOOL 2:  C:PFXLABEL   (the loop)
+;;; ==========================================================================
+
+(defun c:PFXLABEL ( / tgt line util anchor xform style work recon n pick e
+                     sel allmode groups g sfile sline sutil sanchor sxf sp tp
+                     jobs j skips drawn xf2 sk)
   (setq *pfx-prev-error* *error*
         *error*          pfx:*error*
         *pfx-undo-open*  nil)
-  (cond
-    ((null *pfx-crossings*)
-     (prompt "\nNo crossings on record -- run PFXFIND first."))
-    (T
-     (pfx:print-crossings)
-     (setq n (length *pfx-crossings*))
-     (initget 6)
-     (setq pick (getint (strcat "\nCrossing to label <1-" (itoa n) ">: ")))
-     (cond
-       ((or (null pick) (> pick n))
-        (prompt "\nNo valid crossing picked -- cancelled."))
-       (T
-        (setq e (nth (1- pick) *pfx-crossings*))
-        (setq src-xf (pfx:get-grid
-                       (strcat "SOURCE (" (pfx:xing-sbase e) ")")))
-        (if src-xf
-          (progn
-            (setq src-pipe (pfx:read-pipe "SOURCE" src-xf (pfx:xing-ssta e)))
-            (if (null src-pipe)
-              (prompt "\nSource pipe unreadable -- nothing drawn.")
+  (pf:load-apis)
+
+  ;; ---- 0. target identity --------------------------------------------------
+  (setq tgt (pfx:resolve-target))
+  (if (null tgt)
+    (prompt "\nNo target -- cancelled.")
+    (progn
+      (setq *pfx-last-target* tgt)      ; repeat runs continue this profile
+      (setq line   (pfx:name-of tgt)
+            util   (pfx:type-of tgt)
+            style  (pfx:active-style)
+            anchor (pfa:find-anchor line util)
+            drawn  0
+            skips  '())
+
+      ;; ONE undo group wraps every write in the pass -- anchors, ledger,
+      ;; labels, table.  Opened before the first possible write; Esc
+      ;; anywhere is unwound by pfx:*error*.
+      (command "_.UNDO" "_Begin")
+      (setq *pfx-undo-open* T)
+
+      ;; ---- 1. target grid: READ EARLY when anchored (no picks) ----------
+      (if anchor
+        (setq xform (pfx:anchored-xform anchor (strcat "TARGET (" line ")"))))
+
+      ;; ---- 2. working list (the ledger is truth; pending merges in) -----
+      (if (and anchor *pfx-crossings*)
+        (progn
+          (foreach e *pfx-crossings* (pfa:xing-merge anchor e))
+          (setq *pfx-crossings* nil)
+          (prompt "\nPending PFXFIND results persisted to the profile ledger.")))
+      (setq work (if anchor (pfa:xing-list anchor) *pfx-crossings*))
+
+      (cond
+        ((null work)
+         (prompt "\nNo crossings on record for this target -- run PFXFIND."))
+        (T
+         (setq work  (vl-sort work '(lambda (a b)
+                                      (< (pfa:xr-tsta a) (pfa:xr-tsta b))))
+               recon (if xform (pfa:recon xform work))
+               n     (length work))
+
+         ;; ---- 3. print + select --------------------------------------
+         (pfx:print-crossings work recon)
+         (initget 6 "All Target")
+         (setq pick (getint (strcat "\nCrossing to label [All/Target] <1-"
+                                    (itoa n) ">: ")))
+         (setq allmode (= pick "All"))
+         (cond
+           ((null pick) (prompt "\nNothing picked -- cancelled."))
+           ((= pick "Target")
+            (setq *pfx-last-target* nil)
+            (prompt "\nSession target cleared -- run PFXLABEL again to choose a profile."))
+           ((and (not allmode) (or (not (numberp pick)) (> pick n)))
+            (prompt "\nNo valid crossing picked -- cancelled."))
+           (T
+            (if allmode
+              ;; All = every OUTSTANDING crossing (target-only completeness);
+              ;; with no target grid yet nothing can be labeled -> all.
+              (setq sel (if recon
+                          (vl-remove-if
+                            '(lambda (e) (cdr (assoc (pfa:xr-key e) recon)))
+                            work)
+                          work))
               (progn
-                (setq tgt-xf (pfx:get-grid
-                               (strcat "TARGET (" (pfx:xing-tbase e) ")")))
-                (if tgt-xf
+                (setq e (nth (1- pick) work) sel (list e))
+                (if (and recon (cdr (assoc (pfa:xr-key e) recon)))
                   (progn
-                    (setq tgt-pipe (pfx:read-pipe "TARGET" tgt-xf
-                                                  (pfx:xing-tsta e)))
-                    (command "_.UNDO" "_Begin")
-                    (setq *pfx-undo-open* T)
-                    (pfx:draw-grid-side src-xf
-                                        (pfx:xing-sfile e) (pfx:xing-ssta e)
-                                        src-pipe
-                                        (pfx:xing-tfile e) tgt-pipe)
-                    (pfx:draw-grid-side tgt-xf
-                                        (pfx:xing-tfile e) (pfx:xing-tsta e)
-                                        tgt-pipe
-                                        (pfx:xing-sfile e) src-pipe)
-                    (pfx:xing-store-elevs e
-                                          (if tgt-pipe (car tgt-pipe) nil)
-                                          (if src-pipe (car src-pipe) nil))
-                    (pfx:clear-table)
-                    (pfx:draw-table tgt-xf)
-                    (command "_.UNDO" "_End")
-                    (setq *pfx-undo-open* nil)
-                    (prompt (strcat "\nLabeled crossing "
-                                    (pfx:xing-tbase e) " x "
-                                    (pfx:xing-sbase e)
-                                    " on both grids; PF-TABLE rebuilt."))))))))))))
+                    (prompt (strcat "\nThat crossing is already labeled on "
+                                    "the target grid; labeling again will "
+                                    "draw DUPLICATE entities."))
+                    (initget "Yes No")
+                    (if (/= (getkword "\nProceed anyway? [Yes/No] <No>: ")
+                            "Yes")
+                      (setq sel nil))))))
+            (cond
+              ((null sel)
+               (prompt (if allmode
+                         "\nAll crossings are already labeled -- nothing to do."
+                         "\nCancelled.")))
+              (T
+               ;; ---- 4. SOURCE phase: grids keyed PER SOURCE FILE ------
+               (setq groups '())
+               (foreach e sel
+                 (setq g (assoc (strcase (pfa:xr-sfile e)) groups))
+                 (setq groups
+                       (if g
+                         (subst (append g (list e)) g groups)
+                         (append groups
+                                 (list (list (strcase (pfa:xr-sfile e))
+                                             e))))))
+               (setq jobs '())
+               (foreach g groups
+                 (setq sfile   (pfa:xr-sfile (cadr g))
+                       sline   (pfx:name-of sfile)
+                       sutil   (pfx:type-of sfile)
+                       sanchor (pfa:find-anchor sline sutil)
+                       sxf     nil)
+                 (cond
+                   ;; registered source -> read it (zero picks)
+                   (sanchor
+                    (setq sxf (pfx:anchored-xform
+                                sanchor
+                                (strcat "SOURCE (" (pfx:basename sfile) ")")))
+                    (if (null sxf)
+                      (foreach e (cdr g)
+                        (setq skips (cons (list (pfa:xr-key e)
+                                                (pfa:xr-sbase e)
+                                                (pfa:xr-tsta e)
+                                                "SOURCE GRID UNREADABLE")
+                                          skips)))))
+                   ;; single pick keeps the inline pick path -- and
+                   ;; registers the anchor on the way out (pick once, ever)
+                   ((not allmode)
+                    (setq sxf (pfx:pick-grid-xform
+                                (strcat "SOURCE (" (pfx:basename sfile) ")")))
+                    (if sxf
+                      (progn
+                        (setq sanchor (pfa:write-anchor sline sutil sxf sfile))
+                        ;; round-trip through the anchor: draw-time and all
+                        ;; future recon X math stay bit-identical
+                        (setq sxf (pfa:anchor->xform sanchor)))
+                      (foreach e (cdr g)
+                        (setq skips (cons (list (pfa:xr-key e)
+                                                (pfa:xr-sbase e)
+                                                (pfa:xr-tsta e)
+                                                "SOURCE GRID PICK CANCELLED")
+                                          skips)))))
+                   ;; All mode + unregistered source => SKIP AND REPORT
+                   (T
+                    (prompt (strcat "\n  " (pfx:basename sfile)
+                                    " -- no grid registered; skipped "
+                                    (itoa (length (cdr g)))
+                                    " crossing(s).  (Label one individually "
+                                    "to register its grid.)"))
+                    (foreach e (cdr g)
+                      (setq skips (cons (list (pfa:xr-key e)
+                                              (pfa:xr-sbase e)
+                                              (pfa:xr-tsta e)
+                                              "NO GRID REGISTERED")
+                                        skips)))))
+                 ;; probe every crossing on this source's ONE grid
+                 (if sxf
+                   (foreach e (cdr g)
+                     (setq sp (pfx:read-pipe
+                                (strcat "SOURCE (" (pfa:xr-sbase e) ")")
+                                sxf (pfa:xr-ssta e)))
+                     (if sp
+                       (setq jobs (cons (list e sxf sp) jobs))
+                       (setq skips (cons (list (pfa:xr-key e)
+                                               (pfa:xr-sbase e)
+                                               (pfa:xr-tsta e)
+                                               "SOURCE PIPE UNREADABLE")
+                                         skips))))))
+               (setq jobs (reverse jobs))
+
+               ;; ---- 5. TARGET grid, once ------------------------------
+               (if (and jobs (null xform))
+                 (progn
+                   (setq xf2 (pfx:pick-grid-xform
+                               (strcat "TARGET (" line ")")))
+                   (cond
+                     ((null xf2)
+                      (foreach j jobs
+                        (setq e (car j))
+                        (setq skips (cons (list (pfa:xr-key e)
+                                                (pfa:xr-sbase e)
+                                                (pfa:xr-tsta e)
+                                                "TARGET GRID PICK CANCELLED")
+                                          skips)))
+                      (setq jobs '()))
+                     (anchor        ; existed but was unreadable / moved
+                      (pfa:reanchor anchor xf2)
+                      (setq xform (pfa:anchor->xform anchor)))
+                     (T
+                      (setq anchor (pfa:write-anchor line util xf2 tgt)
+                            xform  (pfa:anchor->xform anchor))
+                      ;; the ledger now exists: persist the working set
+                      (foreach e work (pfa:xing-merge anchor e))
+                      (setq *pfx-crossings* nil)))))
+
+               ;; ---- 6. target probes + BOTH-SIDE draw + ledger elevs --
+               (foreach j jobs
+                 (setq e   (nth 0 j)
+                       sxf (nth 1 j)
+                       sp  (nth 2 j)
+                       tp  (pfx:read-pipe (strcat "TARGET (" line ")")
+                                          xform (pfa:xr-tsta e)))
+                 ;; source side: own pipe = source's, other = target's
+                 (pfx:draw-grid-side sxf (pfa:xr-sfile e) (pfa:xr-ssta e)
+                                     sp tgt tp)
+                 ;; target side: own pipe = target's, other = source's
+                 (pfx:draw-grid-side xform tgt (pfa:xr-tsta e)
+                                     tp (pfa:xr-sfile e) sp)
+                 (if anchor
+                   (pfa:xing-put-elevs anchor (pfa:xr-key e)
+                                       (if tp (car tp)) (if sp (car sp))))
+                 (setq drawn (1+ drawn)))
+
+               ;; ---- 7. table (replaced BY HANDLE; skips rendered) -----
+               (if (and anchor xform)
+                 (pfa:rebuild-table anchor xform style skips))
+
+               ;; ---- 8. pass report ------------------------------------
+               (prompt (strcat "\n== PFXLABEL pass: " (itoa drawn)
+                               " crossing(s) labeled, "
+                               (itoa (length skips)) " skipped =="))
+               (foreach sk (reverse skips)
+                 (prompt (strcat "\n  SKIPPED  " (cadr sk)
+                                 " @ target sta "
+                                 (pf:fmt-station (caddr sk))
+                                 "  -- " (nth 3 sk)))))))))
+      (if *pfx-undo-open*
+        (progn (command "_.UNDO" "_End") (setq *pfx-undo-open* nil))))))
   (setq *error* *pfx-prev-error*)
   (princ))
 
-(princ "\npfcross.lsp loaded.  Commands: PFXFIND (find crossings), PFXLABEL (label one).")
+
+;;; ==========================================================================
+;;; SECTION 9  --  TOOL 3:  C:PFXGRID   (register / update a grid anchor)
+;;; ==========================================================================
+
+(defun c:PFXGRID ( / f line util anchor xf)
+  (setq *pfx-prev-error* *error*
+        *error*          pfx:*error*
+        *pfx-undo-open*  nil)
+  (setq f (pflabel:browse "Select Centerline (.CL) for This Profile Grid"
+                          '*pflabel-dir-cl* "cl"))
+  (if (null f)
+    (prompt "\nCancelled.")
+    (progn
+      (setq line   (pfx:name-of f)
+            util   (pfx:type-of f)
+            anchor (pfa:find-anchor line util))
+      (if anchor
+        (prompt (strcat "\n" util " '" line "' already has a grid anchor -- "
+                        "re-picking updates it in place (ledger preserved).")))
+      (setq xf (pfx:pick-grid-xform (strcat util " '" line "'")))
+      (if xf
+        (progn
+          (command "_.UNDO" "_Begin")
+          (setq *pfx-undo-open* T)
+          (if anchor
+            (pfa:reanchor anchor xf)
+            (pfa:write-anchor line util xf f))
+          (command "_.UNDO" "_End")
+          (setq *pfx-undo-open* nil))
+        (prompt "\nNo grid defined."))))
+  (setq *error* *pfx-prev-error*)
+  (princ))
+
+
+(princ "\npfcross.lsp loaded.  Commands: PFXFIND (find crossings -> ledger), ")
+(princ "PFXLABEL (label 1-N or All), PFXGRID (register a grid).")
 (princ)
 ;;; ==========================================================================
 ;;; end of pfcross.lsp

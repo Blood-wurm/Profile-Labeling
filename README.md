@@ -1,275 +1,420 @@
-# Profile-Labeling Toolset (PFTools)
+# PFTools v4 — Profile-Labeling Toolset
 
 AutoLISP/DCL tools for annotating utility **profile drawings** in Carlson Civil
-running on AutoCAD Map 3D. The suite labels drainage/utility structures and
-pipe crossings on storm, sanitary, and water profiles to the firm's drafting
-standard — work that Carlson's native profile workflows don't cover to spec.
+on AutoCAD Map 3D. The suite labels drainage/utility structures and pipe
+crossings on storm, sanitary, and water profiles to the firm's drafting
+standard — the geometric work Carlson's native profile commands don't cover.
 
-> \*\*How to read this document.\*\* Sections 1–4 are the plain-language overview.
-> Section 5 onward is implementation detail for anyone maintaining the code.
+> **How to read this.** §1–§3 are plain-language (for explaining to Andy).
+> §4 onward is the engineer's reference: commands, the workflow call-trace,
+> the data model, and the file map.
 
-\---
+---
 
-## 1\. What it does
+## 1. What it does (plain language)
 
-A profile sheet shows a utility line in section: horizontal axis is *station*
-(distance along the line), vertical axis is *elevation*. Every structure and
-every pipe crossing on that line needs a label placed at the correct station,
-carrying the right identifier, ground elevation, and — for crossings — invert
-elevation and pipe size.
+A profile sheet shows a utility line in section — horizontal axis is **station**
+(distance along the line), vertical axis is **elevation**. Every structure and
+every pipe crossing needs a label at the right station carrying the right ID,
+elevation, and (for crossings) pipe size and material.
 
-Placing those labels by hand is slow and error-prone because the numbers behind
-each one aren't visible in the drawing. They have to be computed from the
-alignment geometry (station math), the surface model (ground elevation), and
-the crossing geometry (where two lines actually intersect in plan). This toolset
-computes those values from Carlson's own data and draws the labels.
+The numbers behind each label aren't in the drawing — they have to be computed
+from the alignment geometry (`.cl` files), the design profiles (`.pro` files),
+and the crossing geometry (where two lines actually intersect in plan). PFTools
+computes them from Carlson's own data and draws the labels.
 
-It produces three things:
+It produces:
 
-* **Structure labels** at the top of the grid — station, combined structure ID,
-and ground-line elevation.
-* **Crossing detection** — finds every point where other utility lines cross the
-profiled line, with the exact station on each.
-* **Crossing labels** — draws the crossing pipes at their true inverts on both
-grids, with size and standard line labels, plus a summary crossings table.
+- **Structure labels** at the top of the grid — station(s), combined structure
+  ID, and a ground-line elevation row the drafter fills in.
+- **Crossing discovery** — finds every point where another registered line
+  crosses the profiled line, reading the exact station on each.
+- **Crossing labels** — draws each crossing pipe at its true invert on the
+  target grid, with size, material, and the standard line label.
+- **A per-profile crossings table** that doubles as a completion record.
 
-## 2\. At a glance
+The shift in v4: a profile's grid and crossings become **drawing-resident
+state**. Register a grid once; every command afterward reads it, and the
+drawing itself remembers what's been labeled and what's left.
 
-|Command|Alias|What it does|
-|-|-|-|
-|`PFLABEL`|`PFL`|Labels structures at the top of a profile grid.|
-|`PFXFIND`|—|Finds crossings on a target line (plan only, no grids). Run first.|
-|`PFXLABEL`|—|Labels one crossing across its two grids. Run after `PFXFIND`.|
-|`PFLABELSET`|—|Opens the settings dialog standalone (for testing/config only).|
+## 2. The v4 pivots (what changed from v3)
 
-`PFXFIND` and `PFXLABEL` are a **chained pair**: `PFXFIND` discovers crossings
-and stashes them for the session; `PFXLABEL` labels them one at a time. They
-must run in the same session.
+| Area | v3 | v4 |
+|---|---|---|
+| **Registration** | Grid re-picked every run | **Register once** (an *anchor block*), every command reads it |
+| **Two tiers** | — | **AUTO** names every profile on the sheet (stubs); **USER** places each grid (anchors) |
+| **Crossing inverts** | Vertical **bore probe** of the drawn grid | **Read from the source `.pro`** via the Road API (`profile z`) — the probe is *dead* |
+| **Crossing draw** | Both grids | **Target grid only**; a source needs its `.pro` *bound*, not its grid *placed*. Reciprocal annotation = run again with that profile as target |
+| **Material** | — | Asserted per-type in PFSETUP, stored on the anchor, read into the crossing label (`NN" <MAT>`) |
+| **Commands** | `PFXFIND` + `PFXLABEL` + `PFXGRID` trio | Collapsed to **one** `PFXLABEL` (discovery auto-runs) |
+| **Only surviving probe** | invert + top | **Top-of-grid probe only** (highest `PF-GRID-MJR` hit; grid tops step) |
 
-## 3\. Why build this instead of using Carlson's native commands
+## 3. Why build this vs. Carlson native
 
-The guiding rule was: **automate only where there is genuine geometric work the
-user cannot reasonably do by hand.** A tool that just wraps two picks the drafter
-already makes natively isn't worth the maintenance cost.
+Automate only where there's genuine geometric work the drafter can't reasonably
+do by hand: membership logic, station math on curved alignments, crossing
+geometry, and invert reading off authored profiles. That bar is why an invert
+label wrapping two manual picks stays **shelved** (now planned as `PFINVERT`,
+built on the *authored* `.pro`, not a probe).
 
-That bar is why an invert-labeling command (INVLABEL) was **shelved** — it would
-have wrapped two manual picks and added nothing. It's also why the three
-commands that *were* built each carry real computation the drafter can't do
-manually: membership logic (which lines a structure sits on), surface elevations
-from the TIN, station math, and crossing geometry on curved alignments.
+---
 
-## 4\. Architecture in one picture
+## 4. Command reference
+
+| Command | Alias | File | What it does |
+|---|---|---|---|
+| `PFSETUP` | — | `pfsetup.lsp` | Register/edit grids. **AUTO** names every profile on the sheet; **USER** places each grid. |
+| `PFLABEL` | `PFL` | `pflabel.lsp` | Label structures at the top of a registered grid. Reads the anchor — no per-run dialogs for geometry. |
+| `PFXLABEL` | `PFX` | `pfxlabel.lsp` | Discover + label pipe crossings on the target grid. One / All-outstanding. |
+| `PFREMOVE` | — | `pfanchor.lsp` | Tear down one profile's record — anchor + ledger + every handle-tracked entity. Untracked work is never touched. |
+| `PFLABELSET` | — | `pflabel.lsp` | Open the label settings dialog standalone (prefix/suffix, layer, style). |
+| `PFROOT` | — | `pfsettings.lsp` | Show / set the drawing's project-data-root folder. |
+| `PFINVERT` / `PFCHECK` | — | *(planned)* | Invert labels at structures; record-integrity check. Announced by the loader, not yet built. |
+
+### 4.1 `PFSETUP` — two-tier registration
+
+Registration splits in two. **Identity is enough to discover; placement is
+required only to draw.**
+
+**AUTO (identity, sheet-wide, never guesses)** — fires automatically the first
+time a drawing has no registry:
 
 ```
-pftools-load.lsp      loader — sets the install folder, loads the rest in order
+pfs:auto
+ ├─ pfs:scan-sheet-names      scan PF-NAME text  → (type . name) pairs
+ ├─ pfs:cl-lookup             resolve Type_Name.cl in the project root
+ ├─ pfs:pro-lookup            auto-bind the _INV / _TOP .pro pair
+ └─ pfa:stub-put              write an identity-only STUB to the NOD dict
+```
+
+No matching `.cl`, an ambiguous match, or a `.cl` with no sheet name is
+**reported and skipped** — never guessed. The reverse direction (a `.cl` with
+no grid name on the sheet) is noted too.
+
+**USER (placement)** — promotes a stub to an anchor, per grid:
+
+```
+pfs:place-one
+ ├─ pfs:show-dialog           identity override, scales, .cl/.pro/.tin, material
+ ├─ pfs:pick-extents          pick LOWER-LEFT (datum line) then TOP-RIGHT (extents)
+ ├─ pfs:ask-datum             type the datum elevation (the one value a pick can't give)
+ ├─ pfs:build-xform → pfa:write-anchor    write the PF-GRIDANCHOR block
+ ├─ pfa:meta-put / pfs:bind-files         .cl + .pro/.tin bindings + checksums
+ └─ pfa:stub-del              delete the promoted stub
+```
+
+**One datum per grid, anchored at the lower-left; run steps don't matter.**
+(Settled — do not revisit.) Extents are stored **relative** (as the block's
+X/Y insert scale), so a window-move of grid + anchor carries both corners.
+**Vertical scale = declared H/V; per-station top = the probe.** Undo is one
+group **per grid** — `U` peels one grid, not the batch.
+
+Edit mode invalidation:
+
+| Change | Result |
+|---|---|
+| `.pro` swap | cheap — record updated, derived output stale |
+| scales / extents | everything redraws |
+| `.cl`, same station range | full regeneration |
+| `.cl`, different range | **REFUSED** — that's a new anchor; `PFREMOVE` first |
+| identity (type / name) | **REFUSED** — `PFREMOVE` + fresh placement |
+
+### 4.2 `PFLABEL` — structure labels
+
+The v4 run collapses to: `PFLABEL` → pick the anchor → `[All/Pick]` → run.
+Everything the old dialogs gathered lives in the anchor record.
+
+- **Secondary `.cl` set = the registry** (anchors *and* stubs). Membership is
+  plan-view station math, so **identity alone qualifies a line** — the moment
+  AUTO names the sheet, every junction's combined ID (`AA-1/BB-2`) is complete,
+  placed or not. This closes v3's silently-shorter-ID gap.
+- **Label Y = the top-of-grid probe** at each structure's station (grids have
+  stepped tops). A station with no `PF-GRID-MJR` hit is skipped and reported.
+- **Layer** = derived `<TYPE>-TEXT_P`, handle-tracked, erase-and-replace on an
+  `All` re-run. The *"Use current layer"* toggle draws on `CLAYER` instead:
+  not tracked, not erased, but the pass is still recorded (timestamp + layer,
+  no handles) so the record can tell "labeled off-scope" from "never labeled".
+
+Composition (validated near-100% in v3, unchanged):
+
+- **Station rows** — primary line first, remaining lines alphabetical.
+- **Combined ID** — alphabetical by line name (stable across profiles).
+- **Const rows** — `*pf-rule-table*` (cfg), ordered first-match.
+- **Elevation** — `<G.L.|T.G.|T.R.> XXX.XX` **placeholder** the drafter fills
+  (PFLABEL does **not** sample the TIN today; the `.tin` binding is for the
+  planned invert/QA work). `HDWL` drops the elevation row.
+
+### 4.3 `PFXLABEL` — crossing discovery + labeling
+
+One target-directed command. Discovery auto-runs, then you label.
+
+```
+c:PFXLABEL
+ ├─ pfxl:resolve-target       session-last (silent if still placed) else registry picker
+ ├─ pfxl:discover             target .cl × every OTHER registered .cl
+ │    ├─ pf:cl-verts / pf:poly-x        sampled-walk plan intersection (arcs followed)
+ │    ├─ pf:refine-x                    re-sample ~0.1 ft near a hit
+ │    ├─ pf:sta-at                      read both stations off the Road API
+ │    └─ pfa:xing-merge                 additive merge into the ledger (elevations preserved)
+ ├─ pfa:xing-list / pfa:recon           working list + per-crossing LABELED/OUTSTANDING
+ ├─ pfxl:print                          numbered list + status
+ ├─ [pick] All / <1-N> / Target
+ └─ pfxl:label-one  (per selected crossing)
+      ├─ pfxl:src-files                 source's INV/TOP .pro + material
+      ├─ pf:pipe-at → pf:pro-z          invert (flowline z) + size (nearest nominal to (TOP−INV)×12)
+      ├─ pf:top-at                      grid top at this station (probe miss → skip)
+      ├─ pfd:station-line / pfd:text    station line (PF-XING) + vertical station text
+      ├─ pfd:insert-pipe                the crossing pipe at its true invert on the TARGET grid
+      ├─ pfd:label-pipe                 NN" <MATERIAL> + standard line label
+      └─ pfa:xing-put-elevs             persist target + source inverts to the ledger
+```
+
+- **Discovery is additive** — never destructive. A per-source **checksum
+  short-circuit** skips pairs whose two `.cl` files are unchanged since the
+  last scan.
+- **All** mode labels only **OUTSTANDING** crossings; single-pick warns before
+  it would draw duplicates.
+- A source that isn't registered, has no INV `.pro` bound, or whose invert is
+  unreadable is **skipped and reported** — on the command line *and* in the
+  table's STATUS column.
+- After the pass, `pfa:rebuild-table` regenerates the crossings table (replaced
+  by handle). The whole pass is one undo group.
+
+### 4.4 `PFREMOVE` — teardown
+
+```
+pfa:teardown
+ ├─ pfa:erase-pass (per PASS_*)   erase every handle-tracked entity, by handle
+ ├─ erase table instance (by handle) + block definition
+ └─ entdel anchor                 the ledger dies with it (hard-owned ext-dict)
+```
+
+Removes the tool's **memory** of a profile plus the entities it can name by
+handle. **Untracked work — CLAYER passes, hand-drawn linework — is never
+touched.** A **copied** anchor is detected (its ledger points at the original's
+entities) and offered a copy-safe purge that erases only the block. One `U`
+reverses it.
+
+---
+
+## 5. Load order & file map
+
+The loader (`pftools-load.lsp`) loads by **full path** in strict dependency
+order. Each file may only depend on files above it — the v4 guardrail:
+
+```
+pftools-cfg.lsp    ← FIRST. Every tunable in the suite. Constants only, no code.
       │
-      ▼
-pftools-lib.lsp       SHARED ENGINE — Carlson API wrappers, geometry, math,
-      │               label composition, drawing primitives
-      ├──────────────► pfdialog.lsp / .dcl    settings + grid-parameter dialogs
-      ├──────────────► pflabel.lsp            C:PFLABEL
-      └──────────────► pfcross.lsp            C:PFXFIND + C:PFXLABEL
+pftools-lib.lsp    ← PURE engine. Never knows what an anchor/dialog is.
+      │              Carlson API wrappers, geometry, membership, transforms,
+      │              label composition, .cl sampling, top-of-grid probe, checksums.
+      │
+pfdraw.lsp         ← Drawing boundary. The ONLY file that entmakes label output.
+      │              Returns enames so callers can ledger handles. Erases nothing.
+      │
+pfanchor.lsp       ← Record + registry. Anchor block, stub registry, ledger
+      │              (ext-dict), reconciliation, crossings table.  C:PFREMOVE
+      │
+pfsettings.lsp     ← User state: settings file, session dirs, NOD (project root),
+      │              shared dialog pickers, layer/style lookups.  C:PFROOT
+      │
+pfsetup.lsp        ← C:PFSETUP  (AUTO names, USER places)
+      │
+pflabel.lsp        ← C:PFLABEL / C:PFL / C:PFLABELSET
+      │
+pfxlabel.lsp       ← C:PFXLABEL / C:PFX
 ```
 
-One engine library, multiple thin command files. **This is a deliberate choice,
-not an accident of growth — see §7.1 for why it isn't a single tabbed dialog.**
+**Retired (kept in `_v3\` for reference only):**
 
-\---
+| File | Fate |
+|---|---|
+| `pfdialog.lsp` | Split into `pfsettings.lsp` + per-command dialog wiring |
+| `pfcross.lsp` | Superseded by `pfxlabel.lsp` (target-only, `.pro`-driven inverts; the vertical bore probe is gone) |
 
-## 5\. File map (engineer detail)
+> `pfdialog.dcl` is still live — it holds `pfsetup_main`, `pflabel_settings`,
+> and the shared `pf_pick` / `pf_name` / `pf_scan` dialogs.
 
-**`pftools-load.lsp`** — Loader. Sets `\*pftools-dir\*` to the install folder and
-loads the four files in dependency order (engine → dialog → label → cross).
-Loads by *full path* so it works whether or not the folder is on AutoCAD's
-support search path.
+Config split — **keep these apart:**
 
-**`pftools-lib.lsp`** — The shared engine. All pure functions except the Carlson
-API wrappers and the drawing boundary. Organized in sections:
+- `pftools-cfg.lsp` = the **firm's** constants (templates, maps, sizes, layers).
+  Edited by hand, rarely.
+- `pfsettings.lsp` = the **user's** persisted state (last-used paths, dialog
+  values, project root). Written by the tools.
 
-* Carlson API loading + error-trapped wrappers (Road API for stationing, DTM
-API for surface elevation).
-* Corridor geometry — point-to-polyline distance, used for pre-filtering.
-* Multi-line membership \& stationing — decides which centerlines a point is
-"on" and at what station.
-* Profile transform — the `xform` seam that converts station/elevation to
-world X/Y on a specific grid.
-* String, formatting, and label-composition helpers.
-* Drawing boundary — the only functions that create geometry.
-* Corridor matching — binds each `.cl` file to its drawn polyline at setup.
+---
 
-**`pfdialog.lsp` / `pfdialog.dcl`** — Two dialogs: the main settings dialog
-(text properties, TIN surface, primary + secondary centerlines, label
-prefix/suffix) and the grid-parameters dialog (start station, datum, plot
-scales). Handles settings persistence and the layer/style/centerline pickers.
+## 6. End-to-end workflow (call-trace per file)
 
-**`pflabel.lsp`** — `C:PFLABEL`. Top-of-grid structure labeling.
+A typical sheet, first pass. Each phase lists the files that fire and the
+Carlson API "tool calls" (Road = `EWORKS.ARX`, DTM = `TRI4.ARX`) they make.
 
-**`pfcross.lsp`** — `C:PFXFIND` (crossing finder) and `C:PFXLABEL` (crossing
-labeler).
+| # | Phase | Files → key calls | Carlson API |
+|---|---|---|---|
+| 0 | **Load** | `pftools-load.lsp` loads all 8 in order | — |
+| 1 | **Project root** | `pfsettings.lsp`: `pfset:root-set` (first `PFSETUP` or `PFROOT`) writes it to the NOD | — |
+| 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` | Road `cl_sta_range` (validate ranges) |
+| 3 | **USER place** | `pfsetup.lsp`: `pfs:place-one` → `pfs:show-dialog`, `pfs:pick-extents`, `pfs:ask-datum` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
+| 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:registry-pairs`, `pflabel:build-lines`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | Road `cl_location_at_pt` (membership), top-of-grid probe (`inters`, no API) |
+| 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-verts`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` → `pfa:rebuild-table` | Road `cl_location_at_sta` (walk), `cl_location_at_pt` (station), **`profile z`** (invert/top) |
+| 6 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs | Road (unchanged pairs skipped) |
+| 7 | **Teardown** | `pfanchor.lsp`: `c:PFREMOVE` → `pfa:teardown` (`pfa:erase-pass`, `entdel`) | — |
 
-## 6\. How each command runs
+Per-file responsibility during a run:
 
-### PFLABEL
+| File | Role in the workflow | Writes to drawing? |
+|---|---|---|
+| `pftools-cfg.lsp` | Supplies every tunable read by the rest | no |
+| `pftools-lib.lsp` | All math, geometry, membership, `.cl`/`.pro` reads, probe, composition | no (read-only queries only) |
+| `pfdraw.lsp` | Entmakes labels/pipes/lines/table rows; returns enames | **yes** (creates only, never erases) |
+| `pfanchor.lsp` | Anchor + stub + ledger + table; erase-by-handle; reconciliation | **yes** |
+| `pfsettings.lsp` | Settings file / session dirs / NOD root; dialog pickers | NOD only |
+| `pfsetup.lsp` | Orchestrates registration; owns the setup dialog | via `pfanchor`/`pfdraw` |
+| `pflabel.lsp` | Orchestrates structure labeling | via `pfdraw`/`pfanchor` |
+| `pfxlabel.lsp` | Orchestrates discovery + crossing labeling | via `pfdraw`/`pfanchor` |
 
-Follows the Carlson pattern — **dialogs first, graphic picks last:**
+---
 
-1. **Main dialog** — text layer/style, TIN surface, primary centerline,
-secondary centerlines, and the label prefix/suffix text.
-2. **Grid dialog** — start station, datum elevation, horizontal and vertical
-plot scales.
-3. **Graphic picks** — grid lower-left corner, then a point on the top border.
-4. **All / Pick** prompt on the command line.
-5. **Label run**, wrapped in a single undo group (one `U` reverses the pass).
+## 7. The data model
 
-Label composition rules:
+Three record kinds, all keyed by **line name + utility type**:
 
-* **Station rows** — profiled line first, remaining lines alphabetical.
-* **Combined ID** — alphabetical by line name, so a junction structure gets the
-*same* ID on every profile it appears in.
-* **Ground line** — elevation sampled from the TIN at the structure's X,Y.
-* User prefix/suffix text from the dialog wraps the engine-generated values; the
-`\[line]` token in the station suffix is substituted per row.
+```
+STUB    (NOD "PFTOOLS", key STUB_<TYPE>_<NAME>)
+        Identity only: .cl path + auto-resolved _INV/_TOP .pro. NO placement.
+        AUTO writes it; a stub can DISCOVER but not DRAW. Placement promotes it.
 
-Inverts are **not** drawn by PFLABEL — that was scoped as a separate pass (see
-§3 on INVLABEL).
+ANCHOR  (PF-GRIDANCHOR block, one per PLACED profile)
+        Insertion point = grid lower-left (datum + origin). Extents RELATIVE
+        (X-scale = width, Y-scale = height to the top-right pick).
+        Attributes: LINE / UTIL / STA0 / DATUM / HPLOT / VPLOT.
 
-### PFXFIND (plan only)
+LEDGER  (ext-dict "PFXLEDGER", hard-owned by the anchor — schema 3)
+        META    (1 .cl)(300 table handle)(301 .cl checksum)(302 self-handle → copy detect)
+        FILES   (1 INV.pro)(2 TOP.pro)(3 tin)(4 DESIGN.tin)(5 material)(300/301 cksums)
+        STATUS  (70 state 0/1/2/3)(1 timestamp)(300… findings)
+        SCOPE   (1 timestamp)(300… candidate files) — discovery short-circuit
+        PASS_*  (1 ts)(8 layer)(70 clayer?)(300… handles) — the erase-by-handle ledger
+        X_*     one per crossing, CONTENT-KEYED: (1 sfile)(2 sbase)(10 xy)
+                (40 tsta)(41 ssta)(42 telev)(43 selev)
+```
 
-Pick the target `.cl`, then check off candidate crossing `.cl` files from the
-target's folder. The tool samples each alignment directly from its `.cl` file
-and intersects them segment-by-segment to find every real crossing. For each
-hit it reads *both* stations off the Road API and stores the result in the
-session global `\*pfx-crossings\*` for `PFXLABEL`.
+**Derived, never stored:** whether a crossing (or structure) is *labeled* is
+re-read from the drawing on every touch (`pfa:recon`) — a stored "done" flag a
+drafter's edit could invalidate would lie. A crossing reads *labeled* when its
+station line stands at the exact station X **and** its top vertex sits at the
+per-station grid top (`pf:top-at`). Completeness is measured on the **target
+grid only**.
 
-### PFXLABEL (one crossing per run, two grids)
+**Safety contract:** reads are pure; writes happen only inside a caller-opened
+undo group; **no layer-scoped erases** — erase is **by handle** only; all state
+hangs off the anchor (erase it and the ledger dies with it); no reactors, no
+background execution. Worst case for a corrupt ledger is "lose one profile's
+memory," never the drawing.
 
-Pick a crossing from PFXFIND's list, then define the **source** grid (the
-crossing line's grid) and the **target** grid via corner picks + the grid
-dialog. Then, for each grid, the tool:
+---
 
-1. Probes vertically at the crossing station to read the pipe's invert (lowest
-bore line) and size (bore spacing).
-2. Draws a station line, vertical station text, and both pipes as `PF-PIPE\_NN`
-blocks at their true elevations, each with a two-row label.
-3. Rebuilds the crossings table on the `PF-TABLE` layer.
+## 8. File-naming convention (identity keys)
 
-\---
+The whole registry rides on filename convention in the project data root:
 
-## 7\. Key design decisions \& why
+| File | Pattern | Role |
+|---|---|---|
+| Centerline | `Type_Name.cl` | station geometry (e.g. `Storm_DA.cl`) |
+| Invert profile | `Type_Name_INV.pro` | flowline elevation (crossing invert) |
+| Top profile | `Type_Name_TOP.pro` | pipe crown → size = nearest nominal to `(TOP−INV)×12` |
+| Surface (existing) | `*.tin` | future invert/QA work |
+| Surface (proposed) | `DESIGN_*.tin` | exactly one must carry the `DESIGN_` prefix |
+| Sheet identity text | `PF-NAME` layer, `STORM LINE 'DA'` | AUTO parses type + name |
 
-This is the part worth walking through — each of these was a deliberate call
-with a reason behind it.
+Types: `STORM`, `SANITARY`, `WATER`. A `.pro` with neither `_INV` nor `_TOP`
+is an error the setup dialog rejects.
 
-### 7.1 Multiple commands sharing one library — *not* a tabbed dialog
+---
 
-The ideal UX would be one dialog with tabs (Structure / Invert / Crossing).
-That isn't reachable from AutoLISP: **Carlson's tabbed dialogs are compiled MFC
-controls inside ARX modules**, and DCL — the only native LISP dialog language —
-has no tab tile. The one LISP path to tab controls is OpenDCL, which requires
-shipping a third-party runtime to every workstation. Rather than take on that
-dependency, the design is several commands sharing one engine library. The
-in-progress unified launcher (§11) recovers most of the single-entry-point feel
-without the runtime.
+## 9. Layer conventions
 
-### 7.2 Corridor pre-filtering before Road-API calls
+| Layer | Owner | Behavior |
+|---|---|---|
+| `PF-GRID-MJR` | Carlson | The **top-of-grid probe** layer (highest hit = top). Also the AUTO scan's neighbor. |
+| `PF-GRID-MNR`, `PF-HBOX` | Carlson | Grid frame; used by the anchor corner sanity probe. |
+| `PF-NAME` | Carlson | Grid identity text — AUTO reads it. |
+| `PF-ANCHOR` | tool | `PF-GRIDANCHOR` blocks. Created **no-plot**, visible in model space. |
+| `PF-XING` | tool | Crossing station lines — the layer reconciliation scans (by handle for erase). |
+| `PF-XING-TEXT` | tool | Vertical crossing station text. |
+| `PF-TEMP` | tool | Invert ticks + elev text. **Never erased.** |
+| `PF-TABLE` | tool | Crossings-table blocks. Erased **by handle only**, never layer-cleared. |
+| `<TYPE>_P` / `<TYPE>-TEXT_P` | derived | Crossing pipe block + its text, by utility type. |
+| `ALIGN-<TYPE>_P` | derived | Per-type alignment layer. |
 
-Asking the Road API to project a point onto a centerline it isn't near produces
-two problems: false membership hits and a flood of "unable to locate point along
-centerline" messages in the console. The fix: bind each `.cl` to its drawn
-polyline at setup, and **skip the API call entirely unless the point is within a
-tight distance of that polyline**. Clean output, correct membership.
+---
 
-### 7.3 Sample the `.cl`, don't read the drawn polyline (crossings)
+## 10. Configuration (all in `pftools-cfg.lsp`)
 
-Crossing detection originally read vertices off the drawn plan polyline. On
-**arc alignments that breaks** — a polyline segment reads a curve as a straight
-chord, which both *misses* real crossings on the inside of a curve and *reports*
-false ones where chords intersect but the true arcs don't. The tool now samples
-each alignment directly from its `.cl` file (2 ft steps, refined to \~0.1 ft near
-a hit), so it follows true arc geometry regardless of what's drawn.
+Every tunable lives in one file. The load-bearing groups:
 
-### 7.4 Lowest surviving vertical probe hit = invert
+- **Membership** — `*pf-offset-tol*` (0.15 ft on-line), `*pf-corridor*`
+  (0.2 ft pre-filter).
+- **Text geometry** — `*pf-text-base-height*` 1.60 at the `*pf-ref-hplot*` 20
+  reference scale; everything scales by `sf = hplot / ref`.
+- **Structure rules** — `*pf-rule-table*`, **ordered, first-match** (compounds
+  before singles; `SMH`/`DMH` before `MH`).
+- **Materials per type** — `*pf-materials*` (placeholder lists — edit to the
+  firm's real materials; keys must match the types).
+- **Sampling** — `*pfx-sample-step*` 2 ft walk, `*pfx-refine-step*` 0.1 ft
+  near a hit.
+- **Pipe rendering** — `PF-PIPE_<NN>` block family; circle placeholder when a
+  block is missing; `*pfx-zoom-pause*` verification pause.
 
-Pipes are drawn as two parallel bore lines, not a single line. An earlier
-"exactly one hit" rule was wrong and failed on real pipes. The rule is now
-**take the lowest surviving hit** after grid/reference layers are excluded from
-the probe — that's the invert, and the spacing between the two bore lines gives
-the pipe size. Polylines are excluded from the vertical probe by entity
+---
 
-### 7.5 Layer discipline: PF-TEMP vs PF-TABLE
+## 11. Operating notes & known limitations
 
-Two tool-owned layers with opposite rules, by design:
+- **Keep `.cl` / `.pro` files current.** Stale files are the usual cause of
+  wrong results — regenerate from Carlson before suspecting the tool. The
+  `.cl` checksum in `STATUS` flags a `.cl` that changed since setup.
+- **Structures must be snapped to their centerlines** — membership uses a tight
+  offset tolerance.
+- **Don't `ATTSYNC` / `BATTMAN` the anchor** — its attribute positions are
+  placed absolutely; syncing scatters them (harmless to data, ugly).
+- **A *stretched* grid moves its anchor** rather than stretching it. The corner
+  check catches the drift and Edit re-picks in place, ledger preserved.
+- **Negative stations** aren't supported by the crossing content key.
+- **Crossing draw is target-only** — a source line's own grid is annotated by
+  running `PFXLABEL` with that profile as the target.
+- **`PFINVERT` / `PFCHECK` are announced by the loader but not built yet.**
 
-* **`PF-TEMP`** holds output that must *survive* re-runs — invert ticks and
-elevation text. It is **never erased** by the tool.
-* **`PF-TABLE`** holds the crossings table, which is **blanket-cleared and
-rebuilt** every run so it always reflects the current record.
+---
 
-Keeping them separate lets the table refresh cleanly without wiping
-hand-verified invert marks. **Rule: put nothing else on either layer.**
+## 12. Status & roadmap
 
-### 7.6 Dialogs first, graphics last; one undo group per run
+**Structure + crossing labeling** carries forward v3's near-100% validation
+against a completed job; the v4 rewrite moves inverts onto authored `.pro`
+files (the fragile bore probe is retired) and makes the grid a registered,
+drawing-resident record.
 
-Setup values are collected in dialogs before any on-screen picks, matching
-Carlson's native command feel. Each command run is wrapped in a single undo
-group so one `U` cleanly reverses the whole pass, and an error handler unwinds
-the TIN load and undo group on Esc or error.
+Planned this cycle:
 
-### 7.7 What persists vs. what doesn't
+1. **`PFINVERT`** — invert labels at structures, read from the `.pro` (base Y =
+   lowest invert − `*pfi-invert-offset*`, fixed model units).
+2. **`PFCHECK`** — record-integrity / status surface (checksums, copy
+   detection, stale-crossing cleanup).
+3. **Vertical-clearance QA** — both inverts are already read at every crossing;
+   one subtraction turns the crossings table into a clearance-conflict surface.
+4. **Water-profile support** — appurtenances on laterals need lateral-aware
+   membership, not the storm/sewer "structure on the line" test.
+5. **Unified launcher** — one entry point routing between the flows (routing,
+   not merged fields).
+6. **Prefix/suffix parity** for crossing labels (currently hardcoded per-type
+   templates).
 
-Settings storage mirrors what actually stays constant:
 
-* **Persisted** (firm standard): text layer/style, label prefix/suffix, plot
-scales.
-* **Session-only** (per profile): start station, datum elevation — re-filled on
-the next run so re-labeling the same profile is quick.
-* **Transient** (per run, never saved): TIN surface, primary + secondary
-centerlines.
 
-## 8\. Layer conventions
+Notes:
 
-|Layer|Owner|Behavior|
-|-|-|-|
-|`PF-GRID-MJR`|drawing|Excluded from the vertical probe.|
-|`PF-GRID-MNR`|drawing|Excluded from the vertical probe.|
-|`PF-HBOX`|drawing|Excluded from the vertical probe.|
-|`PF-TEMP`|tool|Invert ticks + elevation text. **Never erased.**|
-|`PF-TABLE`|tool|Crossings table. **Cleared and rebuilt every run.**|
-|`ALIGN-\*\_P`|derived|A grid's own pipe block, by utility type.|
-|`<TYPE>\_P` / `<TYPE>-TEXT\_P`|derived|Crossing pipe + its text, by utility type.|
-
-## 9\. Operating notes \& known failure modes
-
-* **Keep `.cl` files current.** A structure the tool missed once traced to a
-`.cl` whose recorded endpoints no longer matched the drawn alignment. The fix
-was **regenerating the `.cl` from Carlson**, not a code change. If results look
-wrong, regenerate the centerline files before suspecting the tool.
-* **Structures must be snapped to their centerlines.** Membership uses a tight
-offset tolerance; a structure that's visibly off its line will read as
-off-line.
-* **Data handoff is session-global.** `PFXFIND` must run before `PFXLABEL` in
-the same drawing session — the crossings live in memory, not a file (yet).
-
-## 10\. Current status
-
-**None of the commands has been run in a live production drawing yet.** The code
-is written and reviewed; the next step is testing each command on scratch copies
-before any production use. Each file's header carries a matching "test on a
-scratch copy first" note.
-
-## 11\. Roadmap
-
-**Unified dialog launcher.** A single entry point that routes between the two
-labeling flows — Structure Labels (`PFLABEL`) and Crossing Labels
-(`PFXFIND` → `PFXLABEL`, run as one chained operation). Its value is
-**routing/dispatch**, not merging fields — the two flows keep their own settings.
-
-**Output options for PFXLABEL.** PFXLABEL currently has no options dialog. It
-will gain configurable crossing-table output and, potentially, the option to
-pick both grid sides.
-
-**Prefix/suffix parity for crossing labels.** PFLABEL's labels are already
-configurable via dialog prefix/suffix text. Crossing labels are still driven by
-hardcoded per-type templates. Adding prefix/suffix fields to PFXLABEL brings
-crossing-label text composition to parity with structure labels. 
-
+Future dialog run PFT (working name) dialog gives you choices of each main command.
+Format achor block style and output
+Structure block with pflabel
+Ask Andy about folder setting (then we can lose pfroot)
+Workflow/prompts for initial registration and un registered profiles.
+PFINVERT and PFCHECK
