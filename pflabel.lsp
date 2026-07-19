@@ -54,10 +54,7 @@
            (/= msg "Function cancelled")
            (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFLABEL error: " msg)))
-  (if *pflabel-undo-open*
-    (progn
-      (command-s "_.UNDO" "_End")
-      (setq *pflabel-undo-open* nil)))
+  (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
   (setq *error* *pflabel-prev-error*)
   (princ))
 

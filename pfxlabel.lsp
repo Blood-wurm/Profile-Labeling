@@ -26,7 +26,7 @@
 ;;; All-mode labels only OUTSTANDING crossings; single-pick warns before it
 ;;; would duplicate.
 ;;;
-;;; UNDO: one group wraps the whole pass (discovery + labels + table).  Esc is
+;;; UNDO: one group wraps the whole pass (discovery + labels).  Esc is
 ;;; unwound by the handler.  Erase-by-handle only (handles ledgered as PASS).
 ;;; ==========================================================================
 
@@ -34,6 +34,10 @@
 
 (if (not (boundp '*pfxl-undo-open*)) (setq *pfxl-undo-open* nil))
 (if (not (boundp '*pfxl-last*))      (setq *pfxl-last* nil))  ; (type . name)
+(if (not (boundp '*pfxl-view-save*)) (setq *pfxl-view-save* nil)) ; (ctr . size)
+                                     ; global, NOT a command local: the *error*
+                                     ; handler must reach it to restore the
+                                     ; view on Esc mid-zoom-parade
 
 (setq *pfxl-pass-name* "XING")   ; the crossing pass in the handle ledger
 
@@ -84,8 +88,14 @@
 (defun pfxl:*error* (msg)
   (if (and msg (/= msg "Function cancelled") (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFXLABEL error: " msg)))
-  (if *pfxl-undo-open*
-    (progn (command-s "_.UNDO" "_End") (setq *pfxl-undo-open* nil)))
+  (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
+  ;; Esc mid-zoom-parade: put the view back where the run started (after the
+  ;; group closes, so the restore itself isn't part of the undo group)
+  (if *pfxl-view-save*
+    (progn
+      (command-s "_.ZOOM" "_Center"
+                 (car *pfxl-view-save*) (cdr *pfxl-view-save*))
+      (setq *pfxl-view-save* nil)))
   (setq *error* *pfxl-prev-error*)
   (princ))
 
@@ -279,7 +289,7 @@
       (command "_.DELAY" (fix (* *pfx-zoom-pause* 1000.0))))))
 
 (defun c:PFXLABEL ( / anchor xf style sf ht toplines work recon n pick allmode
-                    sel e drawn skips res oldh newh lay savctr savsz)
+                    sel e drawn skips res oldh newh lay)
   (setq *pfxl-prev-error* *error*
         *error*           pfxl:*error*
         *pfxl-undo-open*  nil)
@@ -343,9 +353,10 @@
                            "\nAll crossings already labeled -- nothing to do."
                            "\nCancelled.")))
                 (T
-                 (setq toplines (pf:top-lines)
-                       savctr   (getvar "VIEWCTR")
-                       savsz    (getvar "VIEWSIZE"))
+                 (setq toplines (pf:top-lines))
+                 (if (> *pfx-zoom-pause* 0.0)
+                   (setq *pfxl-view-save*
+                         (cons (getvar "VIEWCTR") (getvar "VIEWSIZE"))))
                  (foreach e sel
                    (setq res (pfxl:label-one anchor xf e style sf ht toplines))
                    (if (car res)
@@ -357,8 +368,10 @@
                                              (pfa:xr-tsta e) (cdr res))
                                        skips))))
                  ;; restore the pre-run view after the verification zooms
-                 (if (and (> *pfx-zoom-pause* 0.0) (> drawn 0))
-                   (command "_.ZOOM" "_Center" savctr savsz))
+                 (if (and *pfxl-view-save* (> drawn 0))
+                   (command "_.ZOOM" "_Center"
+                            (car *pfxl-view-save*) (cdr *pfxl-view-save*)))
+                 (setq *pfxl-view-save* nil)
                  ;; append this pass's handles to the crossing pass ledger
                  (if newh
                    (progn
@@ -366,8 +379,6 @@
                            lay  *pfa-xing-layer*)
                      (pfa:pass-put anchor *pfxl-pass-name* lay nil
                                    (append oldh newh))))
-                 ;; table (replaced BY HANDLE; skips rendered)
-                 (pfa:rebuild-table anchor xf style skips)
                  ;; pass report
                  (prompt (strcat "\n== PFXLABEL: " (itoa drawn)
                                  " labeled, " (itoa (length skips))

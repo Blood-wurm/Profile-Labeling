@@ -131,39 +131,6 @@
   (if e (setq ents (cons e ents)))
   ents)
 
-;;; --------------------------------------------------------------------------
-;;; Table-block primitives  (used by pfanchor's table renderer)
-;;; --------------------------------------------------------------------------
-
-;; (pfd:table-def name) -> vla block-definition, emptied and ready to refill
-(defun pfd:table-def (name / blocks bdef objs o)
-  (setq blocks (vla-get-blocks
-                 (vla-get-activedocument (vlax-get-acad-object)))
-        bdef   (vl-catch-all-apply 'vla-item (list blocks name)))
-  (if (vl-catch-all-error-p bdef)
-    (setq bdef (vla-add blocks (vlax-3d-point '(0.0 0.0 0.0)) name))
-    (progn
-      (setq objs '())
-      (vlax-for o bdef (setq objs (cons o objs)))
-      (foreach o objs (vl-catch-all-apply 'vla-delete (list o)))))
-  bdef)
-
-(defun pfd:table-text (bdef pt str layer style ht / o)
-  (setq o (vla-addtext bdef str
-                       (vlax-3d-point (list (car pt) (cadr pt) 0.0))
-                       ht))
-  (vla-put-layer o layer)
-  (if (tblsearch "STYLE" style) (vla-put-stylename o style))
-  o)
-
-(defun pfd:table-row (bdef y cells cols layer style ht / i c)
-  (setq i 0)
-  (foreach c cells
-    (if (and c (/= c ""))
-      (pfd:table-text bdef (list (nth i cols) y) c layer style ht))
-    (setq i (1+ i))))
-
-
 (princ "\npfdraw.lsp loaded (drawing boundary).")
 (princ)
 ;;; ==========================================================================

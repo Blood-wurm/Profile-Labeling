@@ -27,7 +27,7 @@
 ;;;
 ;;;   LEDGER   Extension dictionary "PFXLEDGER" hard-owned by the anchor.
 ;;;            Schema 3 records (all optional except META):
-;;;              "META"     (70 schema)(1 .cl path)(300 table handle)
+;;;              "META"     (70 schema)(1 .cl path)
 ;;;                         (301 .cl content checksum)(302 self-handle:
 ;;;                         the anchor's OWN handle at creation, stored as a
 ;;;                         plain string so a COPY -- which gets a new handle
@@ -432,25 +432,24 @@
 ;;; SECTION 4  --  Schema-2 records
 ;;; ==========================================================================
 
-;;; ---- META: (70 schema)(1 .cl path)(300 table handle)(301 .cl checksum) ---
-;;; nil for any arg preserves the stored value.
+;;; ---- META: (70 schema)(1 .cl path)(301 .cl checksum)(302 self-handle) ----
+;;; nil for any arg preserves the stored value.  (300, the crossings-table
+;;; handle, retired with the table -- old records may still carry it; it is
+;;; simply no longer written or read.)
 
 (defun pfa:meta-get (anchor) (pfa:rec-get anchor "META"))
 
-(defun pfa:meta-put (anchor tfile thandle tcksum / dict old self)
+(defun pfa:meta-put (anchor tfile tcksum / dict old self)
   (setq dict (pfa:ledger-dict anchor T)
         old  (pfa:xrec-data dict "META"))
   (if (null tfile)
     (setq tfile (if (assoc 1 old) (cdr (assoc 1 old)) "")))
-  (if (null thandle)
-    (setq thandle (if (assoc 300 old) (cdr (assoc 300 old)) "")))
   (if (null tcksum)
     (setq tcksum (if (assoc 301 old) (cdr (assoc 301 old)) "")))
   (setq self (if (assoc 302 old) (cdr (assoc 302 old)) ""))  ; preserved
   (pfa:xrec-put dict "META"
                 (list (cons 70 *pfa-schema-ver*)
                       (cons 1 tfile)
-                      (cons 300 thandle)
                       (cons 301 tcksum)
                       (cons 302 self))))
 
@@ -792,92 +791,7 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 6  --  Crossings table  (one BLOCK per profile, BY HANDLE)
-;;; ==========================================================================
-
-(defun pfa:table-blockname (util line)
-  (strcat "PF-TABLE_" (pfa:sanitize (strcase util))
-          "_" (pfa:sanitize (strcase line))))
-
-;; (pfa:rebuild-table anchor xform style skips) -> nil
-;;   Renders the FULL ledger with derived status per row.  Instance replaced
-;;   BY HANDLE only (user placement respected; dangles self-heal).
-(defun pfa:rebuild-table (anchor xform style skips / at line util name recs
-                          recon sf ht step cols total done e sk stat bdef
-                          nrows y i meta thandle inst ied)
-  (setq at    (pfa:read-attribs anchor)
-        line  (pfa:att "LINE" at)
-        util  (pfa:att "UTIL" at)
-        name  (pfa:table-blockname util line)
-        recs  (pfa:xing-list anchor)
-        recon (pfa:recon xform recs)
-        sf    (pf:xf-sf xform)
-        ht    (* *pf-text-base-height* sf)
-        step  (* *pfa-table-step* sf)
-        cols  (mapcar '(lambda (x) (* x sf)) *pfa-table-cols*)
-        total (length recs)
-        done  0)
-  (foreach e recs
-    (if (cdr (assoc (pfa:xr-key e) recon)) (setq done (1+ done))))
-  (pfd:ensure-layer *pfa-table-layer* nil)
-  (setq bdef  (pfd:table-def name)
-        nrows (+ total 2)
-        y     (* (1- nrows) step))
-  (pfd:table-row bdef y
-    (list (strcat "CROSSINGS -- TARGET " (strcase util)
-                  " '" (strcase line) "' -- "
-                  (itoa done) " OF " (itoa total) " LABELED"
-                  (if skips
-                    (strcat ", " (itoa (length skips)) " SKIPPED THIS PASS")
-                    "")))
-    cols *pfa-table-layer* style ht)
-  (setq y (- y step))
-  (pfd:table-row bdef y
-    (list "#" "LINE" "TGT STATION" "TGT INV ELEV"
-          "SRC STA" "SRC INV ELEV" "STATUS")
-    cols *pfa-table-layer* style ht)
-  (setq i 0)
-  (foreach e recs
-    (setq i (1+ i)
-          y (- y step)
-          stat (cond
-                 ((setq sk (assoc (pfa:xr-key e) skips))
-                  (strcat "SKIPPED: " (nth 3 sk)))
-                 ((cdr (assoc (pfa:xr-key e) recon)) "LABELED")
-                 (T "OUTSTANDING")))
-    (pfd:table-row bdef y
-      (list (itoa i)
-            (pfa:xr-sbase e)
-            (pf:fmt-station (pfa:xr-tsta e))
-            (if (pfa:xr-telev e) (rtos (pfa:xr-telev e) 2 2) "--")
-            (pf:fmt-station (pfa:xr-ssta e))
-            (if (pfa:xr-selev e) (rtos (pfa:xr-selev e) 2 2) "--")
-            stat)
-      cols *pfa-table-layer* style ht))
-  ;; ---- instance: replace BY HANDLE only ----------------------------------
-  (setq meta    (pfa:meta-get anchor)
-        thandle (if (assoc 300 meta) (cdr (assoc 300 meta)) "")
-        inst    (if (/= thandle "") (handent thandle)))
-  (if (and inst (setq ied (entget inst))
-           (= (cdr (assoc 0 ied)) "INSERT")
-           (= (strcase (cdr (assoc 2 ied))) (strcase name)))
-    (entupd inst)
-    (progn
-      (entmake (list '(0 . "INSERT") (cons 8 *pfa-table-layer*)
-                     (cons 2 name)
-                     (cons 10 (list (+ (pf:xf-leftx xform)
-                                       (* *pfa-table-margin* sf))
-                                    (+ (pf:grid-top-y xform)
-                                       (* *pfa-table-margin* sf))
-                                    0.0))
-                     '(41 . 1.0) '(42 . 1.0) '(43 . 1.0) '(50 . 0.0)))
-      (setq inst (entlast))
-      (pfa:meta-put anchor nil (cdr (assoc 5 (entget inst))) nil)))
-  (princ))
-
-
-;;; ==========================================================================
-;;; SECTION 7  --  Anchor picking  (shared command-line helpers)
+;;; SECTION 6  --  Anchor picking  (shared command-line helpers)
 ;;; ==========================================================================
 
 ;; (pfa:anchor-title anchor) -> "STORM 'LINEA'"
@@ -926,14 +840,31 @@
        (nth (1- pick) anchors)
        nil))))
 
+;; (pfa:undo-cleanup) -> nil
+;;   Close whichever pf command's undo group is open -- at most one ever is,
+;;   but the OWNER may not be the command whose *error* fired: an Esc inside
+;;   a NESTED flow (on-the-fly placement from a label command) lands in the
+;;   CALLER's handler while pfs's group is open.  Every pf *error* handler
+;;   calls this so no path can leak a group.  Transitional until the shared
+;;   pf:run-command wrapper (README 13.7).
+(defun pfa:undo-cleanup ()
+  (if (or *pfs-undo-open* *pflabel-undo-open* *pfxl-undo-open*
+          *pfinvert-undo-open* *pfrem-undo-open*)
+    (command-s "_.UNDO" "_End"))
+  (setq *pfs-undo-open*      nil
+        *pflabel-undo-open*  nil
+        *pfxl-undo-open*     nil
+        *pfinvert-undo-open* nil
+        *pfrem-undo-open*    nil)
+  (princ))
+
 
 ;;; ==========================================================================
-;;; SECTION 8  --  Teardown + C:PFREMOVE
+;;; SECTION 7  --  Teardown + C:PFREMOVE
 ;;; ==========================================================================
 ;;; V4 teardown: walk every PASS_* handle ledger -> erase those entities ->
-;;; erase the table instance + definition -> erase the anchor (the ledger
-;;; dies with it, hard-owned).  Entities never handle-tracked (CLAYER
-;;; passes, hand-drawn work) are NEVER touched.
+;;; erase the anchor (the ledger dies with it, hard-owned).  Entities never
+;;; handle-tracked (CLAYER passes, hand-drawn work) are NEVER touched.
 
 ;; (pfa:teardown-counts anchor) -> (tracked-entities crossings passes)
 (defun pfa:teardown-counts (anchor / n nm h e)
@@ -946,27 +877,30 @@
 
 ;; (pfa:teardown anchor) -> count of entities erased
 ;;   Caller must hold an open undo group.
-(defun pfa:teardown (anchor / at nm n meta th inst blocks bdef tname)
-  (setq at (pfa:read-attribs anchor) n 0)
+(defun pfa:teardown (anchor / nm n)
+  (setq n 0)
   ;; 1. every tracked pass entity, by handle
   (foreach nm (pfa:pass-names anchor)
     (setq n (+ n (pfa:erase-pass anchor nm))))
-  ;; 2. table instance (by handle) + definition
-  (setq meta  (pfa:meta-get anchor)
-        th    (if (assoc 300 meta) (cdr (assoc 300 meta)) "")
-        inst  (if (/= th "") (handent th))
-        tname (pfa:table-blockname (pfa:att "UTIL" at) (pfa:att "LINE" at)))
-  (if (and inst (entget inst)) (progn (entdel inst) (setq n (1+ n))))
-  (setq blocks (vla-get-blocks
-                 (vla-get-activedocument (vlax-get-acad-object)))
-        bdef   (vl-catch-all-apply 'vla-item (list blocks tname)))
-  (if (not (vl-catch-all-error-p bdef))
-    (vl-catch-all-apply 'vla-delete (list bdef)))
-  ;; 3. the anchor itself -- ledger dies with it
+  ;; 2. the anchor itself -- ledger dies with it
   (entdel anchor)
   n)
 
+(if (not (boundp '*pfrem-undo-open*)) (setq *pfrem-undo-open* nil))
+
+(defun pfrem:*error* (msg)
+  (if (and msg
+           (/= msg "Function cancelled")
+           (/= msg "quit / exit abort"))
+    (prompt (strcat "\nPFREMOVE error: " msg)))
+  (pfa:undo-cleanup)
+  (setq *error* *pfrem-prev-error*)
+  (princ))
+
 (defun c:PFREMOVE ( / anchor counts n)
+  (setq *pfrem-prev-error* *error*
+        *error*            pfrem:*error*
+        *pfrem-undo-open*  nil)
   (setq anchor (pfa:pick-anchor
                  "\nSelect grid anchor to REMOVE (Enter to list): "))
   (if (null anchor) (setq anchor (pfa:choose-anchor)))
@@ -984,8 +918,10 @@
             "Yes")
        (progn
          (command "_.UNDO" "_Begin")
+         (setq *pfrem-undo-open* T)
          (pfa:purge-copy anchor)
          (command "_.UNDO" "_End")
+         (setq *pfrem-undo-open* nil)
          (prompt "\nCopied anchor purged (its cloned ledger died with it). "))
        (prompt "\nNothing removed.")))
     (T
@@ -1002,11 +938,14 @@
         (prompt "\nNothing removed.")
         (progn
           (command "_.UNDO" "_Begin")
+          (setq *pfrem-undo-open* T)
           (setq n (pfa:teardown anchor))
           (command "_.UNDO" "_End")
+          (setq *pfrem-undo-open* nil)
           (prompt (strcat "\nRemoved anchor + ledger + " (itoa n)
                           " entit" (if (= n 1) "y" "ies")
                           ".  (One U reverses it.)"))))))
+  (setq *error* *pfrem-prev-error*)
   (princ))
 
 

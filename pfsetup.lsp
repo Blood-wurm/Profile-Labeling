@@ -49,8 +49,7 @@
            (/= msg "Function cancelled")
            (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFSETUP error: " msg)))
-  (if *pfs-undo-open*
-    (progn (command-s "_.UNDO" "_End") (setq *pfs-undo-open* nil)))
+  (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
   (setq *error* *pfs-prev-error*)
   (princ))
 
@@ -486,7 +485,7 @@
         (setq *pfs-undo-open* T)
         (setq xf     (pfs:build-xform res ll tr datum)
               anchor (pfa:write-anchor nm ty xf cl))
-        (pfa:meta-put anchor cl nil (pf:checksum-file cl))
+        (pfa:meta-put anchor cl (pf:checksum-file cl))
         (setq notes (pfs:bind-files anchor res))
         (pfa:status-put anchor 0 notes)
         (if stub (pfa:stub-del (car stub) (cadr stub)))
@@ -612,7 +611,7 @@
               (setq *pfs-undo-open* T)
               (setq xf (pfs:build-xform res (car pts) (cadr pts) datum))
               (pfa:reanchor anchor xf)
-              (pfa:meta-put anchor (cdr (assoc 'cl res)) nil
+              (pfa:meta-put anchor (cdr (assoc 'cl res))
                             (pf:checksum-file (cdr (assoc 'cl res))))
               (setq notes (pfs:bind-files anchor res))
               (pfa:status-put anchor 0 notes)     ; edits invalidate checks

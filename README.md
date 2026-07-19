@@ -31,7 +31,8 @@ It produces:
   crosses the profiled line, reading the exact station on each.
 - **Crossing labels** — draws each crossing pipe at its true invert on the
   target grid, with size, material, and the standard line label.
-- **A per-profile crossings table** that doubles as a completion record.
+- **A live completion record** — the drawing itself tracks what's labeled
+  and what's outstanding, per profile (reported on every run).
 
 The shift in V4: a profile's grid and crossings become **drawing-resident
 state**. Register a grid once; every command afterward reads it, and the
@@ -177,10 +178,11 @@ c:PFXLABEL
 - **All** mode labels only **OUTSTANDING** crossings; single-pick warns before
   it would draw duplicates.
 - A source that isn't registered, has no INV `.pro` bound, or whose invert is
-  unreadable is **skipped and reported** — on the command line *and* in the
-  table's STATUS column.
-- After the pass, `pfa:rebuild-table` regenerates the crossings table (replaced
-  by handle). The whole pass is one undo group.
+  unreadable is **skipped and reported** on the command line, per crossing
+  and in the pass summary.
+- The whole pass is one undo group. (The v4.0 per-profile crossings *table*
+  is retired — it only displayed what the ledger + reconciliation already
+  track; the numbered LABELED/OUTSTANDING list is the surface now.)
 - **Verification zoom** (`*pfx-zoom-pause*`): each drawn crossing is framed
   and paused on (`ZOOM Center` + `DELAY`), then the pre-run view is restored
   after the pass. Set the pause to `0` to disable.
@@ -227,7 +229,6 @@ c:PFINVERT
 ```
 pfa:teardown
  ├─ pfa:erase-pass (per PASS_*)   erase every handle-tracked entity, by handle
- ├─ erase table instance (by handle) + block definition
  └─ entdel anchor                 the ledger dies with it (hard-owned ext-dict)
 ```
 
@@ -255,7 +256,7 @@ pfdraw.lsp         ← Drawing boundary. The ONLY file that entmakes label outpu
       │              Returns enames so callers can ledger handles. Erases nothing.
       │
 pfanchor.lsp       ← Record + registry. Anchor block, stub registry, ledger
-      │              (ext-dict), reconciliation, crossings table.  C:PFREMOVE
+      │              (ext-dict), reconciliation.  C:PFREMOVE
       │
 pfsettings.lsp     ← User state: settings file, session dirs, NOD (project root),
       │              shared dialog pickers, layer/style lookups.  C:PFROOT
@@ -301,7 +302,7 @@ Carlson API "tool calls" (Road = `EWORKS.ARX`, DTM = `TRI4.ARX`) they make.
 | 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` | Road `cl_sta_range` (validate ranges) |
 | 3 | **USER place** | `pfsetup.lsp`: `pfs:place-one` → `pfs:show-dialog`, `pfs:pick-extents`, `pfs:ask-datum` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
 | 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:registry-pairs`, `pflabel:build-lines`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | Road `cl_location_at_pt` (membership), top-of-grid probe (`inters`, no API) |
-| 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-verts`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` → `pfa:rebuild-table` | Road `cl_location_at_sta` (walk), `cl_location_at_pt` (station), **`profile z`** (invert/top) |
+| 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-verts`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` | Road `cl_location_at_sta` (walk), `cl_location_at_pt` (station), **`profile z`** (invert/top) |
 | 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`profile z`** (bracket walk + laterals) |
 | 7 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs | Road (unchanged pairs skipped) |
 | 8 | **Teardown** | `pfanchor.lsp`: `c:PFREMOVE` → `pfa:teardown` (`pfa:erase-pass`, `entdel`) | — |
@@ -312,8 +313,8 @@ Per-file responsibility during a run:
 |---|---|---|
 | `pftools-cfg.lsp` | Supplies every tunable read by the rest | no |
 | `pftools-lib.lsp` | All math, geometry, membership, `.cl`/`.pro` reads, probe, composition | no (read-only queries only) |
-| `pfdraw.lsp` | Entmakes labels/pipes/lines/table rows; returns enames | **yes** (creates only, never erases) |
-| `pfanchor.lsp` | Anchor + stub + ledger + table; erase-by-handle; reconciliation | **yes** |
+| `pfdraw.lsp` | Entmakes labels/pipes/lines; returns enames | **yes** (creates only, never erases) |
+| `pfanchor.lsp` | Anchor + stub + ledger; erase-by-handle; reconciliation | **yes** |
 | `pfsettings.lsp` | Settings file / session dirs / NOD root; dialog pickers | NOD only |
 | `pfsetup.lsp` | Orchestrates registration; owns the setup dialog | via `pfanchor`/`pfdraw` |
 | `pflabel.lsp` | Orchestrates structure labeling | via `pfdraw`/`pfanchor` |
@@ -337,7 +338,7 @@ ANCHOR  (PF-GRIDANCHOR block, one per PLACED profile)
         Attributes: LINE / UTIL / STA0 / DATUM / HPLOT / VPLOT.
 
 LEDGER  (ext-dict "PFXLEDGER", hard-owned by the anchor — schema 3)
-        META    (1 .cl)(300 table handle)(301 .cl checksum)(302 self-handle → copy detect)
+        META    (1 .cl)(301 .cl checksum)(302 self-handle → copy detect)
         FILES   (1 INV.pro)(2 TOP.pro)(3 tin)(4 DESIGN.tin)(5 material)(300/301 cksums)
         STATUS  (70 state 0/1/2/3)(1 timestamp)(300… findings)
         SCOPE   (1 timestamp)(300… candidate files) — discovery short-circuit
@@ -390,7 +391,6 @@ is an error the setup dialog rejects.
 | `PF-XING` | tool | Crossing station lines — the layer reconciliation scans (by handle for erase). |
 | `PF-XING-TEXT` | tool | Vertical crossing station text. |
 | `PF-TEMP` | tool | Reserved (legacy invert-tick concept). As built, `PFINVERT` is handle-tracked on `<TYPE>-TEXT_P` instead. |
-| `PF-TABLE` | tool | Crossings-table blocks. Erased **by handle only**, never layer-cleared. |
 | `<TYPE>_P` / `<TYPE>-TEXT_P` | derived | Crossing pipe block + its text, by utility type. |
 | `ALIGN-<TYPE>_P` | derived | Per-type alignment layer. |
 
@@ -452,19 +452,133 @@ Shipped this cycle:
 - **`PFINVERT`** — invert labels at structures: primary I.I/I.O from the
   `_INV.pro` grade breaks, laterals from the registry, all text in one column
   below the lowest invert (§4.4). *Awaiting first live-drawing validation.*
+- **Crossings table retired** — it only displayed what the ledger +
+  reconciliation already track (§4.3); the command-line completion list is
+  the surface now. Removing its `thandle` plumbing also fixed a latent
+  wrong-arity `pfa:meta-put` call that would have crashed **every fresh
+  anchor placement** (see §13.5).
+- **Pre-shakedown hardening** — `pf:poly-x` cdr-walked (was effectively
+  cubic); shared `pfa:undo-cleanup` so Esc can never leak an undo group,
+  even from a nested on-the-fly placement; PFXLABEL restores the pre-run
+  view on Esc; PFREMOVE gained the standard error handler.
 
 Planned:
 
 1. **`PFCHECK`** — record-integrity / status surface (checksums, copy
    detection, stale-crossing cleanup).
 2. **Vertical-clearance QA** — both inverts are already read at every crossing;
-   one subtraction turns the crossings table into a clearance-conflict surface.
+   one subtraction turns the completion report into a clearance-conflict
+   surface (or brings the table back as a QA-only view).
 3. **Water-profile support** — appurtenances on laterals need lateral-aware
    membership, not the storm/sewer "structure on the line" test.
 4. **Unified launcher** — one entry point routing between the flows (routing,
    not merged fields).
 5. **Prefix/suffix parity** for crossing labels (currently hardcoded per-type
    templates).
+
+---
+
+## 13. Honest assessment — debt & native-feel gaps
+
+A candid self-review (2026-07-19). The architecture — layering discipline,
+the record model, the safety contract — is the strong half. The weaknesses
+are all the same weakness: **designed by the engine, for the engine; the
+drafter-facing skin was an afterthought.**
+
+### 13.1 The UX is a text-mode menu wearing an AutoCAD costume
+
+- **Numbered text menus everywhere** — `pfa:choose-anchor`,
+  `pfs:choose-or-place`, PFXLABEL's crossing pick, PFSETUP's main loop all
+  print a list and ask for a typed number. No native AutoCAD/Carlson command
+  does this; Carlson's answer to "pick from a set" is a **dialog with a
+  list_box**, every time. Worst offender: PFSETUP's
+  `[All-unplaced/Edit/Refresh/New] <1-N>` REPL — a menu system living in a
+  prompt. **PFSETUP should BE a dialog:** registry list with a
+  PLACED/unplaced column, Place / Edit / Remove / Refresh buttons. That one
+  change buys more native feel than everything else combined.
+- The `(initget 6 "All Target")(getint …)` mixed int/keyword idiom exists
+  *because* of the numbered menus; kill the menus and the `(= pick "All")`
+  fragility dies with them.
+- **PFXLABEL's `Target` keyword is a dead end** — it clears the session
+  target and tells you to re-run the command. Native commands re-prompt for
+  the new target right there.
+- **Dead tiles ship in the live dialog** — `con_pre` / `gl_pre` in
+  `pflabel_settings` accept input and silently ignore it. Gray them
+  (`is_enabled = false`) or remove them until the per-type editor exists.
+  Belongs to the planned dialog-rework pass.
+
+### 13.2 `CMDECHO` is never suppressed
+
+Not one command sets `CMDECHO 0`. Every `(command "_.UNDO" "_Begin")` echoes
+UNDO chatter; the crossing zoom-pause echoes `ZOOM`/`DELAY` per crossing.
+Native commands are silent except for their own prompts. ~6 lines per
+command wrapper; the cheapest perceived-quality win available.
+
+### 13.3 Performance smells (will surface on real drawings)
+
+- **`pfa:find-anchor` is a full-database `ssget "_X"` + attribute read of
+  every anchor — and `pfxl:src-files` calls it per crossing.** An All-mode
+  pass over 20 crossings does 20+ full scans; PFSETUP's AUTO loop repeats
+  the pattern per sheet name. The registry should be scanned **once per
+  command** and passed down — exactly the discipline `pf:top-lines` already
+  enforces for the top probe. *(Still open.)*
+- ~~`pf:poly-x` walks vertices with `nth`~~ — **fixed**: cdr-walked, same
+  scan order and first-hit result, ~1000× fewer operations on sampled
+  alignments.
+
+### 13.4 Duplicated scaffolding
+
+Five commands carry near-identical `*error*` handler + undo-open global +
+save/restore ceremony (`pflabel:` / `pfxl:` / `pfs:` / `pfinvert:` /
+`pfrem:*error*`). The undo-close half is now shared (`pfa:undo-cleanup`
+closes ANY open pf group, fixing the nested-placement leak), but the
+handler/install/restore scaffolding is still ×5. One shared
+`pf:run-command` wrapper (installs handler, opens undo, sets CMDECHO,
+guarantees cleanup) collapses it and gives a single place to fix UX for
+every command at once. **Highest-leverage refactor in the codebase.**
+
+### 13.5 Validation debt — the actual biggest risk
+
+The near-100% validation the roadmap cites belongs to **v3's composition
+engine**. V4's registry flow — PFSETUP, the anchor path, the PFXLABEL
+rewrite, PFINVERT, the zoom-pause — has grown far faster than the validated
+surface. Code this careful will *mostly* work, but "mostly" in a tool that
+erases entities by handle deserves a deliberate **shakedown session on a
+scratch drawing**: scripted SETUP → LABEL → XLABEL → INVERT → REMOVE → `U`
+before it touches a real job. (`TESTING.md` is that checklist.)
+
+Proof this risk is real: a wrong-arity `pfa:meta-put` call sat in
+`pfa:write-anchor` — **every fresh anchor placement would have crashed on
+first contact**. It was written, code-reviewed, and pushed; static review
+missed it in a 6,600-line diff, and only the table-removal refactor
+surfaced it. Static verification is not validation.
+
+### 13.6 Small corrections
+
+- `pf:get-verts` / `pf:sample-cl` were kept as "reserved for PFINVERT" — but
+  PFINVERT as built samples the `.pro` (elevation), not the `.cl` (plan).
+  The reservation is stale; they are dead unless something else wants
+  plan-vertex sampling.
+- `pfs:pick-extents` takes raw `getpoint` clicks against a loose 0.5
+  tolerance while fighting running osnaps. The native move is to *exploit*
+  osnap — force `_int` so the pick snaps to the actual grid corner: tighter
+  data and more native feel at once.
+- The anchor's visible attributes (fixed 0.8 height, absolute placement)
+  look wrong at other plot scales and invite the ATTSYNC accident §11 warns
+  about. The block stays visible (settled); the *attributes* could be
+  invisible (ATTDEF flag bit 1) with PFCHECK surfacing the values instead.
+
+### 13.7 The next three sessions, if debt led
+
+1. **`pf:run-command` wrapper** — CMDECHO + error + undo in one place
+   (fixes 13.2 + 13.4).
+2. **The scheduled dialog-rework session, expanded** — PFSETUP-as-dialog and
+   every numbered text menu killed (fixes 13.1).
+3. **Shakedown protocol** on a scratch drawing (fixes 13.5).
+
+> The engine deserves the polish. Today it is a precision instrument with a
+> command-line interface from 1994 bolted on — and the instrument is good
+> enough that the bolt-ons are what people will judge it by.
 
 
 

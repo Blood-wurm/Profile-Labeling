@@ -591,22 +591,21 @@
       (if (> (length pts) 1) (reverse pts)))))
 
 ;; (pf:poly-x vertsA vertsB) -> first (x y) intersection | nil
-(defun pf:poly-x (vertsA vertsB / i j lenA lenB a1 a2 b1 b2 hit)
-  (setq lenA (length vertsA)
-        lenB (length vertsB)
-        i    0
-        hit  nil)
-  (while (and (< i (1- lenA)) (null hit))
-    (setq a1 (nth i vertsA)
-          a2 (nth (1+ i) vertsA)
-          j  0)
-    (while (and (< j (1- lenB)) (null hit))
-      (setq b1 (nth j vertsB)
-            b2 (nth (1+ j) vertsB))
-      (if (setq hit (inters a1 a2 b1 b2))
-        nil)
-      (setq j (1+ j)))
-    (setq i (1+ i)))
+;;   cdr-walked, NOT nth-indexed: nth re-walks the list from the head every
+;;   call, which made this effectively cubic on sampled alignments (minutes
+;;   per pair at 2-ft steps).  Same scan order, same first-hit result.
+(defun pf:poly-x (vertsA vertsB / ta tb a1 a2 b1 b2 hit)
+  (setq ta vertsA hit nil)
+  (while (and (cdr ta) (null hit))
+    (setq a1 (car ta)
+          a2 (cadr ta)
+          tb vertsB)
+    (while (and (cdr tb) (null hit))
+      (setq b1 (car tb)
+            b2 (cadr tb)
+            hit (inters a1 a2 b1 b2))
+      (setq tb (cdr tb)))
+    (setq ta (cdr ta)))
   hit)
 
 ;; (pf:refine-x tfile tsta sfile ssta) -> (x y) | nil

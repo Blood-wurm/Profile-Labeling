@@ -149,12 +149,6 @@
 (setq *pfa-probe-tol*   0.05)             ; grid-LINE-near-corner sanity probe
 (setq *pfa-grid-layers* "PF-GRID-MJR,PF-GRID-MNR,PF-HBOX")
 
-;;; Crossings table (one BLOCK per profile, replaced BY HANDLE only)
-(setq *pfa-table-layer*  "PF-TABLE")      ; display layer only; NEVER cleared
-(setq *pfa-table-margin* 2.0)
-(setq *pfa-table-step*   3.20)
-(setq *pfa-table-cols*   '(0.0 8.0 32.0 68.0 96.0 120.0 148.0))
-
 ;;; --------------------------------------------------------------------------
 ;;; Carlson-drawn grid sheet layers
 ;;; Confirmed 2026-07-17: these ARE the layers Carlson draws the grids on.

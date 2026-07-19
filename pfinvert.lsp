@@ -54,10 +54,7 @@
            (/= msg "Function cancelled")
            (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFINVERT error: " msg)))
-  (if *pfinvert-undo-open*
-    (progn
-      (command-s "_.UNDO" "_End")
-      (setq *pfinvert-undo-open* nil)))
+  (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
   (setq *error* *pfinvert-prev-error*)
   (princ))
 
