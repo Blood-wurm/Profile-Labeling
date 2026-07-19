@@ -23,8 +23,9 @@
 ;;;
 ;;; COMPLETENESS: a crossing is "labeled" when its station line stands on the
 ;;; target grid at the per-station top (pf:top-at) -- see pfanchor SECTION 5.
-;;; All-mode labels only OUTSTANDING crossings; single-pick warns before it
-;;; would duplicate.
+;;; The crossings DIALOG (pfxl_run) is the surface: Label Outstanding draws
+;;; every unlabeled row; Label Selected relabels only after a deliberate
+;;; confirm (duplicates).
 ;;;
 ;;; UNDO: one group wraps the whole pass (discovery + labels).  Esc is
 ;;; unwound by the handler.  Erase-by-handle only (handles ledgered as PASS).
@@ -236,25 +237,74 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 5  --  Print + target resolution
+;;; SECTION 5  --  The crossings dialog + target resolution
 ;;; ==========================================================================
+;;; The ledger IS the list; recon marks each row from the drawing.  The
+;;; dialog replaces the old printed list + [All/Target] <n> prompt.  x-work /
+;;; x-recon / x-res live in pfxl:run-dialog, reached by dynamic scope.
 
-(defun pfxl:print (work recon / i e st)
-  (if (null work)
-    (prompt "\nNo crossings on record for this target.")
+(defun pfxl:rd-item (e recon)
+  (strcat (pfset:pad (pfa:xr-sbase e) 18)
+          (pfset:pad (pf:fmt-station (pfa:xr-tsta e)) 16)
+          (pfset:pad (pf:fmt-station (pfa:xr-ssta e)) 16)
+          (if (cdr (assoc (pfa:xr-key e) recon))
+            "[LABELED]" "[OUTSTANDING]")))
+
+(defun pfxl:rd-out ()
+  (if (vl-member-if
+        '(lambda (x) (not (cdr (assoc (pfa:xr-key x) x-recon))))
+        x-work)
+    (progn (setq x-res '(all)) (done_dialog 1))
+    (set_tile "error" "All crossings are already labeled.")))
+
+(defun pfxl:rd-selbtn ( / s out i)
+  (setq s (get_tile "xl_list"))
+  (if (or (null s) (= s ""))
+    (set_tile "error" "Select crossings in the list first.")
     (progn
-      (prompt (strcat "\nCrossings vs target '" (pfa:xr-tbase (car work)) "':"))
-      (setq i 0)
-      (foreach e work
-        (setq i  (1+ i)
-              st (cond ((null recon) "")
-                       ((cdr (assoc (pfa:xr-key e) recon)) "   [LABELED]")
-                       (T "   [OUTSTANDING]")))
-        (prompt (strcat "\n  " (itoa i) ".  " (pfa:xr-sbase e)
-                        "   tgt sta " (pf:fmt-station (pfa:xr-tsta e))
-                        "   src sta " (pf:fmt-station (pfa:xr-ssta e))
-                        st)))))
-  (princ))
+      (setq out '())
+      (foreach i (read (strcat "(" s ")"))
+        (setq out (cons (nth i x-work) out)))
+      (setq x-res (cons 'sel (reverse out)))
+      (done_dialog 1))))
+
+;; (pfxl:run-dialog x-work x-recon tgtline)
+;;   -> ('all) | ('sel . entries) | ('target) | nil
+(defun pfxl:run-dialog (x-work x-recon tgtline / dcl_id x-res code e ndone)
+  (setq dcl_id (load_dialog (pfset:dcl-file)) x-res nil)
+  (if (< dcl_id 0)
+    (progn (prompt "\nCould not load pfdialog.dcl.") nil)
+    (if (not (new_dialog "pfxl_run" dcl_id))
+      (progn (unload_dialog dcl_id)
+             (prompt "\nCould not open the crossings dialog.") nil)
+      (progn
+        (setq ndone 0)
+        (foreach e x-work
+          (if (cdr (assoc (pfa:xr-key e) x-recon)) (setq ndone (1+ ndone))))
+        (set_tile "xl_tgt"
+                  (strcat tgtline "   --   " (itoa (length x-work))
+                          " crossing(s), "
+                          (itoa (- (length x-work) ndone)) " outstanding"))
+        (start_list "xl_list")
+        (foreach e x-work (add_list (pfxl:rd-item e x-recon)))
+        (end_list)
+        (action_tile "xl_out"  "(pfxl:rd-out)")
+        (action_tile "xl_sel"  "(pfxl:rd-selbtn)")
+        (action_tile "xl_tgtb" "(setq x-res '(target)) (done_dialog 1)")
+        (action_tile "cancel"  "(done_dialog 0)")
+        (action_tile "help"
+          (strcat "(pfset:help \"Crossings come from discovery: the target "
+                  ".cl intersected with every other registered profile's "
+                  ".cl.  The pipe is drawn from the SOURCE profile's "
+                  "authored .pro.\\n\\nLabel Outstanding draws every "
+                  "unlabeled row (the everyday verb).  Label Selected "
+                  "draws exactly the highlighted rows -- relabeling a "
+                  "[LABELED] row draws duplicates and asks first.\\n\\n"
+                  "Change Target clears the sticky target; run PFXLABEL "
+                  "again to choose another profile.\")"))
+        (setq code (start_dialog))
+        (unload_dialog dcl_id)
+        (if (= code 1) x-res nil)))))
 
 ;; (pfxl:resolve-target) -> anchor | nil
 ;;   Session-last continues silently when still placed; else the registry
@@ -264,7 +314,7 @@
     ((and *pfxl-last*
           (setq a (pfa:find-anchor (cdr *pfxl-last*) (car *pfxl-last*))))
      (prompt (strcat "\nTarget: " (car *pfxl-last*) " '" (cdr *pfxl-last*)
-                     "'   ('Target' at the crossing prompt switches profiles)."))
+                     "'   (Change Target in the dialog switches profiles)."))
      a)
     (T (pfs:choose-or-place))))
 
@@ -288,8 +338,8 @@
                (* 1.4 (- yhi ylo)))
       (command "_.DELAY" (fix (* *pfx-zoom-pause* 1000.0))))))
 
-(defun c:PFXLABEL ( / anchor xf style sf ht toplines work recon n pick allmode
-                    sel e drawn skips res oldh newh lay)
+(defun c:PFXLABEL ( / anchor xf style sf ht toplines work recon act ndup
+                    allmode sel e drawn skips res oldh newh lay)
   (setq *pfxl-prev-error* *error*
         *error*           pfxl:*error*
         *pfxl-undo-open*  nil)
@@ -313,40 +363,41 @@
         ;; ---- discovery (additive) + working list ------------------------
         (pfxl:discover anchor)
         (setq work  (pfa:xing-list anchor)
-              recon (pfa:recon xf work)
-              n     (length work))
+              recon (pfa:recon xf work))
         (cond
           ((null work)
            (prompt "\nNo crossings found for this target."))
           (T
-           (pfxl:print work recon)
-           (initget 6 "All Target")
-           (setq pick (getint (strcat "\nCrossing to label [All/Target] <1-"
-                                      (itoa n) ">: ")))
-           (setq allmode (= pick "All"))
+           (setq act (pfxl:run-dialog work recon
+                       (strcat "Target: " (car *pfxl-last*) " '"
+                               (cdr *pfxl-last*) "'")))
+           (setq allmode (and act (eq (car act) 'all)))
            (cond
-             ((null pick) (prompt "\nNothing picked -- cancelled."))
-             ((= pick "Target")
+             ((null act) (prompt "\nCancelled -- nothing drawn."))
+             ((eq (car act) 'target)
               (setq *pfxl-last* nil)
               (prompt "\nTarget cleared -- run PFXLABEL again to choose."))
-             ((and (not allmode) (or (not (numberp pick)) (> pick n) (< pick 1)))
-              (prompt "\nNo valid crossing picked -- cancelled."))
              (T
               (if allmode
                 (setq sel (vl-remove-if
                             '(lambda (x) (cdr (assoc (pfa:xr-key x) recon)))
                             work))
                 (progn
-                  (setq e   (nth (1- pick) work)
-                        sel (list e))
-                  (if (cdr (assoc (pfa:xr-key e) recon))
-                    (progn
-                      (prompt (strcat "\nThat crossing is already labeled; "
-                                      "labeling again draws DUPLICATES."))
-                      (initget "Yes No")
-                      (if (/= (getkword "\nProceed anyway? [Yes/No] <No>: ")
-                              "Yes")
-                        (setq sel nil))))))
+                  (setq sel  (cdr act)
+                        ndup (length (vl-remove-if-not
+                                       '(lambda (x)
+                                          (cdr (assoc (pfa:xr-key x) recon)))
+                                       sel)))
+                  ;; relabeling draws duplicates -- deliberate Yes required
+                  (if (and (> ndup 0)
+                           (not (pfset:confirm
+                                  "Label already-labeled crossings?"
+                                  (list (strcat (itoa ndup)
+                                                " selected crossing(s) are "
+                                                "already labeled.")
+                                        "Labeling again draws DUPLICATE entities."
+                                        "Proceed?"))))
+                    (setq sel nil))))
               (cond
                 ((null sel)
                  (prompt (if allmode

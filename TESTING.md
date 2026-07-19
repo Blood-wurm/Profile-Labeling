@@ -21,6 +21,12 @@ surprises):
 - **PVI check:** while in the session, test whether the Road API returns
   `.pro` vertices (try `(cf:road_api "profile vertices" <pro>)` and similar
   spellings). If yes → swap `pfi:break-scan` later.
+- **Dialog layer is BRAND-NEW (2026-07-19 rework, never opened in CAD):**
+  the registry manager (`pfsetup_registry`), the shared run dialog
+  (`pf_run`), the crossings dialog (`pfxl_run`), `pf_confirm`, and the
+  slot-based `pfsetup_main` all shipped together. Expect DCL layout
+  findings (tile widths, list column drift under the proportional font) on
+  top of logic findings. Command line now carries ONLY screen picks.
 
 ---
 
@@ -32,6 +38,10 @@ surprises):
 - [ ] 0.2 `*pftools-dir*` inside `pftools-load.lsp` points at THIS V4
       folder (it ships hardcoded — fix the path first or nothing loads).
 - [ ] 0.3 Each command name autocompletes / runs from the command line.
+- [ ] 0.4 **Dialog smoke:** every dialog OPENS (a DCL syntax error kills
+      the whole file — `pfsetup_registry`, `pfsetup_main`, `pf_run`,
+      `pfxl_run`, `pf_confirm`, `pf_pick`, `pflabel_settings`). Help
+      buttons show their text; Esc/Cancel closes clean everywhere.
 
 ## 1. Project root + AUTO registration (PFSETUP first run)
 
@@ -45,33 +55,49 @@ surprises):
 - [ ] 1.4 **Backtick attack:** make one PF-NAME use backticks. Expected
       (bug): silently absent from the register list — confirm, then decide
       if the fix is worth it.
-- [ ] 1.5 Re-run `Refresh`: idempotent — nothing re-named, no duplicates.
+- [ ] 1.5 The **Refresh button** re-scans: idempotent — nothing re-named,
+      no duplicates.
+- [ ] 1.6 **Registry manager behaves:** list shows every profile with
+      [PLACED]/[unplaced]; Place on a placed row / Edit on a stub / no
+      selection → errtile message, dialog stays open; double-click places
+      a stub and edits an anchor; empty registry greys Place/Place
+      All/Edit.
 
 ## 2. PFSETUP placement
 
-- [ ] 2.1 Dialog validation rejects: empty name; zero/negative scales; one
-      `.pro`; two `_INV`s; `.pro` whose name ≠ the Name field; two DESIGN
-      tins; zero DESIGN among two tins. Each shows the errtile message, no
-      crash.
+- [ ] 2.1 Dialog validation rejects: empty name; zero/negative scales;
+      empty datum; ONE `.pro` bound (pair rule); `.pro` whose name ≠ the
+      Name field; one `.tin` bound. Each shows the errtile message, no
+      crash. **Slot role guards:** picking a `_TOP.pro` on the Invert
+      button, or a DESIGN_* tin on the Exist button → refused at pick
+      time with an errtile message (wrong-role files can no longer reach
+      OK).
 - [ ] 2.2 Material popup follows the Type popup; last-used material per
       type sticks across placements in the session.
 - [ ] 2.3 Extents picks: **running osnaps on** — pick the corners and check
       the anchor landed where you meant (known weakness; note how bad it
       is). Top-right left/below lower-left → refused.
-- [ ] 2.4 Datum prompt: Enter accepts the default on the second grid
-      (session-last remembered).
+- [ ] 2.4 Datum field: prefilled with the session-last value on the second
+      grid; edit prefills the stored datum.
 - [ ] 2.5 Placed anchor: block visible on `PF-ANCHOR` (no-plot), attributes
       LINE/UTIL/STA0/DATUM/HPLOT/VPLOT populated and plausible.
 - [ ] 2.6 **One `U` removes exactly one grid's placement** (not the batch,
       not the AUTO stubs).
-- [ ] 2.7 Edit mode: `.pro` swap accepted (cheap); scales/extents re-pick
-      works; same-range `.cl` swap accepted; **different-range `.cl`
-      REFUSED**; **identity change REFUSED**. Ledger survives an accepted
-      edit (place a label first, edit, confirm the pass record remains).
+- [ ] 2.7 Edit mode: `.pro` swap accepted (cheap); the **re-pick extents
+      toggle** re-picks (and is greyed on a fresh placement); same-range
+      `.cl` swap accepted; **different-range `.cl` REFUSED**; **identity
+      change REFUSED**. Ledger survives an accepted edit (place a label
+      first, edit, confirm the pass record remains).
 
 ## 3. PFLABEL
 
-- [ ] 3.1 Pick mode: label the junction structure — station rows primary
+- [ ] 3.0 **Run dialog:** the structure list matches the plan (every
+      structure on the primary line, sorted by station); switching the
+      Target popup repopulates it; Label Selected with nothing selected →
+      errtile; Settings... opens PFLABELSET nested and changes apply to
+      the same run; choosing an UNPLACED profile + labeling places it
+      first (dialog → two picks), then labels.
+- [ ] 3.1 Select the junction structure in the list → station rows primary
       first then alphabetical; combined ID alphabetical (`AA-1/BB-2`); const
       row from the rule table (SMH/DMH before MH — label one of each);
       elevation row placeholder; HDWL drops the elevation row.
@@ -80,33 +106,41 @@ surprises):
 - [ ] 3.3 Stepped-top grid: labels sit on the top **at each station**, not
       the nominal top. A station past the grid edge (no MJR hit) skips with
       a report.
-- [ ] 3.4 All mode: count matches structures on the line; sorted by
+- [ ] 3.4 Label All: count matches structures on the line; sorted by
       station.
 - [ ] 3.5 All re-run: prior pass replaced **by handle** (count reported);
-      hand-drawn text on the same layer untouched.
+      hand-drawn text on the same layer untouched. List rows flip
+      [LABELED] on the next run's dialog (X-proximity to tracked pass
+      entities — advisory; verify it doesn't false-mark two structures at
+      near-identical stations).
 - [ ] 3.6 CLAYER toggle: draws on current layer; re-run All does NOT erase
-      it; pass recorded (run PFXLABEL later and confirm nothing eats it).
-- [ ] 3.7 Esc mid-pick-mode: undo group unwinds, `*error*` restored (next
-      command behaves normally).
+      it; pass recorded (run PFXLABEL later and confirm nothing eats it);
+      CLAYER output never shows [LABELED] (untracked — by design).
+- [ ] 3.7 Esc at the placement picks of an on-the-fly place-then-label:
+      undo group unwinds, `*error*` restored (next command behaves
+      normally).
 - [ ] 3.8 `U` after a full pass reverses everything in one step.
 
 ## 4. PFXLABEL
 
 - [ ] 4.1 First run: discovery reports N new = the real crossing count; the
-      numbered list shows every crossing OUTSTANDING. **No table** is drawn
-      anywhere (the crossings-table subsystem is retired — if a `PF-TABLE`
-      layer or `PF-TABLE_*` block appears, that's a finding).
+      crossings DIALOG lists every crossing OUTSTANDING with the header
+      counts matching. **No table** is drawn anywhere (the crossings-table
+      subsystem is retired — if a `PF-TABLE` layer or `PF-TABLE_*` block
+      appears, that's a finding).
 - [ ] 4.2 **Zoom-pause:** each drawn crossing framed ~1.5 s, view restored
       to pre-run after the pass. Esc **during** the pause → clean unwind.
       Set `*pfx-zoom-pause*` to 0 → no zooming.
-- [ ] 4.3 Single-pick an already-labeled crossing → duplicate warning,
-      default No.
+- [ ] 4.3 Select a [LABELED] row + Label Selected → duplicate confirm
+      dialog, Enter/Esc both mean No; Label Outstanding with everything
+      labeled → errtile, dialog stays open. Change Target clears the
+      sticky target (rerun offers the registry picker).
 - [ ] 4.4 Skip cases report per crossing and in the pass summary:
       unregistered source; source with no `_INV.pro`; station outside the
       `.pro` range.
 - [ ] 4.5 Checksum short-circuit: immediate re-run reports 0 new/updated
       fast; touch a source `.cl` (add a blank line) → that pair rescans.
-- [ ] 4.6 Labeled crossing = its list row flips LABELED on the next run;
+- [ ] 4.6 Labeled crossing = its dialog row flips LABELED on the next run;
       erase the station line by hand → row honestly returns OUTSTANDING
       (derived, never stored).
 - [ ] 4.7 Missing `PF-PIPE_<NN>` block → circle placeholder + warning, no
@@ -146,8 +180,8 @@ surprises):
 - [ ] 6.8 Grade-tol sanity: a structure where grades change mildly
       (< ~5%/ft) with no drop → bracket falls back to the station read, no
       false break. A real drop face → caught.
-- [ ] 6.9 All re-run replaces by handle; Pick appends; CLAYER
-      fire-and-forget; `U` reverses; Esc unwinds.
+- [ ] 6.9 Label All re-run replaces by handle; Label Selected appends;
+      CLAYER fire-and-forget; `U` reverses; Esc unwinds.
 - [ ] 6.10 STATUS after the pass reflects the `_INV.pro` checksum (edit the
       file → FAILING finding on the next pass).
 - [ ] 6.11 **Scale test:** place a grid at a different HPLOT (e.g. 50):
@@ -157,8 +191,8 @@ surprises):
 
 ## 7. PFREMOVE + teardown
 
-- [ ] 7.1 Counts in the confirm prompt match reality (tracked entities /
-      crossings / passes).
+- [ ] 7.1 Counts in the confirm DIALOG match reality (tracked entities /
+      crossings / passes); Enter and Esc both mean No, Yes is a click.
 - [ ] 7.2 After removal: labels, crossing lines, invert output, anchor
       gone; CLAYER output and hand-drawn work UNTOUCHED; stubs untouched.
 - [ ] 7.3 One `U` restores the whole profile — anchor, ledger, labels.
@@ -167,13 +201,15 @@ surprises):
 
 ## 8. Free-swing attacks (try to break it)
 
-- [ ] 8.1 Esc at EVERY prompt in every command — no stuck undo group ever
-      (check: draw a line, `U` undoes just the line). Include the two paths
-      fixed pre-session: **(a)** Esc at the datum prompt during an
-      ON-THE-FLY placement launched from PFLABEL/PFXLABEL/PFINVERT (the
-      nested-group leak — `pfa:undo-cleanup` closes any pf group now);
-      **(b)** Esc mid-zoom-parade in PFXLABEL → the view returns to where
-      the run started.
+- [ ] 8.1 Esc at EVERY screen pick and Cancel in EVERY dialog — no stuck
+      undo group ever (check: draw a line, `U` undoes just the line).
+      Include the two paths fixed pre-session: **(a)** Esc at the extent
+      picks during an ON-THE-FLY placement launched from
+      PFLABEL/PFXLABEL/PFINVERT (the nested-group leak —
+      `pfa:undo-cleanup` closes any pf group now); **(b)** Esc
+      mid-zoom-parade in PFXLABEL → the view returns to where the run
+      started.  Also: Cancel in the crossings dialog AFTER discovery ran →
+      the undo group still closes (discovery writes are inside it).
 - [ ] 8.2 Run commands in a drawing with NO registry, NO PF-NAME text, NO
       grid layers — graceful messages, never a crash.
 - [ ] 8.3 Lock the target text layer, run PFLABEL → what happens? (Unknown

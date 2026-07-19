@@ -168,20 +168,19 @@
   (princ))
 
 ;; C:PFROOT -- show / set the project data root for this drawing.
+;;   Straight to the file dialog; Cancel = unchanged.  (No Yes/No prompt --
+;;   the file dialog's own Cancel is the No.)
 (defun c:PFROOT ( / cur f dir)
   (setq cur (pfset:root-get))
   (prompt (strcat "\nProject data root: " (if cur cur "<not set>")))
-  (initget "Yes No")
-  (if (= (getkword "\nSet it now? [Yes/No] <No>: ") "Yes")
+  (setq f (getfiled "Select ANY File in the Project Data Root Folder"
+                    (if cur cur "") "" 0))
+  (if f
     (progn
-      (setq f (getfiled "Select ANY File in the Project Data Root Folder"
-                        (if cur cur "") "" 0))
-      (if f
-        (progn
-          (setq dir (strcat (vl-filename-directory f) "\\"))
-          (pfset:root-set dir)
-          (prompt (strcat "\nProject data root set: " dir)))
-        (prompt "\nUnchanged."))))
+      (setq dir (strcat (vl-filename-directory f) "\\"))
+      (pfset:root-set dir)
+      (prompt (strcat "\nProject data root set: " dir)))
+    (prompt "\nUnchanged."))
   (princ))
 
 
@@ -223,6 +222,70 @@
 ;; (pfset:dcl-file) -> path to pfdialog.dcl
 (defun pfset:dcl-file ()
   (strcat *pftools-dir* "pfdialog.dcl"))
+
+;; (pfset:load-dcl) -> dcl_id | nil   (loud on failure)
+(defun pfset:load-dcl ( / id)
+  (setq id (load_dialog (pfset:dcl-file)))
+  (if (< id 0)
+    (progn (prompt "\nCould not load pfdialog.dcl.") nil)
+    id))
+
+;; (pfset:help text) -> nil   (the Help button everywhere)
+(defun pfset:help (text) (alert text) (princ))
+
+;; (pfset:pad s w) -> s space-padded to at least w characters
+;;   Column formatting for the list_box "grids" (header text row + rows).
+(defun pfset:pad (s w)
+  (if (null s) (setq s ""))
+  (while (< (strlen s) w) (setq s (strcat s " ")))
+  s)
+
+;; (pfset:confirm title lines) -> T | nil
+;;   The shared Yes/No dialog (pf_confirm).  No is the default AND the Esc
+;;   path -- Yes is always a deliberate click.  `lines` = up to 4 strings.
+;;   Falls back to a command-line keyword only if the .dcl cannot load.
+(defun pfset:confirm (title lines / dcl_id res i k)
+  (setq res nil)
+  (if (setq dcl_id (pfset:load-dcl))
+    (progn
+      (if (new_dialog "pf_confirm" dcl_id)
+        (progn
+          (set_tile "c_title" title)
+          (setq i 1)
+          (foreach k '("c_l1" "c_l2" "c_l3" "c_l4")
+            (set_tile k (if (nth (1- i) lines) (nth (1- i) lines) ""))
+            (setq i (1+ i)))
+          (action_tile "yes" "(setq res T) (done_dialog 1)")
+          (action_tile "no"  "(done_dialog 0)")
+          (start_dialog)))
+      (unload_dialog dcl_id))
+    (progn                                  ; last-resort fallback
+      (initget "Yes No")
+      (setq res (= (getkword (strcat "\n" title " [Yes/No] <No>: ")) "Yes"))))
+  res)
+
+;; (pfset:pick-index title items presel) -> 0-based index | nil
+;;   Self-loading single-select list dialog (pf_pick).  Returns nil on
+;;   Cancel.  presel = 0-based index | nil.
+(defun pfset:pick-index (title items presel / dcl_id res)
+  (setq res nil)
+  (if (and items (setq dcl_id (pfset:load-dcl)))
+    (progn
+      (if (new_dialog "pf_pick" dcl_id)
+        (progn
+          (set_tile "pick_title" title)
+          (start_list "items")
+          (foreach it items (add_list it))
+          (end_list)
+          (set_tile "items" (itoa (if presel presel 0)))
+          (action_tile "items"
+            "(setq res (atoi (get_tile \"items\"))) (if (= $reason 4) (done_dialog 1))")
+          (action_tile "accept"
+            "(setq res (atoi (get_tile \"items\"))) (done_dialog 1)")
+          (action_tile "cancel" "(setq res nil) (done_dialog 0)")
+          (if (/= 1 (start_dialog)) (setq res nil))))
+      (unload_dialog dcl_id)))
+  res)
 
 ;; (pfset:pick-from-list dcl_id title items current) -> chosen string
 ;;   Returns `current` unchanged on Cancel or an empty list.

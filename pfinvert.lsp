@@ -120,11 +120,12 @@
 ;;; SECTION 3  --  Run setup  (anchor -> context; reuses pflabel's machinery)
 ;;; ==========================================================================
 
-;; (pfi:setup anchor) -> context alist | nil
+;; (pfi:setup anchor mode) -> context alist | nil
 ;;   Same record checks as pflabel:setup, PLUS the _INV .pro is FATAL when
-;;   missing -- every elevation this command draws comes from it.
-(defun pfi:setup (anchor / xf cl proinv s style clayer-p layer prim pairs
-                  lines primary mode inlets)
+;;   missing -- every elevation this command draws comes from it.  The mode
+;;   ("All"/"Sel") was chosen in the shared run dialog.
+(defun pfi:setup (anchor mode / xf cl proinv s style clayer-p layer prim pairs
+                  lines primary inlets)
   (setq xf (pfa:anchor->xform anchor))
   (cond
     ((null xf)
@@ -174,11 +175,6 @@
                             "' failed to load -- aborting."))
             nil)
            (T
-            (initget "All Pick")
-            (setq mode (getkword
-                         (strcat "\nLabel inverts [All/Pick] on '"
-                                 primary "' <Pick>: ")))
-            (if (null mode) (setq mode "Pick"))
             (setq inlets (pflabel:gather-inlets))
             (list (cons 'xform    xf)
                   (cons 'anchor   anchor)
@@ -296,17 +292,14 @@
 ;;; SECTION 5  --  Modes, pass record, command
 ;;; ==========================================================================
 
-(defun pfi:label-pick (context / e ent ed)
-  (prompt "\nPick structures to label (Enter to finish).")
-  (while (setq e (entsel "\nSelect structure: "))
-    (setq ent (car e) ed (entget ent))
-    (cond
-      ((/= (cdr (assoc 0 ed)) "INSERT")
-       (prompt "\n  Not a block -- skipped."))
-      ((null (pf:rule-for (cdr (assoc 2 ed)) *pf-rule-table*))
-       (prompt (strcat "\n  Unknown structure block "
-                       (cdr (assoc 2 ed)) " -- skipped.")))
-      (T (pfi:process-structure ent context))))
+;; (pfi:label-sel context) -> nil
+;;   Labels the structures picked in the run dialog's list (sorted by
+;;   station).  Replaces the old entsel Pick loop.
+(defun pfi:label-sel (context / sel pr)
+  (setq sel (cdr (assoc 'sel context)))
+  (prompt (strcat "\nLabeling inverts at " (itoa (length sel))
+                  " selected structure(s)..."))
+  (foreach pr sel (pfi:process-structure (cadr pr) context))
   (princ))
 
 (defun pfi:label-all (context / lines primary inlets pt hits ph pending e pr)
@@ -369,38 +362,50 @@
   (foreach e findings (prompt (strcat "\n  FINDING: " e)))
   (princ))
 
-(defun c:PFINVERT ( / anchor ctx n)
+(defun c:PFINVERT ( / pre rd entry anchor ctx n)
   (setq *pfinvert-prev-error* *error*
         *error*               pfinvert:*error*
         *pfinvert-undo-open*  nil)
   (pf:load-apis)
-  (setq anchor (pfa:pick-anchor
-                 "\nSelect profile grid anchor (Enter to list): "))
-  (if (null anchor) (setq anchor (pfs:choose-or-place)))
-  (if (null anchor)
-    (prompt "\nNo placed grid -- run PFSETUP.")
+  ;; optional screen pick preselects the dialog's target popup
+  (setq pre (pfa:pick-anchor
+              "\nSelect profile grid anchor (Enter for the dialog): "))
+  (setq rd (pflabel:run-dialog
+             "PFINVERT -- invert labels at pipe elevation"
+             *pfi-pass-name* pre))
+  (if (null rd)
+    (prompt "\nPFINVERT cancelled.")
     (progn
-      (setq ctx (pfi:setup anchor))
-      (if ctx
+      (setq entry  (cdr (assoc 'entry rd))
+            anchor (if (eq (caddr entry) 'PLACED)
+                     (nth 3 entry)
+                     (pfs:place-one (nth 4 entry))))
+      (if (null anchor)
+        (prompt "\nNo placed grid -- cancelled.")
         (progn
-          (setq *pfinvert-run-ents* '())
-          (command "_.UNDO" "_Begin")
-          (setq *pfinvert-undo-open* T)
-          ;; All + derived layer = replace this pass's previous output
-          ;; (erase-by-handle; hand work and CLAYER output are untouched)
-          (if (and (= (cdr (assoc 'mode ctx)) "All")
-                   (not (cdr (assoc 'clayer-p ctx))))
+          (setq ctx (pfi:setup anchor (cdr (assoc 'mode rd))))
+          (if ctx
             (progn
-              (setq n (pfa:erase-pass anchor *pfi-pass-name*))
-              (if (> n 0)
-                (prompt (strcat "\nReplaced previous invert pass ("
-                                (itoa n) " entities erased by handle).")))))
-          (if (= (cdr (assoc 'mode ctx)) "All")
-            (pfi:label-all ctx)
-            (pfi:label-pick ctx))
-          (pfi:write-pass ctx)
-          (command "_.UNDO" "_End")
-          (setq *pfinvert-undo-open* nil)))))
+              (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))
+              (setq *pfinvert-run-ents* '())
+              (command "_.UNDO" "_Begin")
+              (setq *pfinvert-undo-open* T)
+              ;; All + derived layer = replace this pass's previous output
+              ;; (erase-by-handle; hand work and CLAYER output untouched)
+              (if (and (= (cdr (assoc 'mode ctx)) "All")
+                       (not (cdr (assoc 'clayer-p ctx))))
+                (progn
+                  (setq n (pfa:erase-pass anchor *pfi-pass-name*))
+                  (if (> n 0)
+                    (prompt (strcat "\nReplaced previous invert pass ("
+                                    (itoa n)
+                                    " entities erased by handle).")))))
+              (if (= (cdr (assoc 'mode ctx)) "All")
+                (pfi:label-all ctx)
+                (pfi:label-sel ctx))
+              (pfi:write-pass ctx)
+              (command "_.UNDO" "_End")
+              (setq *pfinvert-undo-open* nil)))))))
   (setq *error* *pfinvert-prev-error*)
   (princ))
 

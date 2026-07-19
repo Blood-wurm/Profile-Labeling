@@ -98,13 +98,17 @@ no grid name on the sheet) is noted too.
 
 ```
 pfs:place-one
- ├─ pfs:show-dialog           identity override, scales, .cl/.pro/.tin, material
+ ├─ pfs:show-dialog           identity override, scales, .cl/.pro/.tin slots,
+ │                            material, DATUM (typed here — Carlson-style)
  ├─ pfs:pick-extents          pick LOWER-LEFT (datum line) then TOP-RIGHT (extents)
- ├─ pfs:ask-datum             type the datum elevation (the one value a pick can't give)
  ├─ pfs:build-xform → pfa:write-anchor    write the PF-GRIDANCHOR block
  ├─ pfa:meta-put / pfs:bind-files         .cl + .pro/.tin bindings + checksums
  └─ pfa:stub-del              delete the promoted stub
 ```
+
+The registry menu is the `pfsetup_registry` **dialog** (Place / Place All /
+Edit / New / Refresh); the two extent picks are the only command-line steps
+left in the whole suite's setup flow.
 
 **One datum per grid, anchored at the lower-left; run steps don't matter.**
 (Settled — do not revisit.) Extents are stored **relative** (as the block's
@@ -124,8 +128,12 @@ Edit mode invalidation:
 
 ### 4.2 `PFLABEL` — structure labels
 
-The V4 run collapses to: `PFLABEL` → pick the anchor → `[All/Pick]` → run.
-Everything the old dialogs gathered lives in the anchor record.
+The V4 run is dialog-first (the Carlson idiom, `pf_run` shared with
+`PFINVERT`): `PFLABEL` → optional anchor screen-pick → **run dialog**
+(target popup = the registry; multi-select structure list, `[LABELED]`
+marked from the pass ledger) → *Label Selected* / *Label All*. Choosing an
+unplaced profile and labeling places it first. Everything the old dialogs
+gathered lives in the anchor record.
 
 - **Secondary `.cl` set = the registry** (anchors *and* stubs). Membership is
   plan-view station math, so **identity alone qualifies a line** — the moment
@@ -160,8 +168,8 @@ c:PFXLABEL
  │    ├─ pf:sta-at                      read both stations off the Road API
  │    └─ pfa:xing-merge                 additive merge into the ledger (elevations preserved)
  ├─ pfa:xing-list / pfa:recon           working list + per-crossing LABELED/OUTSTANDING
- ├─ pfxl:print                          numbered list + status
- ├─ [pick] All / <1-N> / Target
+ ├─ pfxl:run-dialog                     the crossings DIALOG (pfxl_run): list + status,
+ │                                      Label Outstanding / Label Selected / Change Target
  └─ pfxl:label-one  (per selected crossing)
       ├─ pfxl:src-files                 source's INV/TOP .pro + material
       ├─ pf:pipe-at → pf:pro-z          invert (flowline z) + size (nearest nominal to (TOP−INV)×12)
@@ -175,14 +183,16 @@ c:PFXLABEL
 - **Discovery is additive** — never destructive. A per-source **checksum
   short-circuit** skips pairs whose two `.cl` files are unchanged since the
   last scan.
-- **All** mode labels only **OUTSTANDING** crossings; single-pick warns before
-  it would draw duplicates.
+- **Label Outstanding** draws only **OUTSTANDING** crossings; relabeling a
+  `[LABELED]` selection asks first (`pf_confirm` — duplicates are always a
+  deliberate Yes).
 - A source that isn't registered, has no INV `.pro` bound, or whose invert is
   unreadable is **skipped and reported** on the command line, per crossing
   and in the pass summary.
 - The whole pass is one undo group. (The v4.0 per-profile crossings *table*
   is retired — it only displayed what the ledger + reconciliation already
-  track; the numbered LABELED/OUTSTANDING list is the surface now.)
+  track; the LABELED/OUTSTANDING list in the crossings dialog is the
+  surface now.)
 - **Verification zoom** (`*pfx-zoom-pause*`): each drawn crossing is framed
   and paused on (`ZOOM Center` + `DELAY`), then the pre-run view is restored
   after the pass. Set the pause to `0` to disable.
@@ -190,9 +200,10 @@ c:PFXLABEL
 ### 4.4 `PFINVERT` — invert labels at structures
 
 **The command split: `PFLABEL` owns top-of-grid text; `PFINVERT` owns
-everything at pipe elevation.** Same anchor-driven run shape:
-`PFINVERT` → pick the anchor → `[All/Pick]` → run. The `_INV.pro` binding is
-**fatal** when missing — every elevation comes from it.
+everything at pipe elevation.** Same anchor-driven, dialog-first run shape
+(the shared `pf_run` dialog: target popup + structure list). The
+`_INV.pro` binding is **fatal** when missing — every elevation comes from
+it.
 
 ```
 c:PFINVERT
@@ -278,8 +289,11 @@ pfinvert.lsp       ← C:PFINVERT / C:PFI  (reuses pflabel's walk + pfxlabel's
 | `pfdialog.lsp` | Split into `pfsettings.lsp` + per-command dialog wiring |
 | `pfcross.lsp` | Superseded by `pfxlabel.lsp` (target-only, `.pro`-driven inverts; the vertical bore probe is gone) |
 
-> `pfdialog.dcl` is still live — it holds `pfsetup_main`, `pflabel_settings`,
-> and the shared `pf_pick` / `pf_name` / `pf_scan` dialogs.
+> `pfdialog.dcl` is still live — reworked 2026-07-19 to the native-Carlson
+> style contract. It holds `pfsetup_registry` (the PFSETUP menu),
+> `pfsetup_main`, `pf_run` (PFLABEL/PFINVERT), `pfxl_run` (crossings),
+> `pflabel_settings`, and the shared `pf_pick` / `pf_name` / `pf_scan` /
+> `pf_confirm` dialogs. The command line keeps only screen picks.
 
 Config split — **keep these apart:**
 
@@ -300,7 +314,7 @@ Carlson API "tool calls" (Road = `EWORKS.ARX`, DTM = `TRI4.ARX`) they make.
 | 0 | **Load** | `pftools-load.lsp` loads all 9 in order | — |
 | 1 | **Project root** | `pfsettings.lsp`: `pfset:root-set` (first `PFSETUP` or `PFROOT`) writes it to the NOD | — |
 | 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` | Road `cl_sta_range` (validate ranges) |
-| 3 | **USER place** | `pfsetup.lsp`: `pfs:place-one` → `pfs:show-dialog`, `pfs:pick-extents`, `pfs:ask-datum` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
+| 3 | **USER place** | `pfsetup.lsp`: `pfs:registry-dialog` → `pfs:place-one` → `pfs:show-dialog` (datum typed here), `pfs:pick-extents` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
 | 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:registry-pairs`, `pflabel:build-lines`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | Road `cl_location_at_pt` (membership), top-of-grid probe (`inters`, no API) |
 | 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-verts`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` | Road `cl_location_at_sta` (walk), `cl_location_at_pt` (station), **`profile z`** (invert/top) |
 | 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`profile z`** (bracket walk + laterals) |
@@ -486,26 +500,27 @@ are all the same weakness: **designed by the engine, for the engine; the
 drafter-facing skin was an afterthought.**
 
 ### 13.1 The UX is a text-mode menu wearing an AutoCAD costume
+**(LARGELY RESOLVED — 2026-07-19 dialog rework)**
 
-- **Numbered text menus everywhere** — `pfa:choose-anchor`,
-  `pfs:choose-or-place`, PFXLABEL's crossing pick, PFSETUP's main loop all
-  print a list and ask for a typed number. No native AutoCAD/Carlson command
-  does this; Carlson's answer to "pick from a set" is a **dialog with a
-  list_box**, every time. Worst offender: PFSETUP's
-  `[All-unplaced/Edit/Refresh/New] <1-N>` REPL — a menu system living in a
-  prompt. **PFSETUP should BE a dialog:** registry list with a
-  PLACED/unplaced column, Place / Edit / Remove / Refresh buttons. That one
-  change buys more native feel than everything else combined.
-- The `(initget 6 "All Target")(getint …)` mixed int/keyword idiom exists
-  *because* of the numbered menus; kill the menus and the `(= pick "All")`
-  fragility dies with them.
-- **PFXLABEL's `Target` keyword is a dead end** — it clears the session
-  target and tells you to re-run the command. Native commands re-prompt for
-  the new target right there.
-- **Dead tiles ship in the live dialog** — `con_pre` / `gl_pre` in
-  `pflabel_settings` accept input and silently ignore it. Gray them
-  (`is_enabled = false`) or remove them until the per-type editor exists.
-  Belongs to the planned dialog-rework pass.
+- ~~Numbered text menus everywhere~~ — **fixed**: `pfa:choose-anchor` and
+  `pfs:choose-or-place` are `pf_pick` list dialogs; PFSETUP's
+  `[All-unplaced/Edit/Refresh/New] <1-N>` REPL is the `pfsetup_registry`
+  dialog; PFLABEL/PFINVERT run through `pf_run` (target popup + structure
+  list, replacing `[All/Pick]`); PFXLABEL's crossing pick is `pfxl_run`.
+  The mixed `(initget 6 "All Target")(getint …)` idiom died with the menus.
+  Command line keeps only screen picks; the datum moved into
+  `pfsetup_main`; Yes/No confirms are `pf_confirm` (No = Enter = Esc).
+- **PFXLABEL's Change Target is still a dead end** — it clears the session
+  target and ends the run (rerun offers the picker). Native commands would
+  re-open on the new target right there. *(Still open — needs a loop
+  around discovery + dialog.)*
+- ~~Dead tiles ship in the live dialog~~ — **fixed**: `con_pre` / `gl_pre`
+  are greyed (`is_enabled = false`) pending the per-type editor.
+- *(Deferred by choice)*: the "Screen Pick" hide-dialog button for
+  plan-picking structures — waiting for a real dup-name case to force it.
+- **The dialog layer itself has never opened in CAD** — layout findings
+  (tile widths, proportional-font column drift in the list "grids") are
+  expected on first contact; see `TESTING.md` 0.4.
 
 ### 13.2 `CMDECHO` is never suppressed
 

@@ -816,9 +816,10 @@
   res)
 
 ;; (pfa:choose-anchor) -> anchor ename | nil
-;;   Numbered pick from every anchor in the drawing (for when the anchor
-;;   isn't on screen).
-(defun pfa:choose-anchor ( / anchors i e pick)
+;;   List-dialog pick from every anchor in the drawing (for when the anchor
+;;   isn't on screen).  pfset:pick-index lives in pfsettings (runtime-only
+;;   dependency -- load order is unaffected).
+(defun pfa:choose-anchor ( / anchors pick)
   (setq anchors (pfa:all-anchors))
   (cond
     ((null anchors)
@@ -829,16 +830,9 @@
                      (pfa:anchor-title (car anchors))))
      (car anchors))
     (T
-     (prompt "\nRegistered profiles:")
-     (setq i 0)
-     (foreach e anchors
-       (setq i (1+ i))
-       (prompt (strcat "\n  " (itoa i) ".  " (pfa:anchor-title e))))
-     (initget 6)
-     (setq pick (getint (strcat "\nProfile <1-" (itoa (length anchors)) ">: ")))
-     (if (and (numberp pick) (>= pick 1) (<= pick (length anchors)))
-       (nth (1- pick) anchors)
-       nil))))
+     (setq pick (pfset:pick-index "Select the profile:"
+                                  (mapcar 'pfa:anchor-title anchors) nil))
+     (if pick (nth pick anchors)))))
 
 ;; (pfa:undo-cleanup) -> nil
 ;;   Close whichever pf command's undo group is open -- at most one ever is,
@@ -912,10 +906,12 @@
     ((pfa:copy-p anchor)
      (prompt (strcat "\n" (pfa:anchor-title anchor)
                      " is a COPY of another grid -- its ledger is not its own."))
-     (initget "Yes No")
-     (if (= (getkword
-              "\nPurge just this copied anchor block (safe)? [Yes/No] <No>: ")
-            "Yes")
+     (if (pfset:confirm
+           (strcat (pfa:anchor-title anchor) " is a COPY of another grid.")
+           '("Its ledger points at the ORIGINAL grid's entities, so a"
+             "full teardown would erase the original's labels."
+             ""
+             "Purge just this copied anchor block (safe)?"))
        (progn
          (command "_.UNDO" "_Begin")
          (setq *pfrem-undo-open* T)
@@ -926,15 +922,16 @@
        (prompt "\nNothing removed.")))
     (T
       (setq counts (pfa:teardown-counts anchor))
-      (initget "Yes No")
-      (if (/= (getkword
-                (strcat "\nRemove " (pfa:anchor-title anchor) " -- "
-                        (itoa (car counts)) " tracked entit"
-                        (if (= (car counts) 1) "y" "ies") ", "
-                        (itoa (cadr counts)) " crossing(s), "
-                        (itoa (caddr counts)) " pass record(s)?  "
-                        "Untracked work is NOT touched. [Yes/No] <No>: "))
-              "Yes")
+      (if (not (pfset:confirm
+                 (strcat "Remove " (pfa:anchor-title anchor) "?")
+                 (list (strcat "Erases " (itoa (car counts))
+                               " tracked entit"
+                               (if (= (car counts) 1) "y" "ies")
+                               ", " (itoa (cadr counts)) " crossing record(s), "
+                               (itoa (caddr counts)) " pass record(s),")
+                       "the anchor, and its ledger."
+                       ""
+                       "Untracked work (hand-drawn, CLAYER passes) is NOT touched.")))
         (prompt "\nNothing removed.")
         (progn
           (command "_.UNDO" "_Begin")
