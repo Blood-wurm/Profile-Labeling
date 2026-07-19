@@ -5,7 +5,7 @@ on AutoCAD Map 3D. The suite labels drainage/utility structures and pipe
 crossings on storm, sanitary, and water profiles to the firm's drafting
 standard — the geometric work Carlson's native profile commands don't cover.
 
-> **How to read this.** §1–§3 are plain-language (for explaining to Andy).
+> **How to read this.** §1–§3 are plain-language.
 > §4 onward is the engineer's reference: commands, the workflow call-trace,
 > the data model, and the file map.
 
