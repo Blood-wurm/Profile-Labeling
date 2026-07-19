@@ -1,5 +1,5 @@
 ;;; ==========================================================================
-;;; pfdraw.lsp  --  PFTools v4 drawing boundary  (the ONLY file that entmakes
+;;; pfdraw.lsp  --  PFTools V4 drawing boundary  (the ONLY file that entmakes
 ;;;                 label output)
 ;;; --------------------------------------------------------------------------
 ;;; Requires pftools-cfg.lsp + pftools-lib.lsp loaded first.
@@ -10,7 +10,7 @@
 ;;; the caller can ledger the handles.
 ;;;
 ;;; Every function returns the ename(s) it created (nil on entmake failure)
-;;; -- handle capture is the caller's job, and it is what makes the v4
+;;; -- handle capture is the caller's job, and it is what makes the V4
 ;;; erase-by-handle contract possible.  NO function here erases anything.
 ;;; ==========================================================================
 

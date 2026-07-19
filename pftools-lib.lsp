@@ -1,5 +1,5 @@
 ;;; ==========================================================================
-;;; pftools-lib.lsp  --  PFTools v4 shared engine  (PURE)
+;;; pftools-lib.lsp  --  PFTools V4 shared engine  (PURE)
 ;;; --------------------------------------------------------------------------
 ;;; Requires pftools-cfg.lsp loaded first.
 ;;;
@@ -114,18 +114,6 @@
   (if (setq rng (pf:cl-range clfile))
     (pf:cl-sample-range clfile (car rng) (cadr rng) *pfx-sample-step*)))
 
-;; (pf:poly-x va vb) -> (x y) first intersection | nil
-(defun pf:poly-x (va vb / la lb i j a1 a2 b1 b2 hit)
-  (setq la (length va) lb (length vb) i 0 hit nil)
-  (while (and (< i (1- la)) (null hit))
-    (setq a1 (nth i va) a2 (nth (1+ i) va) j 0)
-    (while (and (< j (1- lb)) (null hit))
-      (setq b1 (nth j vb) b2 (nth (1+ j) vb))
-      (setq hit (inters a1 a2 b1 b2))
-      (setq j (1+ j)))
-    (setq i (1+ i)))
-  hit)
-
 ;; (pf:cl-verts clfile) -> list of (x y) | nil
 ;;   .cl sampling; endpoint chord as a flagged fallback (curves may be missed).
 (defun pf:cl-verts (clfile / pts ends)
@@ -137,18 +125,6 @@
                      " -- using endpoint CHORD (curves may be missed)."))
      (list (list (car (car ends)) (cadr (car ends)))
            (list (car (cadr ends)) (cadr (cadr ends)))))))
-
-;; (pf:refine-x tfile tsta sfile ssta) -> (x y) | nil
-(defun pf:refine-x (tfile tsta sfile ssta / tv sv)
-  (setq tv (pf:cl-sample-range tfile (- tsta *pfx-sample-step*)
-                               (+ tsta *pfx-sample-step*) *pfx-refine-step*)
-        sv (pf:cl-sample-range sfile (- ssta *pfx-sample-step*)
-                               (+ ssta *pfx-sample-step*) *pfx-refine-step*))
-  (if (and tv sv) (pf:poly-x tv sv)))
-
-;; (pf:sta-at clfile xy) -> station | nil
-(defun pf:sta-at (clfile xy / res)
-  (if (setq res (pf:cl-locate-safe clfile xy)) (car res)))
 
 
 ;;; ==========================================================================
@@ -235,7 +211,7 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 4  --  Profile transform  (ALIST -- the v4 record seam)
+;;; SECTION 4  --  Profile transform  (ALIST -- the V4 record seam)
 ;;; ==========================================================================
 ;;; The xform is an association list.  Core geometric keys (always present):
 ;;;   leftx  sta0  hscale  topy  basey  datum  vscale  hplot  vplot
@@ -858,7 +834,7 @@
 (defun pf:timestamp () (rtos (getvar "CDATE") 2 6))
 
 
-(princ "\npftools-lib.lsp loaded (v4 engine).")
+(princ "\npftools-lib.lsp loaded (V4 engine).")
 (princ)
 ;;; ==========================================================================
 ;;; end of pftools-lib.lsp

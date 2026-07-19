@@ -1,4 +1,4 @@
-# PFTools v4 — Profile-Labeling Toolset
+# PFTools V4 — Profile-Labeling Toolset
 
 AutoLISP/DCL tools for annotating utility **profile drawings** in Carlson Civil
 on AutoCAD Map 3D. The suite labels drainage/utility structures and pipe
@@ -33,13 +33,13 @@ It produces:
   target grid, with size, material, and the standard line label.
 - **A per-profile crossings table** that doubles as a completion record.
 
-The shift in v4: a profile's grid and crossings become **drawing-resident
+The shift in V4: a profile's grid and crossings become **drawing-resident
 state**. Register a grid once; every command afterward reads it, and the
 drawing itself remembers what's been labeled and what's left.
 
-## 2. The v4 pivots (what changed from v3)
+## 2. The V4 pivots (what changed from v3)
 
-| Area | v3 | v4 |
+| Area | v3 | V4 |
 |---|---|---|
 | **Registration** | Grid re-picked every run | **Register once** (an *anchor block*), every command reads it |
 | **Two tiers** | — | **AUTO** names every profile on the sheet (stubs); **USER** places each grid (anchors) |
@@ -54,8 +54,9 @@ drawing itself remembers what's been labeled and what's left.
 Automate only where there's genuine geometric work the drafter can't reasonably
 do by hand: membership logic, station math on curved alignments, crossing
 geometry, and invert reading off authored profiles. That bar is why an invert
-label wrapping two manual picks stays **shelved** (now planned as `PFINVERT`,
-built on the *authored* `.pro`, not a probe).
+label wrapping two manual picks stayed **shelved** in v3 — and why `PFINVERT`
+now earns the build: it reads the *authored* `.pro` (not a probe), brackets
+in/out at the grade breaks, and pulls lateral inverts from the registry.
 
 ---
 
@@ -66,10 +67,11 @@ built on the *authored* `.pro`, not a probe).
 | `PFSETUP` | — | `pfsetup.lsp` | Register/edit grids. **AUTO** names every profile on the sheet; **USER** places each grid. |
 | `PFLABEL` | `PFL` | `pflabel.lsp` | Label structures at the top of a registered grid. Reads the anchor — no per-run dialogs for geometry. |
 | `PFXLABEL` | `PFX` | `pfxlabel.lsp` | Discover + label pipe crossings on the target grid. One / All-outstanding. |
+| `PFINVERT` | `PFI` | `pfinvert.lsp` | Label every invert at each structure — primary I.I/I.O from the `_INV.pro` grade breaks, laterals from the registry. |
 | `PFREMOVE` | — | `pfanchor.lsp` | Tear down one profile's record — anchor + ledger + every handle-tracked entity. Untracked work is never touched. |
 | `PFLABELSET` | — | `pflabel.lsp` | Open the label settings dialog standalone (prefix/suffix, layer, style). |
 | `PFROOT` | — | `pfsettings.lsp` | Show / set the drawing's project-data-root folder. |
-| `PFINVERT` / `PFCHECK` | — | *(planned)* | Invert labels at structures; record-integrity check. Announced by the loader, not yet built. |
+| `PFCHECK` | — | *(planned)* | Record-integrity check. Announced by the loader, not yet built. |
 
 ### 4.1 `PFSETUP` — two-tier registration
 
@@ -121,7 +123,7 @@ Edit mode invalidation:
 
 ### 4.2 `PFLABEL` — structure labels
 
-The v4 run collapses to: `PFLABEL` → pick the anchor → `[All/Pick]` → run.
+The V4 run collapses to: `PFLABEL` → pick the anchor → `[All/Pick]` → run.
 Everything the old dialogs gathered lives in the anchor record.
 
 - **Secondary `.cl` set = the registry** (anchors *and* stubs). Membership is
@@ -179,8 +181,48 @@ c:PFXLABEL
   table's STATUS column.
 - After the pass, `pfa:rebuild-table` regenerates the crossings table (replaced
   by handle). The whole pass is one undo group.
+- **Verification zoom** (`*pfx-zoom-pause*`): each drawn crossing is framed
+  and paused on (`ZOOM Center` + `DELAY`), then the pre-run view is restored
+  after the pass. Set the pause to `0` to disable.
 
-### 4.4 `PFREMOVE` — teardown
+### 4.4 `PFINVERT` — invert labels at structures
+
+**The command split: `PFLABEL` owns top-of-grid text; `PFINVERT` owns
+everything at pipe elevation.** Same anchor-driven run shape:
+`PFINVERT` → pick the anchor → `[All/Pick]` → run. The `_INV.pro` binding is
+**fatal** when missing — every elevation comes from it.
+
+```
+c:PFINVERT
+ ├─ pfi:setup                  anchor record + registry line table (pflabel's walk)
+ └─ pfi:process-structure  (per structure on the primary)
+      ├─ pfi:invert-bracket        I.I/I.O at the .pro GRADE BREAKS each side
+      ├─ pfi:lateral-info          each other line here: registry .pro → invert + size
+      ├─ pfd:draw-label-stack 'MR  the invert COLUMN (hangs below base Y)
+      └─ pfd:insert-pipe           bare lateral pipe block at TRUE elevation
+```
+
+- **Primary = text only** (`I.I <elev>` / `I.O <elev>`) — its pipe is already
+  the `.pro` linework on the grid. **Laterals = bare block at true elevation
+  + bare `I.I <elev>` row** (non-present pipes; line identity is already on
+  the structure's top label). No leader line.
+- **Grade-break bracket, not a fixed offset:** walking the `_INV.pro` outward
+  from the station, the first grade break each side is the structure edge —
+  the bracket **auto-widens with structure size**. The *lower* invert of the
+  pair is downstream (self-determining) → `I.O`. A flat run (no drop) reads
+  the station itself; both rows still drawn.
+- **The column rule (collision-proof):** all text rows share **one base Y** =
+  lowest invert present − `*pfi-invert-offset*` (fixed model units, **not**
+  scaled by `sf`), fanning left/right across the station X by the same
+  straddle rule as the top stack. Columns, not true-elevation rows — a 0.10'
+  drop can never overlap two callouts. Blocks sit at true elevation and may
+  stack; text never does.
+- **Layer / pass / undo — identical to `PFLABEL`:** derived `<TYPE>-TEXT_P`
+  handle-tracked (PASS `INVERT`, `All` replaces by handle) vs the
+  *"Use current layer"* toggle (PASS `INVERT-CLAYER`, fire-and-forget).
+  STATUS is written after the pass from the `_INV.pro` checksum.
+
+### 4.5 `PFREMOVE` — teardown
 
 ```
 pfa:teardown
@@ -200,7 +242,7 @@ reverses it.
 ## 5. Load order & file map
 
 The loader (`pftools-load.lsp`) loads by **full path** in strict dependency
-order. Each file may only depend on files above it — the v4 guardrail:
+order. Each file may only depend on files above it — the V4 guardrail:
 
 ```
 pftools-cfg.lsp    ← FIRST. Every tunable in the suite. Constants only, no code.
@@ -223,6 +265,9 @@ pfsetup.lsp        ← C:PFSETUP  (AUTO names, USER places)
 pflabel.lsp        ← C:PFLABEL / C:PFL / C:PFLABELSET
       │
 pfxlabel.lsp       ← C:PFXLABEL / C:PFX
+      │
+pfinvert.lsp       ← C:PFINVERT / C:PFI  (reuses pflabel's walk + pfxlabel's
+                     registry resolution, so it loads last)
 ```
 
 **Retired (kept in `_v3\` for reference only):**
@@ -251,14 +296,15 @@ Carlson API "tool calls" (Road = `EWORKS.ARX`, DTM = `TRI4.ARX`) they make.
 
 | # | Phase | Files → key calls | Carlson API |
 |---|---|---|---|
-| 0 | **Load** | `pftools-load.lsp` loads all 8 in order | — |
+| 0 | **Load** | `pftools-load.lsp` loads all 9 in order | — |
 | 1 | **Project root** | `pfsettings.lsp`: `pfset:root-set` (first `PFSETUP` or `PFROOT`) writes it to the NOD | — |
 | 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` | Road `cl_sta_range` (validate ranges) |
 | 3 | **USER place** | `pfsetup.lsp`: `pfs:place-one` → `pfs:show-dialog`, `pfs:pick-extents`, `pfs:ask-datum` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
 | 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:registry-pairs`, `pflabel:build-lines`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | Road `cl_location_at_pt` (membership), top-of-grid probe (`inters`, no API) |
 | 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-verts`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` → `pfa:rebuild-table` | Road `cl_location_at_sta` (walk), `cl_location_at_pt` (station), **`profile z`** (invert/top) |
-| 6 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs | Road (unchanged pairs skipped) |
-| 7 | **Teardown** | `pfanchor.lsp`: `c:PFREMOVE` → `pfa:teardown` (`pfa:erase-pass`, `entdel`) | — |
+| 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`profile z`** (bracket walk + laterals) |
+| 7 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs | Road (unchanged pairs skipped) |
+| 8 | **Teardown** | `pfanchor.lsp`: `c:PFREMOVE` → `pfa:teardown` (`pfa:erase-pass`, `entdel`) | — |
 
 Per-file responsibility during a run:
 
@@ -272,6 +318,7 @@ Per-file responsibility during a run:
 | `pfsetup.lsp` | Orchestrates registration; owns the setup dialog | via `pfanchor`/`pfdraw` |
 | `pflabel.lsp` | Orchestrates structure labeling | via `pfdraw`/`pfanchor` |
 | `pfxlabel.lsp` | Orchestrates discovery + crossing labeling | via `pfdraw`/`pfanchor` |
+| `pfinvert.lsp` | Orchestrates invert labeling (grade-break bracket + laterals) | via `pfdraw`/`pfanchor` |
 
 ---
 
@@ -342,7 +389,7 @@ is an error the setup dialog rejects.
 | `PF-ANCHOR` | tool | `PF-GRIDANCHOR` blocks. Created **no-plot**, visible in model space. |
 | `PF-XING` | tool | Crossing station lines — the layer reconciliation scans (by handle for erase). |
 | `PF-XING-TEXT` | tool | Vertical crossing station text. |
-| `PF-TEMP` | tool | Invert ticks + elev text. **Never erased.** |
+| `PF-TEMP` | tool | Reserved (legacy invert-tick concept). As built, `PFINVERT` is handle-tracked on `<TYPE>-TEXT_P` instead. |
 | `PF-TABLE` | tool | Crossings-table blocks. Erased **by handle only**, never layer-cleared. |
 | `<TYPE>_P` / `<TYPE>-TEXT_P` | derived | Crossing pipe block + its text, by utility type. |
 | `ALIGN-<TYPE>_P` | derived | Per-type alignment layer. |
@@ -364,7 +411,10 @@ Every tunable lives in one file. The load-bearing groups:
 - **Sampling** — `*pfx-sample-step*` 2 ft walk, `*pfx-refine-step*` 0.1 ft
   near a hit.
 - **Pipe rendering** — `PF-PIPE_<NN>` block family; circle placeholder when a
-  block is missing; `*pfx-zoom-pause*` verification pause.
+  block is missing; `*pfx-zoom-pause*` verification pause (0 disables).
+- **Invert bracket (`PFINVERT`)** — `*pfi-invert-offset*` 5.0 (fixed, un-scaled
+  column drop), `*pfi-scan-window*` 25 ft, `*pfi-scan-step*` 0.5 ft,
+  `*pfi-grade-tol*` 0.05 Δslope (what reads as a structure edge).
 
 ---
 
@@ -382,30 +432,38 @@ Every tunable lives in one file. The load-bearing groups:
 - **Negative stations** aren't supported by the crossing content key.
 - **Crossing draw is target-only** — a source line's own grid is annotated by
   running `PFXLABEL` with that profile as the target.
-- **`PFINVERT` / `PFCHECK` are announced by the loader but not built yet.**
+- **`PFINVERT` is built but not yet run in a live drawing** — statically
+  verified only; validate I.I/I.O against a known drop manhole first. Its
+  grade-break scan is sample-and-detect; if the Road API turns out to expose
+  `.pro` PVIs directly, swap `pfi:invert-bracket`'s body only.
+- **`PFCHECK` is announced by the loader but not built yet.**
 
 ---
 
 ## 12. Status & roadmap
 
 **Structure + crossing labeling** carries forward v3's near-100% validation
-against a completed job; the v4 rewrite moves inverts onto authored `.pro`
+against a completed job; the V4 rewrite moves inverts onto authored `.pro`
 files (the fragile bore probe is retired) and makes the grid a registered,
 drawing-resident record.
 
-Planned this cycle:
+Shipped this cycle:
 
-1. **`PFINVERT`** — invert labels at structures, read from the `.pro` (base Y =
-   lowest invert − `*pfi-invert-offset*`, fixed model units).
-2. **`PFCHECK`** — record-integrity / status surface (checksums, copy
+- **`PFINVERT`** — invert labels at structures: primary I.I/I.O from the
+  `_INV.pro` grade breaks, laterals from the registry, all text in one column
+  below the lowest invert (§4.4). *Awaiting first live-drawing validation.*
+
+Planned:
+
+1. **`PFCHECK`** — record-integrity / status surface (checksums, copy
    detection, stale-crossing cleanup).
-3. **Vertical-clearance QA** — both inverts are already read at every crossing;
+2. **Vertical-clearance QA** — both inverts are already read at every crossing;
    one subtraction turns the crossings table into a clearance-conflict surface.
-4. **Water-profile support** — appurtenances on laterals need lateral-aware
+3. **Water-profile support** — appurtenances on laterals need lateral-aware
    membership, not the storm/sewer "structure on the line" test.
-5. **Unified launcher** — one entry point routing between the flows (routing,
+4. **Unified launcher** — one entry point routing between the flows (routing,
    not merged fields).
-6. **Prefix/suffix parity** for crossing labels (currently hardcoded per-type
+5. **Prefix/suffix parity** for crossing labels (currently hardcoded per-type
    templates).
 
 

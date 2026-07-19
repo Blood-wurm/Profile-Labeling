@@ -1,10 +1,12 @@
 ;;; ==========================================================================
-;;; pftools-load.lsp  --  loads the PFTools v4 suite
+;;; pftools-load.lsp  --  loads the PFTools V4 suite
 ;;; --------------------------------------------------------------------------
 ;;; Loads by FULL path in dependency order.  Each file may only depend on
-;;; files above it (the v4 guardrail):
+;;; files above it (the V4 guardrail):
 ;;;
 ;;;   cfg -> lib -> draw -> anchor -> settings -> setup -> label -> xlabel
+;;;   -> invert  (pfinvert reuses pflabel's walk + pfxlabel's registry
+;;;   resolution, so it loads last)
 ;;;
 ;;; SET *pftools-dir* below to the folder holding these files.  Forward
 ;;; slashes, trailing slash.
@@ -27,12 +29,14 @@
   (load (strcat *pftools-dir* "pfsetup.lsp"))       ; C:PFSETUP
   (load (strcat *pftools-dir* "pflabel.lsp"))       ; C:PFLABEL
   (load (strcat *pftools-dir* "pfxlabel.lsp"))      ; C:PFXLABEL
+  (load (strcat *pftools-dir* "pfinvert.lsp"))      ; C:PFINVERT
   (princ "\n----------------------------------------------")
-  (princ "\nPFTools v4 loaded.")
+  (princ "\nPFTools V4 loaded.")
   (princ "\n  Grid records:      PFSETUP (register/edit), PFREMOVE (teardown)")
   (princ "\n  Structure labels:  PFLABEL  (alias PFL)")
   (princ "\n  Crossings:         PFXLABEL (alias PFX)")
+  (princ "\n  Inverts:           PFINVERT (alias PFI)")
   (princ "\n  Settings:          PFLABELSET, PFROOT (project data root)")
-  (princ "\n  Coming this cycle: PFINVERT / PFCHECK")
+  (princ "\n  Coming this cycle: PFCHECK")
   (princ "\n----------------------------------------------")
   (princ))

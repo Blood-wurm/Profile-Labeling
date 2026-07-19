@@ -1,10 +1,10 @@
 ;;; ==========================================================================
-;;; pflabel.lsp  --  C:PFLABEL : top-of-grid structure labels  (v4)
+;;; pflabel.lsp  --  C:PFLABEL : top-of-grid structure labels  (V4)
 ;;; --------------------------------------------------------------------------
 ;;; Requires pftools-cfg, pftools-lib, pfdraw, pfanchor, pfsettings loaded
 ;;; first.  Dialog: pflabel_settings in pfdialog.dcl (PFLABELSET).
 ;;;
-;;; v4 PIVOT: the command reads the ANCHOR.  Everything the old dialogs
+;;; V4 PIVOT: the command reads the ANCHOR.  Everything the old dialogs
 ;;; gathered per run (grid corners, start station, datum, scales, primary
 ;;; .cl) lives in the record PFSETUP wrote.  The run collapses to:
 ;;;
@@ -227,7 +227,7 @@
        (prompt (strcat "\n  DRIFT: " d)))
      (if (not (pfa:probe-corner (list (pf:xf-leftx xf) (pf:xf-basey xf))))
        (prompt "\n  WARNING: no grid LINE found at the anchor corner (grid moved without its anchor?)"))
-     ;; style must exist; layer per the v4 rule
+     ;; style must exist; layer per the V4 rule
      (setq s     (pfset:settings)
            style (pfset:active-style))
      (if (= style "")
@@ -421,7 +421,7 @@
   (cond
     ((= stored "")
      (setq state 0
-           findings '("no .cl checksum on record (pre-v4 anchor) -- run PFSETUP")))
+           findings '("no .cl checksum on record (pre-V4 anchor) -- run PFSETUP")))
     ((null cur)
      (setq state 2
            findings '(".cl on record could not be read for checksum")))
@@ -473,7 +473,7 @@
 
 (defun c:PFL () (c:PFLABEL))
 
-(princ "\npflabel.lsp loaded (v4, anchor-driven).  Commands: PFLABEL (PFL), PFLABELSET.")
+(princ "\npflabel.lsp loaded (V4, anchor-driven).  Commands: PFLABEL (PFL), PFLABELSET.")
 (princ)
 ;;; ==========================================================================
 ;;; end of pflabel.lsp

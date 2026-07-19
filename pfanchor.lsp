@@ -1,9 +1,9 @@
 ;;; ==========================================================================
-;;; pfanchor.lsp  --  PFTools v4 record + registry
+;;; pfanchor.lsp  --  PFTools V4 record + registry
 ;;; --------------------------------------------------------------------------
 ;;; Requires pftools-cfg.lsp, pftools-lib.lsp, pfdraw.lsp loaded first.
 ;;;
-;;; v4 MODEL: the anchor IS the grid record; crossings are one field among
+;;; V4 MODEL: the anchor IS the grid record; crossings are one field among
 ;;; many.  PFSETUP creates the record; every other command reads/updates it.
 ;;;
 ;;;   STUB     AUTO registration writes identity-only stubs to the DRAWING
@@ -930,7 +930,7 @@
 ;;; ==========================================================================
 ;;; SECTION 8  --  Teardown + C:PFREMOVE
 ;;; ==========================================================================
-;;; v4 teardown: walk every PASS_* handle ledger -> erase those entities ->
+;;; V4 teardown: walk every PASS_* handle ledger -> erase those entities ->
 ;;; erase the table instance + definition -> erase the anchor (the ledger
 ;;; dies with it, hard-owned).  Entities never handle-tracked (CLAYER
 ;;; passes, hand-drawn work) are NEVER touched.
@@ -1010,7 +1010,7 @@
   (princ))
 
 
-(princ "\npfanchor.lsp loaded (v4 record + registry).  Command: PFREMOVE.")
+(princ "\npfanchor.lsp loaded (V4 record + registry).  Command: PFREMOVE.")
 (princ)
 ;;; ==========================================================================
 ;;; end of pfanchor.lsp

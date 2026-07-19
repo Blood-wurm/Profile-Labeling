@@ -6,7 +6,7 @@
 ;;; ONE command, TARGET-DIRECTED.  The v3 trio (PFXFIND / PFXLABEL / PFXGRID)
 ;;; collapses: discovery auto-runs here, grid registration is PFSETUP's job.
 ;;;
-;;; MODEL (v4 pivot):
+;;; MODEL (V4 pivot):
 ;;;   - TARGET-ONLY draw.  A run labels ONLY the target grid; the crossing
 ;;;     pipe is drawn from the SOURCE profile's authored .pro (never a probe
 ;;;     of any drawn grid).  A source contributes as a pure file reference --
@@ -263,8 +263,23 @@
 ;;; SECTION 6  --  C:PFXLABEL
 ;;; ==========================================================================
 
+;; (pfxl:zoom-to xf e sf) -> nil
+;;   Verification zoom+pause on one just-drawn crossing (boss ask): frame the
+;;   station line (grid top down to the line extension) and DELAY.  No-op when
+;;   *pfx-zoom-pause* is 0.  Caller saves/restores the pre-run view.
+(defun pfxl:zoom-to (xf e sf / x ylo yhi)
+  (if (> *pfx-zoom-pause* 0.0)
+    (progn
+      (setq x   (pf:station->profile-x (pfa:xr-tsta e) xf)
+            ylo (- (pf:xf-basey xf) (* *pfx-line-ext* sf))
+            yhi (pf:grid-top-y xf))
+      (command "_.ZOOM" "_Center"
+               (list x (* 0.5 (+ ylo yhi)) 0.0)
+               (* 1.4 (- yhi ylo)))
+      (command "_.DELAY" (fix (* *pfx-zoom-pause* 1000.0))))))
+
 (defun c:PFXLABEL ( / anchor xf style sf ht toplines work recon n pick allmode
-                    sel e drawn skips res oldh newh lay)
+                    sel e drawn skips res oldh newh lay savctr savsz)
   (setq *pfxl-prev-error* *error*
         *error*           pfxl:*error*
         *pfxl-undo-open*  nil)
@@ -328,16 +343,22 @@
                            "\nAll crossings already labeled -- nothing to do."
                            "\nCancelled.")))
                 (T
-                 (setq toplines (pf:top-lines))
+                 (setq toplines (pf:top-lines)
+                       savctr   (getvar "VIEWCTR")
+                       savsz    (getvar "VIEWSIZE"))
                  (foreach e sel
                    (setq res (pfxl:label-one anchor xf e style sf ht toplines))
                    (if (car res)
                      (progn
                        (setq newh (append newh (car res))
-                             drawn (1+ drawn)))
+                             drawn (1+ drawn))
+                       (pfxl:zoom-to xf e sf))       ; verification zoom+pause
                      (setq skips (cons (list (pfa:xr-key e) (pfa:xr-sbase e)
                                              (pfa:xr-tsta e) (cdr res))
                                        skips))))
+                 ;; restore the pre-run view after the verification zooms
+                 (if (and (> *pfx-zoom-pause* 0.0) (> drawn 0))
+                   (command "_.ZOOM" "_Center" savctr savsz))
                  ;; append this pass's handles to the crossing pass ledger
                  (if newh
                    (progn

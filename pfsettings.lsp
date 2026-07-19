@@ -1,5 +1,5 @@
 ;;; ==========================================================================
-;;; pfsettings.lsp  --  PFTools v4 user-state layer
+;;; pfsettings.lsp  --  PFTools V4 user-state layer
 ;;; --------------------------------------------------------------------------
 ;;; Requires pftools-cfg.lsp, pftools-lib.lsp, pfanchor.lsp loaded first
 ;;; (the NOD helpers reuse pfanchor's generic xrecord machinery).

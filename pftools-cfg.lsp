@@ -1,5 +1,5 @@
 ;;; ==========================================================================
-;;; pftools-cfg.lsp  --  PFTools v4 configuration
+;;; pftools-cfg.lsp  --  PFTools V4 configuration
 ;;; --------------------------------------------------------------------------
 ;;; EVERY tunable in the suite lives HERE and nowhere else.  This file is
 ;;; meant to be edited in a text editor; no code below, only constants.
@@ -59,7 +59,7 @@
     (("HDWL")       "CONST."  "HDWL"            ""                         nil      T)))
 
 ;;; --------------------------------------------------------------------------
-;;; Naming convention  (identity keys -- see the v4 handoff, section 4.2)
+;;; Naming convention  (identity keys -- see the V4 handoff, section 4.2)
 ;;;   Storm_LINEA.cl / Storm_LINEA_INV.pro / Storm_LINEA_TOP.pro
 ;;; --------------------------------------------------------------------------
 (setq *pf-pro-roles*        '("INV" "TOP"))  ; positive role suffixes; neither = ERROR
@@ -121,8 +121,17 @@
 ;;; PFINVERT  (invert labels at structures)
 ;;; --------------------------------------------------------------------------
 ;;; Text base Y = lowest invert present MINUS this offset.  FIXED model units;
-;;; deliberately NOT scaled by sf (see the v4 handoff, section 4.10).
+;;; deliberately NOT scaled by sf (see the V4 handoff, section 4.10).
 (setq *pfi-invert-offset* 5.0)
+
+;;; Grade-break bracket (pfi:invert-bracket): the structure's in/out inverts
+;;; are read at the first grade break each side of the station -- the
+;;; structure edge -- so the bracket auto-widens with structure size.
+(setq *pfi-scan-window* 25.0)  ; ft each side -- must not reach the next structure
+(setq *pfi-scan-step*   0.5)   ; ft -- .pro sampling interval for the walk
+(setq *pfi-grade-tol*   0.05)  ; dslope (ft/ft) that reads as a break; catches
+                               ; drop faces, ignores mild run-to-run grade
+                               ; changes (the flat-case fallback covers those)
 
 ;;; --------------------------------------------------------------------------
 ;;; Anchor & ledger  (pfanchor.lsp)
@@ -130,7 +139,7 @@
 (setq *pfa-block-name*  "PF-GRIDANCHOR")
 (setq *pfa-layer*       "PF-ANCHOR")      ; created NO-PLOT, unlocked
 (setq *pfa-dict-name*   "PFXLEDGER")
-(setq *pfa-schema-ver*  2)                ; v2 = the v4 record (FILES/EXTENTS/...)
+(setq *pfa-schema-ver*  3)                ; schema 3 = the V4 record (FILES/EXTENTS/STATUS/SCOPE/PASS_/X_); matches pfanchor + README
 (setq *pfa-att-tags*    '("LINE" "UTIL" "STA0" "DATUM" "HPLOT" "VPLOT"))
 (setq *pfa-att-height*  0.8)
 (setq *pfa-att-gap*     1.6)
@@ -172,7 +181,7 @@
 (setq *pfset-fname-legacy* "pflabel-settings.txt")   ; v3 fallback, read once
 (setq *pfset-nod-name*     "PFTOOLS")                ; drawing dictionary (NOD)
 
-(princ "\npftools-cfg.lsp loaded (v4 configuration).")
+(princ "\npftools-cfg.lsp loaded (V4 configuration).")
 (princ)
 ;;; ==========================================================================
 ;;; end of pftools-cfg.lsp
