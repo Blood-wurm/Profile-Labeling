@@ -21,22 +21,24 @@
 ;;;                                  station + datum; on Cancel returns nil.
 ;;;   (pflabel:settings)         -- settings alist, auto-loading last-used
 ;;;                                  file (merged over defaults) on first read.
-;;;   (pflabel:tin)              -- selected .tin path string | nil (transient)
 ;;;   (pflabel:primary-pair)     -- (path . name) for the PRIMARY centerline
 ;;;                                  | nil                          (transient)
 ;;;   (pflabel:cl-pairs)         -- list of (path . name) for the SECONDARY
 ;;;                                  centerlines | nil              (transient)
 ;;;
-;;;   PERSISTED settings keys (13).  TIN / primary / secondaries are per-run
-;;;   and are deliberately NOT persisted:
+;;;   PERSISTED settings keys (13).  Primary / secondaries are per-run and are
+;;;   deliberately NOT persisted.  There is no TIN input: PFLABEL no longer
+;;;   reads a surface -- elevation rows are XXX.XX placeholders.
 ;;;     sta_pre sta_val sta_suf     Station-line   prefix / value / suffix
 ;;;     con_pre con_val con_suf     Construction   prefix / value / suffix
 ;;;     gl_pre  gl_val  gl_suf      Ground-line    prefix / value / suffix
-;;;       (prefix/suffix are LIVE and wrap the engine-generated values; the
-;;;        three value fields are display-only.  [line] in sta_suf is
-;;;        replaced per row with the line name.)
-;;;       (the nine above are DISPLAY-ONLY in this build -- greyed out in the
-;;;        dialog; the engine's label formats remain hardcoded)
+;;;       The three *_val fields are display-only (engine-generated).
+;;;       LIVE : sta_pre, sta_suf, con_suf, gl_suf -- they wrap engine values.
+;;;              [line] in sta_suf is replaced per row with the line name.
+;;;       DEAD : con_pre, gl_pre -- *pf-rule-table* (pftools-lib.lsp) now owns
+;;;              the construction and elevation prefixes per block type.  The
+;;;              tiles are still shown, harvested and persisted; the engine
+;;;              simply ignores them (see pflabel:label-fmt).
 ;;;     layer                       text layer name
 ;;;     style                       text style name
 ;;;     hscale vscale               PLOT scales (edited in the GRID dialog)
@@ -89,7 +91,6 @@
 (if (not (boundp '*pflabel-settings*)) (setq *pflabel-settings* nil))
 
 ;; Transient per-run inputs, populated on OK.  NOT persisted.
-(if (not (boundp '*pflabel-tin*))     (setq *pflabel-tin*     nil)) ; .tin | nil
 (if (not (boundp '*pflabel-primary*)) (setq *pflabel-primary* nil)) ; (path . name) | nil
 (if (not (boundp '*pflabel-cl*))      (setq *pflabel-cl*      nil)) ; ((path . name) ...)
 
@@ -99,7 +100,6 @@
 
 ;; Session-only last-browsed directories per file type (getfiled reopens
 ;; where the user last was instead of AutoCAD's default).
-(if (not (boundp '*pflabel-dir-tin*)) (setq *pflabel-dir-tin* ""))
 (if (not (boundp '*pflabel-dir-cl*))  (setq *pflabel-dir-cl*  ""))
 
 ;; (pflabel:browse title dirvar ext) -> full path | nil
@@ -181,7 +181,6 @@
 ;;; SECTION 3  --  Transient run-input accessors  (read by pflabel.lsp)
 ;;; ==========================================================================
 
-(defun pflabel:tin ()          *pflabel-tin*)
 (defun pflabel:primary-pair () *pflabel-primary*)
 (defun pflabel:cl-pairs ()     *pflabel-cl*)
 
@@ -328,16 +327,10 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 10  --  Surface / centerline actions (fired from within the dialog)
+;;; SECTION 10  --  Centerline actions (fired from within the dialog)
 ;;; ==========================================================================
 ;;; These mutate `cllist` / `primsel`, the live models held by show-dialog and
 ;;; reachable here via AutoLISP dynamic scope while start_dialog runs.
-
-;; TIN Select: browse one .tin, drop the path into the tin_file tile.
-(defun pflabel:on-tin-pick ( / f)
-  (if (setq f (pflabel:browse "Select Carlson Surface (.TIN) File"
-                              '*pflabel-dir-tin* "tin"))
-    (set_tile "tin_file" f)))
 
 ;; Primary Select: browse one .cl, ask its line name, set the primary slot.
 (defun pflabel:on-primary-pick (dcl_id / f base nm)
@@ -405,11 +398,11 @@
   (strcat *pftools-dir* "pfdialog.dcl"))
 
 ;; (pflabel:show-dialog) -> settings alist | nil
-;;   dcl_id, cur, cllist, primsel and tinsel are locals here; the action
-;;   callbacks reach them via dynamic scope while start_dialog runs.
+;;   dcl_id, cur, cllist and primsel are locals here; the action callbacks
+;;   reach them via dynamic scope while start_dialog runs.
 ;;   start_dialog is wrapped in vl-catch-all so a callback error can never
 ;;   leave the dialog loaded.
-(defun pflabel:show-dialog ( / dcl_id cur cllist primsel tinsel result)
+(defun pflabel:show-dialog ( / dcl_id cur cllist primsel result)
   (setq dcl_id (load_dialog (pflabel:dcl-file)))
   (if (< dcl_id 0)
     (progn (prompt "\nCould not load pfdialog.dcl.") nil)
@@ -422,7 +415,6 @@
                (prompt "\nCould not open the settings dialog.") nil)
         (progn
           (pflabel:populate-tiles cur)
-          (set_tile "tin_file" (if *pflabel-tin* *pflabel-tin* ""))
           (set_tile "primary_file" (if primsel (pflabel:cl-display primsel) ""))
           (pflabel:fill-cl-list cllist)
           ;; Pickers (nested dialogs) --------------------------------------
@@ -430,8 +422,7 @@
             "(set_tile \"layer\" (pflabel:pick-from-list dcl_id \"Select Layer\" (pflabel:layer-list) (get_tile \"layer\")))")
           (action_tile "pick_style"
             "(set_tile \"style\" (pflabel:pick-from-list dcl_id \"Select Text Style\" (pflabel:style-list) (get_tile \"style\")))")
-          ;; Surface + centerlines -----------------------------------------
-          (action_tile "pick_tin"     "(pflabel:on-tin-pick)")
+          ;; Centerlines ---------------------------------------------------
           (action_tile "pick_primary" "(pflabel:on-primary-pick dcl_id)")
           (action_tile "cl_add"       "(pflabel:on-cl-add dcl_id)")
           (action_tile "cl_remove"    "(pflabel:on-cl-remove)")
@@ -440,7 +431,7 @@
           (action_tile "load_btn"     "(pflabel:on-load)")
           ;; OK / Cancel  (capture tile state before unload) ---------------
           (action_tile "ok"
-            "(setq cur (pflabel:harvest-tiles) tinsel (get_tile \"tin_file\")) (done_dialog 1)")
+            "(setq cur (pflabel:harvest-tiles)) (done_dialog 1)")
           (action_tile "cancel"       "(done_dialog 0)")
           (setq result (vl-catch-all-apply 'start_dialog '()))
           (unload_dialog dcl_id)
@@ -453,7 +444,6 @@
              ;; Commit: merge harvested tiles over stored settings so the
              ;; grid-dialog scale keys survive the write.
              (setq *pflabel-settings* (pflabel:merge (pflabel:settings) cur))
-             (setq *pflabel-tin*     (if (= tinsel "") nil tinsel))
              (setq *pflabel-primary* primsel)
              (setq *pflabel-cl*      cllist)
              (pflabel:write-settings (pflabel:auto-file) *pflabel-settings*)
