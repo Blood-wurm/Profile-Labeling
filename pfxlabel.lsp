@@ -86,7 +86,7 @@
 ;;; SECTION 2  --  Error handler
 ;;; ==========================================================================
 
-(defun pfxl:*error* (msg)
+(defun pfxl:*error* (msg / cw)
   (if (and msg (/= msg "Function cancelled") (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFXLABEL error: " msg)))
   (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
@@ -94,8 +94,9 @@
   ;; group closes, so the restore itself isn't part of the undo group)
   (if *pfxl-view-save*
     (progn
-      (command-s "_.ZOOM" "_Center"
-                 (car *pfxl-view-save*) (cdr *pfxl-view-save*))
+      (setq cw (pfxl:zoom-corners (car *pfxl-view-save*)
+                                  (cdr *pfxl-view-save*)))
+      (command-s "_.ZOOM" "_Window" (car cw) (cadr cw))
       (setq *pfxl-view-save* nil)))
   (setq *error* *pfxl-prev-error*)
   (princ))
@@ -323,6 +324,26 @@
 ;;; SECTION 6  --  C:PFXLABEL
 ;;; ==========================================================================
 
+;; (pfxl:zoom-corners ctr h) -> (p1 p2)
+;;   Window corners reproducing a center+height view at the current screen
+;;   aspect.  ZOOM _Center <pt> <height> miscomputes in this Carlson/Map
+;;   build (fails "No Center found for specified point"); ZOOM _Window is
+;;   the robust equivalent, so every view change routes through here.  The
+;;   framed area is identical -- height drives, width follows viewport aspect.
+(defun pfxl:zoom-corners (ctr h / scr asp w)
+  (setq scr (getvar "SCREENSIZE")
+        asp (/ (car scr) (cadr scr))
+        w   (* h asp))
+  (list (list (- (car ctr) (* 0.5 w)) (- (cadr ctr) (* 0.5 h)))
+        (list (+ (car ctr) (* 0.5 w)) (+ (cadr ctr) (* 0.5 h)))))
+
+;; (pfxl:zoom-cwh ctr h) -> nil   window zoom in NORMAL command context.
+;;   The *error* handler must NOT use this (command is illegal there) -- it
+;;   issues its own command-s zoom off pfxl:zoom-corners.
+(defun pfxl:zoom-cwh (ctr h / cw)
+  (setq cw (pfxl:zoom-corners ctr h))
+  (command "_.ZOOM" "_Window" (car cw) (cadr cw)))
+
 ;; (pfxl:zoom-to xf e sf) -> nil
 ;;   Verification zoom+pause on one just-drawn crossing (boss ask): frame the
 ;;   station line (grid top down to the line extension) and DELAY.  No-op when
@@ -333,9 +354,8 @@
       (setq x   (pf:station->profile-x (pfa:xr-tsta e) xf)
             ylo (- (pf:xf-basey xf) (* *pfx-line-ext* sf))
             yhi (pf:grid-top-y xf))
-      (command "_.ZOOM" "_Center"
-               (list x (* 0.5 (+ ylo yhi)) 0.0)
-               (* 1.4 (- yhi ylo)))
+      (pfxl:zoom-cwh (list x (* 0.5 (+ ylo yhi)) 0.0)
+                     (* 1.4 (- yhi ylo)))
       (command "_.DELAY" (fix (* *pfx-zoom-pause* 1000.0))))))
 
 (defun c:PFXLABEL ( / anchor xf style sf ht toplines work recon act ndup
@@ -420,8 +440,8 @@
                                        skips))))
                  ;; restore the pre-run view after the verification zooms
                  (if (and *pfxl-view-save* (> drawn 0))
-                   (command "_.ZOOM" "_Center"
-                            (car *pfxl-view-save*) (cdr *pfxl-view-save*)))
+                   (pfxl:zoom-cwh (car *pfxl-view-save*)
+                                  (cdr *pfxl-view-save*)))
                  (setq *pfxl-view-save* nil)
                  ;; append this pass's handles to the crossing pass ledger
                  (if newh
