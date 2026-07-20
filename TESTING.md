@@ -45,9 +45,9 @@ surprises):
 
 ## 1. Project root + AUTO registration (PFSETUP first run)
 
-- [ ] 1.1 Fresh drawing: `PFSETUP` prompts for a `.cl` in the data folder;
+- [x] 1.1 Fresh drawing: `PFSETUP` prompts for a `.cl` in the data folder;
       root stored (verify: `PFROOT` shows it; survives save/reopen).
-- [ ] 1.2 AUTO names every PF-NAME profile: each gets `Named <TY> '<NM>'`
+- [x] 1.2 AUTO names every PF-NAME profile: each gets `Named <TY> '<NM>'`
       with its `.cl` + INV/TOP note. Count matches the sheet.
 - [ ] 1.3 **Skip cases report loudly, never guess:** a PF-NAME with no
       matching `.cl` → SKIPPED; two `.cl` files matching one name → SKIPPED
@@ -57,7 +57,7 @@ surprises):
       if the fix is worth it.
 - [ ] 1.5 The **Refresh button** re-scans: idempotent — nothing re-named,
       no duplicates.
-- [ ] 1.6 **Registry manager behaves:** list shows every profile with
+- [x] 1.6 **Registry manager behaves:** list shows every profile with
       [PLACED]/[unplaced]; Place on a placed row / Edit on a stub / no
       selection → errtile message, dialog stays open; double-click places
       a stub and edits an anchor; empty registry greys Place/Place
@@ -65,7 +65,7 @@ surprises):
 
 ## 2. PFSETUP placement
 
-- [ ] 2.1 Dialog validation rejects: empty name; zero/negative scales;
+- [x] 2.1 Dialog validation rejects: empty name; zero/negative scales;
       empty datum; ONE `.pro` bound (pair rule); `.pro` whose name ≠ the
       Name field; one `.tin` bound. Each shows the errtile message, no
       crash. **Slot role guards:** picking a `_TOP.pro` on the Invert
@@ -74,12 +74,12 @@ surprises):
       OK).
 - [ ] 2.2 Material popup follows the Type popup; last-used material per
       type sticks across placements in the session.
-- [ ] 2.3 Extents picks: **running osnaps on** — pick the corners and check
+- [x] 2.3 Extents picks: **running osnaps on** — pick the corners and check
       the anchor landed where you meant (known weakness; note how bad it
       is). Top-right left/below lower-left → refused.
 - [ ] 2.4 Datum field: prefilled with the session-last value on the second
       grid; edit prefills the stored datum.
-- [ ] 2.5 Placed anchor: block visible on `PF-ANCHOR` (no-plot), attributes
+- [x] 2.5 Placed anchor: block visible on `PF-ANCHOR` (no-plot), attributes
       LINE/UTIL/STA0/DATUM/HPLOT/VPLOT populated and plausible.
 - [ ] 2.6 **One `U` removes exactly one grid's placement** (not the batch,
       not the AUTO stubs).
@@ -103,7 +103,7 @@ surprises):
       elevation row placeholder; HDWL drops the elevation row.
 - [ ] 3.2 **Stub contribution:** with a secondary line UNPLACED (stub
       only), the junction ID still includes it.
-- [ ] 3.3 Stepped-top grid: labels sit on the top **at each station**, not
+- [x] 3.3 Stepped-top grid: labels sit on the top **at each station**, not
       the nominal top. A station past the grid edge (no MJR hit) skips with
       a report.
 - [ ] 3.4 Label All: count matches structures on the line; sorted by
@@ -123,12 +123,12 @@ surprises):
 
 ## 4. PFXLABEL
 
-- [ ] 4.1 First run: discovery reports N new = the real crossing count; the
+- [x] 4.1 First run: discovery reports N new = the real crossing count; the
       crossings DIALOG lists every crossing OUTSTANDING with the header
       counts matching. **No table** is drawn anywhere (the crossings-table
       subsystem is retired — if a `PF-TABLE` layer or `PF-TABLE_*` block
       appears, that's a finding).
-- [ ] 4.2 **Zoom-pause:** each drawn crossing framed ~1.5 s, view restored
+- [x] 4.2 **Zoom-pause:** each drawn crossing framed ~1.5 s, view restored
       to pre-run after the pass. Esc **during** the pause → clean unwind.
       Set `*pfx-zoom-pause*` to 0 → no zooming.
 - [ ] 4.3 Select a [LABELED] row + Label Selected → duplicate confirm
@@ -234,3 +234,16 @@ surprises):
 **Log findings** as: test #, expected vs observed, severity
 (crash / wrong-output / annoyance). Wrong-output beats crash — a crash is
 honest, silently wrong numbers on a plan sheet are not.
+
+NOTES:
+
+•	.cl crossings and shared stations need to be found at pfsetup.
+•	For pflabel and pfinvert we don’t need to run checks against other utility types. If STORM we only need to compare to STORM etc.
+•	Performance improvements?
+•	Pfxlabel suppressed cmdecho for .cl checks. Need at least “Checking for crossings” so the user doesn’t think it is freezing up.
+•	Pfxlabel “Discovery: 0 new, 0 updated, 0 moved.” is a bit confusing makes it seem like nothing was labeled. Probably move this to an output only if something has changed.
+•	Pfxlabel dropped the corossing line 
+•	First pfxlabel run. == PFXLABEL: 0 labeled, 1 skipped ==
+  SKIPPED  SANITARY_A @ tgt sta 5+14.38  -- SOURCE INVERT UNREADABLE (profile z)
+•	Didn’t recognize profile names in drawing. (Don’t need this anyway.)
+•	PICKADD variable change?

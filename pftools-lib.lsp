@@ -57,17 +57,17 @@
               ((<= dn *pf-offset-tol*) (list stan dn ptn))
               (T nil))))))))
 
-;; Profile wrappers (Road API "profile z" / "profile sta range") -----------
+;; Profile wrappers (Road API "profile_z" / "profile_sta_range") -----------
 ;; A .pro is READ, never drawn -- the invert/top elevations are authored data.
 
 ;; (pf:pro-z pro sta) -> elevation | nil
 (defun pf:pro-z (pro sta / r)
-  (setq r (vl-catch-all-apply *pf-road-fn* (list "profile z" pro sta)))
+  (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_z" pro sta)))
   (if (and (not (vl-catch-all-error-p r)) (numberp r)) r nil))
 
 ;; (pf:pro-range pro) -> (s0 s1) | nil
 (defun pf:pro-range (pro / r)
-  (setq r (vl-catch-all-apply *pf-road-fn* (list "profile sta range" pro)))
+  (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_sta_range" pro)))
   (if (and (not (vl-catch-all-error-p r)) (listp r)) r nil))
 
 ;; (pf:pipe-at inv-pro top-pro sta) -> (inv-elev . nominal-size) | nil
