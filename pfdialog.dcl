@@ -253,22 +253,14 @@ pfsetup_main : dialog {
 }
 
 
-// ---- PFLABEL / PFINVERT: the run dialog -----------------------------------
-// Dialog-first every run (the Carlson idiom).  Target popup = the registry;
-// choosing an unplaced profile and labeling IS consent to place it (the
-// extent picks follow).  The structure list replaces the old All/Pick
-// keyword: multi-select, [LABELED] marked from the drawing itself.
+// ---- PFLABEL: the run dialog ----------------------------------------------
+// Pick-first now: the target is chosen by pfs:choose-or-place BEFORE this
+// opens (PFXLABEL idiom), so there is NO target popup -- this dialog lists a
+// single target's structures.  Multi-select; [LABELED] marked from the
+// drawing itself.  Wrong target -> Cancel and rerun.
 pf_run : dialog {
   label = "PFTools - Structure Labels";
   : text { key = "run_title"; label = ""; width = 62; }
-  spacer;
-  : popup_list {
-    key         = "run_tgt";
-    label       = "Target Profile";
-    mnemonic    = "T";
-    width       = 48;
-    fixed_width = true;
-  }
   spacer;
   : text { key = "run_head"; label = "  Structure             Station          Status"; width = 62; }
   : list_box {
@@ -284,6 +276,38 @@ pf_run : dialog {
     : button { key = "run_sel";  label = "Label Selected"; mnemonic = "L"; width = 16; is_default = true; }
     : button { key = "run_all";  label = "Label All";      mnemonic = "A"; width = 16; }
     : button { key = "run_set";  label = "Settings...";    mnemonic = "S"; width = 16; }
+  }
+  : row {
+    fixed_width = true;
+    alignment   = "centered";
+    : button { key = "cancel"; label = "Cancel"; is_cancel = true; width = 11; }
+    : button { key = "help";   label = "Help";   width = 11; }
+  }
+}
+
+
+// ---- PFINVERT: its own run dialog (pfi_run) -------------------------------
+// Same shape as pf_run but a separate definition by design -- a home for
+// invert-specific fields later without disturbing PFLABEL.  Tile keys are
+// pi_* so the pfi: handlers stay independent.  Pick-first, no target popup.
+pfi_run : dialog {
+  label = "PFINVERT - Invert Labels";
+  : text { key = "pi_title"; label = ""; width = 62; }
+  spacer;
+  : text { key = "pi_head"; label = "  Structure             Station          Status"; width = 62; }
+  : list_box {
+    key             = "pi_list";
+    width           = 62;
+    height          = 12;
+    multiple_select = true;
+  }
+  : text { key = "pi_count"; label = ""; width = 62; }
+  errtile;
+  : row {
+    fixed_width = true;
+    : button { key = "pi_sel";  label = "Label Selected"; mnemonic = "L"; width = 16; is_default = true; }
+    : button { key = "pi_all";  label = "Label All";      mnemonic = "A"; width = 16; }
+    : button { key = "pi_set";  label = "Settings...";    mnemonic = "S"; width = 16; }
   }
   : row {
     fixed_width = true;

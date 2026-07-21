@@ -88,6 +88,9 @@
 
 ;; .cl Select: sets the path and auto-fills identity from the filename.
 (defun pfs:on-cl-pick ( / f idx)
+  ;; Route to company standard folder before opening dialog
+  (setq *pfset-dir-cl* (pfset:get-company-dir "cl"))
+  
   (if (setq f (pfset:browse "Select Centerline (.CL) File"
                             '*pfset-dir-cl* "cl"))
     (progn
@@ -104,6 +107,9 @@
 ;; .pro slot picks: each button owns a ROLE; a picked file must carry it.
 ;; The slot pattern is the Carlson file-row idiom (named button + path).
 (defun pfs:on-pro-pick (role / f pr)
+  ;; Route to company standard folder before opening dialog
+  (setq *pfset-dir-pro* (pfset:get-company-dir "pro"))
+  
   (if (setq f (pfset:browse
                 (strcat "Select the _" role " Profile (.PRO) File")
                 '*pfset-dir-pro* "pro"))
@@ -119,6 +125,9 @@
 
 ;; .tin slot picks: DESIGN_* goes in the Design slot, anything else in Exist.
 (defun pfs:on-tin-pick (design-p / f)
+  ;; Route to company standard folder before opening dialog
+  (setq *pfset-dir-tin* (pfset:get-company-dir "tin"))
+  
   (if (setq f (pfset:browse
                 (if design-p
                   "Select the DESIGN_* (proposed) Surface (.TIN) File"
@@ -351,58 +360,67 @@
       (setq found (strcat dir f))))
   found)
 
-;; (pfs:auto dir) -> nil
+;; (pfs:auto) -> nil
 ;;   Names every profile the sheet declares; loud-skips both directions.
 ;;   Idempotent -- placed profiles and existing stubs pass through.
-(defun pfs:auto (dir / names pair ty nm m inv top new f base pos)
+(defun pfs:auto ( / names pair ty nm m inv top new f base pos clDir proDir)
   (prompt "\nAUTO registration: naming profiles sheet-wide...")
-  (setq names (pfs:scan-sheet-names) new 0)
-  (if (null names)
-    (prompt (strcat "\n  No PF-NAME text found on layer "
-                    *pfg-name-layer* "."))
-    (progn
-      (foreach pair names
-        (setq ty (car pair) nm (cdr pair))
-        (cond
-          ((pfa:find-anchor nm ty))            ; placed -- nothing to do
-          ((pfa:stub-get ty nm))               ; already named
-          (T
-           (setq m (pfs:cl-lookup dir ty nm))
-           (cond
-             ((null m)
-              (prompt (strcat "\n  SKIPPED " ty " '" nm "' -- no "
-                              ty "_" nm ".cl in the project folder.")))
-             ((eq m 'AMBIG)
-              (prompt (strcat "\n  SKIPPED " ty " '" nm
-                              "' -- multiple .cl files match; never guessed.")))
-             (T
-              (setq inv (pfs:pro-lookup dir ty nm "INV")
-                    top (pfs:pro-lookup dir ty nm "TOP"))
-              (pfa:stub-put ty nm m inv top)
-              ;; file the .cl shape ONCE, now -- label commands read it later
-              ;; instead of re-tracing the line every run
-              (pf:cl-geom m)
-              (setq new (1+ new))
-              (prompt (strcat "\n  Named " ty " '" nm "'  ("
-                              (pfs:file-display m)
-                              (cond ((and inv top) " + INV/TOP pro")
-                                    ((or inv top)  " + ONE pro only")
-                                    (T             " -- no .pro pair"))
-                              ")")))))))
-      ;; reverse direction: a .cl with no grid name on the sheet
-      (foreach f (vl-directory-files dir "*.cl" 1)
-        (setq base (vl-filename-base f)
-              pos  (vl-string-search "_" base))
-        (if pos
-          (progn
-            (setq ty (strcase (substr base 1 pos))
-                  nm (strcase (substr base (+ pos 2))))
-            (if (and (member ty *pf-types*)
-                     (null (pfa:find-anchor nm ty))
-                     (null (pfa:stub-get ty nm)))
-              (prompt (strcat "\n  NOTE: " f
-                              " has no grid name on the sheet."))))))
-      (prompt (strcat "\n  " (itoa new) " profile(s) named."))))
+  
+  ;; Fetch standard directories independently
+  (setq clDir  (pfset:get-company-dir "cl")
+        proDir (pfset:get-company-dir "pro")
+        names  (pfs:scan-sheet-names) 
+        new    0)
+  
+  (if (null clDir)
+    (prompt "\n  Cannot auto-register: Centerline directory not found.")
+    (if (null names)
+      (prompt (strcat "\n  No PF-NAME text found on layer " *pfg-name-layer* "."))
+      (progn
+        (foreach pair names
+          (setq ty (car pair) nm (cdr pair))
+          (cond
+            ((pfa:find-anchor nm ty))            ; placed -- nothing to do
+            ((pfa:stub-get ty nm))               ; already named
+            (T
+             ;; Route centerline lookup to clDir
+             (setq m (pfs:cl-lookup clDir ty nm))
+             (cond
+               ((null m)
+                (prompt (strcat "\n  SKIPPED " ty " '" nm "' -- no "
+                                ty "_" nm ".cl in the alignments folder.")))
+               ((eq m 'AMBIG)
+                (prompt (strcat "\n  SKIPPED " ty " '" nm
+                                "' -- multiple .cl files match; never guessed.")))
+               (T
+                ;; Route profile lookups to proDir
+                (setq inv (if proDir (pfs:pro-lookup proDir ty nm "INV") nil)
+                      top (if proDir (pfs:pro-lookup proDir ty nm "TOP") nil))
+                (pfa:stub-put ty nm m inv top)
+                ;; file the .cl shape ONCE, now -- label commands read it later
+                (pf:cl-geom m)
+                (pfa:twin-put m (pf:cl-twin-handle m *pf-corridor*)) ; file the drawn twin once
+                (setq new (1+ new))
+                (prompt (strcat "\n  Named " ty " '" nm "'  ("
+                                (pfs:file-display m)
+                                (cond ((and inv top) " + INV/TOP pro")
+                                      ((or inv top)  " + ONE pro only")
+                                      (T             " -- no .pro pair"))
+                                ")")))))))
+        ;; reverse direction: a .cl with no grid name on the sheet
+        (foreach f (vl-directory-files clDir "*.cl" 1)
+          (setq base (vl-filename-base f)
+                pos  (vl-string-search "_" base))
+          (if pos
+            (progn
+              (setq ty (strcase (substr base 1 pos))
+                    nm (strcase (substr base (+ pos 2))))
+              (if (and (member ty *pf-types*)
+                       (null (pfa:find-anchor nm ty))
+                       (null (pfa:stub-get ty nm)))
+                (prompt (strcat "\n  NOTE: " f
+                                " has no grid name on the sheet."))))))
+        (prompt (strcat "\n  " (itoa new) " profile(s) named.")))))
   (princ))
 
 
@@ -502,6 +520,7 @@
         ;; file the .cl shape now (no-op if AUTO already did) so a directly
         ;; placed profile is cached too -- label commands never re-trace it
         (pf:cl-geom cl)
+        (pfa:twin-put cl (pf:cl-twin-handle cl *pf-corridor*)) ; file the drawn twin
         (setq notes (pfs:bind-files anchor res))
         (pfa:status-put anchor 0 notes)
         (if stub (pfa:stub-del (car stub) (cadr stub)))
@@ -754,45 +773,45 @@
           ((= code 6) (cons 'refresh nil))
           (T nil))))))
 
-(defun c:PFSETUP ( / dir reg going act r)
+(defun c:PFSETUP ( / rootDir reg going act r)
   (setq *pfs-prev-error* *error*
         *error*          pfs:*error*
         *pfs-undo-open*  nil)
   (pf:load-apis)
-  ;; project data root (NOD; set once)
-  (setq dir (pfset:root-get))
-  (if (null dir)
+  
+  ;; Bootstrap: If PFROOT hasn't been set in this drawing yet, prompt for it once
+  (setq rootDir (pfset:root-get))
+  (if (null rootDir)
     (progn
-      (setq dir (pfset:browse "Select ANY .cl in the Project Data Folder"
-                              '*pfset-dir-cl* "cl"))
-      (if dir
+      (setq rootDir (pfset:browse "Select ANY .cl in the Project Data Folder to Initialize Project"
+                                  '*pfset-dir-cl* "cl"))
+      (if rootDir
         (progn
-          (setq dir (strcat (vl-filename-directory dir) "\\"))
-          (pfset:root-set dir)
-          (prompt (strcat "\nProject data root set: " dir))))))
-  (if (null dir)
-    (prompt "\nNo project data folder -- cancelled.")
-    (progn
-      ;; AUTO fires when the drawing has no registry
-      (if (null (pfa:registry)) (pfs:auto dir))
-      (setq going T)
-      (while going
-        (setq reg (pfa:registry)
-              act (pfs:registry-dialog reg))
-        (cond
-          ((null act) (setq going nil))
-          ((eq (car act) 'refresh) (pfs:auto dir))
-          ((eq (car act) 'new)     (pfs:place-one nil))
-          ((eq (car act) 'place-all)
-           (foreach r reg
-             (if (eq (caddr r) 'STUB)
-               (progn
-                 (prompt (strcat "\n== " (car r) " '" (cadr r) "' =="))
-                 (pfs:place-one (nth 4 r))))))
-          ((eq (car act) 'place)
-           (pfs:place-one (nth 4 (nth (cdr act) reg))))
-          ((eq (car act) 'edit)
-           (pfs:edit-one (nth 3 (nth (cdr act) reg))))))))
+          (setq rootDir (strcat (vl-filename-directory rootDir) "\\"))
+          (pfset:root-set rootDir)
+          (prompt (strcat "\nProject data root initialized: " rootDir))))))
+
+  ;; AUTO fires when the drawing has no registry
+  (if (null (pfa:registry)) (pfs:auto))
+  
+  (setq going T)
+  (while going
+    (setq reg (pfa:registry)
+          act (pfs:registry-dialog reg))
+    (cond
+      ((null act) (setq going nil))
+      ((eq (car act) 'refresh) (pfs:auto))
+      ((eq (car act) 'new)     (pfs:place-one nil))
+      ((eq (car act) 'place-all)
+       (foreach r reg
+         (if (eq (caddr r) 'STUB)
+           (progn
+             (prompt (strcat "\n== " (car r) " '" (cadr r) "' =="))
+             (pfs:place-one (nth 4 r))))))
+      ((eq (car act) 'place)
+       (pfs:place-one (nth 4 (nth (cdr act) reg))))
+      ((eq (car act) 'edit)
+       (pfs:edit-one (nth 3 (nth (cdr act) reg))))))
   (setq *error* *pfs-prev-error*)
   (princ))
 

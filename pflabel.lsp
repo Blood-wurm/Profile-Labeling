@@ -141,23 +141,30 @@
 ;;; SECTION 3  --  Run setup helpers
 ;;; ==========================================================================
 
-;; (pflabel:build-lines pairs) -> list of (clfile name start end verts)
-;;   Geometry comes from the cached GEOM store (pf:cl-geom) -- the proximity
-;;   filter's verts are the .cl's OWN sampled shape, not a hunted-for drawn
-;;   twin, so no whole-drawing scan and no Road-API re-sampling on a cache hit.
-(defun pflabel:build-lines (pairs / tbl file nm geom rng vts entry p)
+(defun pflabel:build-lines (pairs / tbl file nm geom rng vts h entry p)
   (setq tbl '())
   (foreach p pairs
     (setq file (car p) nm (cdr p))
-    (if (setq geom (pf:cl-geom file))
+    (if (setq geom (pf:cl-geom file))          ; range (cached); sampled verts warm PFXING
       (progn
-        (setq rng   (car geom)
-              vts   (cdr geom)
-              entry (list file nm (car rng) (cadr rng) vts)
+        (setq rng (car geom)
+              ;; membership pre-filter = the DRAWN twin's LIVE verts (exact PIs,
+              ;; no sampled corner-cut at deflections), read via the filed handle
+              h   (pfa:twin-get file)
+              vts (pf:twin-verts h))
+        ;; setup files the twin; self-heal if it's missing (pre-feature registry,
+        ;; New-placed line, or a purged handle) -- one scan, then filed
+        (if (null vts)
+          (progn
+            (setq h (pf:cl-twin-handle file *pf-corridor*))
+            (if h (progn (pfa:twin-put file h) (setq vts (pf:twin-verts h))))))
+        (setq entry (list file nm (car rng) (cadr rng) vts)
               tbl   (cons entry tbl))
         (prompt (strcat "\nLoaded line '" nm "' (Sta " (pf:fmt-station (car rng))
                         " to " (pf:fmt-station (cadr rng)) ")"
-                        (if vts "." "  [geometry unavailable -- proximity filter off]."))))
+                        (if vts
+                          "."
+                          "  [no drawn centerline matched -- pre-filter off, authored test only]."))))
       (prompt (strcat "\nError: Could not read station range from " file))))
   (reverse tbl))
 
@@ -209,10 +216,10 @@
       (setq idx (pf:idx-add idx (car h) (cadr h)))))
   (mapcar '(lambda (pair) (cons (car pair) (vl-sort (cdr pair) '<))) idx))
 
-;; (pflabel:label-fmt settings) -> the prefix/suffix strings the engine uses
-(defun pflabel:label-fmt (settings)
+(defun pflabel:label-fmt (settings util)
   (mapcar
-    '(lambda (k) (cons k (cdr (assoc k settings))))
+    '(lambda (k)
+       (cons k (pf:subst-token (cdr (assoc k settings)) "[util]" util)))
     '("sta_pre" "sta_suf" "con_suf" "gl_suf")))
 
 
@@ -253,61 +260,46 @@
     (if (<= (abs (- v x)) eps) (setq found T)))
   found)
 
-;; (pflabel:rd-fill) -> nil   Repopulate the structure list for the current
-;;   target.  rd-* live in pflabel:run-dialog (dynamic scope).
-(defun pflabel:rd-fill ( / r primary placed xf xs eps ndone p i v)
-  (setq r       (nth rd-cur rd-reg)
-        primary (cadr r)
-        placed  (eq (caddr r) 'PLACED)
-        rd-pend (if (pflabel:line-loaded-p primary rd-lines)
-                  (pflabel:pending rd-inlets rd-lines primary)
+;; ---- Run dialog: RENDER + handlers (rd-* live in pflabel:run-dialog) -------
+;; rd-fill only PAINTS; rd-compute does the heavy work BEFORE new_dialog.
+
+(defun pflabel:rd-fill ( / i p v ndone)
+  (setq i 0)
+  (start_list "run_list")
+  (foreach p rd-pend
+    (add_list (strcat (pfset:pad (caddr p) 22)
+                      (pfset:pad (pf:fmt-station (car p)) 16)
+                      (if (nth i rd-status) "[LABELED]" "")))
+    (setq i (1+ i)))
+  (end_list)
+  (setq ndone 0)
+  (foreach v rd-status (if v (setq ndone (1+ ndone))))
+  (set_tile "run_count"
+            (strcat (itoa (length rd-pend)) " structure(s) on '" rd-primary
+                    "'; " (itoa ndone) " already labeled."))
+  (set_tile "error" "")
+  (princ))
+
+;; ALL heavy work, BEFORE new_dialog.  -> T when there is a list; nil on no line.
+;; This is what keeps Road-API / recon work OUT of the dialog-init block.
+(defun pflabel:rd-compute ( / xf xs eps p)
+  (setq rd-pend (if (pflabel:line-loaded-p rd-primary rd-lines)
+                  (pflabel:pending rd-inlets rd-lines rd-primary)
                   'NOLINE))
   (cond
-    ((eq rd-pend 'NOLINE)
-     (setq rd-pend '())
-     (start_list "run_list") (end_list)
-     (set_tile "run_count"
-               (strcat "Centerline for '" primary
-                       "' could not be read -- nothing to list.")))
+    ((eq rd-pend 'NOLINE) (setq rd-pend '()) nil)
     (T
-     (setq xs  (if placed (pflabel:pass-xs (nth 3 r) rd-pass))
-           xf  (if placed (pfa:anchor->xform (nth 3 r)))
-           eps (if xf
-                 (max *pfa-recon-eps*
-                      (* 1.5 (pf:text-height (pf:xf-hplot xf))))
-                 *pfa-recon-eps*)
-           ndone 0
+     (setq xf        (pfa:anchor->xform rd-anchor)
+           xs        (pflabel:pass-xs rd-anchor rd-pass)
+           eps       (max *pfa-recon-eps*
+                          (* 1.5 (pf:text-height (pf:xf-hplot xf))))
            rd-status '())
      (foreach p rd-pend
        (setq rd-status
              (append rd-status
-                     (list (and placed xf
-                                (pflabel:labeled-x-p
-                                  (pf:station->profile-x (car p) xf)
-                                  xs eps))))))
-     (setq i 0)
-     (start_list "run_list")
-     (foreach p rd-pend
-       (add_list (strcat (pfset:pad (caddr p) 22)
-                         (pfset:pad (pf:fmt-station (car p)) 16)
-                         (cond ((nth i rd-status) "[LABELED]")
-                               (placed "")
-                               (T "(unplaced grid)"))))
-       (setq i (1+ i)))
-     (end_list)
-     (foreach v rd-status (if v (setq ndone (1+ ndone))))
-     (set_tile "run_count"
-               (strcat (itoa (length rd-pend)) " structure(s) on '" primary
-                       "'"
-                       (if placed
-                         (strcat "; " (itoa ndone) " already labeled.")
-                         "; grid unplaced -- labeling will place it.")))))
-  (set_tile "error" "")
-  (princ))
-
-(defun pflabel:rd-on-tgt ()
-  (setq rd-cur (atoi (get_tile "run_tgt")))
-  (pflabel:rd-fill))
+                     (list (pflabel:labeled-x-p
+                             (pf:station->profile-x (car p) xf) xs eps)))))
+     T)))
 
 (defun pflabel:rd-sel ( / s idxs out i)
   (setq s (get_tile "run_list"))
@@ -316,12 +308,9 @@
     (progn
       (setq idxs (read (strcat "(" s ")")) out '())
       (foreach i idxs (setq out (cons (nth i rd-pend) out)))
-      (setq rd-res (list (cons 'entry (nth rd-cur rd-reg))
-                         (cons 'mode "Sel")
-                         (cons 'sel (reverse out))
-                         ;; hand the already-built line table + inlets to setup
-                         ;; so it need not rebuild them (dialog built them once)
-                         (cons 'lines rd-lines)
+      (setq rd-res (list (cons 'mode   "Sel")
+                         (cons 'sel    (reverse out))
+                         (cons 'lines  rd-lines)
                          (cons 'inlets rd-inlets)))
       (done_dialog 1))))
 
@@ -329,87 +318,74 @@
   (if (null rd-pend)
     (set_tile "error" "No structures on this line -- nothing to label.")
     (progn
-      (setq rd-res (list (cons 'entry (nth rd-cur rd-reg))
-                         (cons 'mode "All")
-                         (cons 'sel rd-pend)
-                         (cons 'lines rd-lines)
+      (setq rd-res (list (cons 'mode   "All")
+                         (cons 'sel    rd-pend)
+                         (cons 'lines  rd-lines)
                          (cons 'inlets rd-inlets)))
       (done_dialog 1))))
 
-;; (pflabel:run-dialog title passname pre-anchor) -> result alist | nil
-;;   ('entry . registry-row) ('mode . "All"|"Sel") ('sel . pend-subset).
-;;   pre-anchor (screen-picked) preselects the target popup.
-(defun pflabel:run-dialog (title passname pre-anchor
-                           / rd-reg rd-lines rd-inlets rd-pend rd-status
-                             rd-cur rd-res rd-pass dcl_id pairs clf at r i
+;; (pflabel:run-dialog title passname anchor) -> result alist | nil
+;;   Target is ALREADY resolved (pfs:choose-or-place, before this call).  Line
+;;   table, inlets, pending and recon all run BEFORE new_dialog -- the init
+;;   block only paints, which is what cured the ghost-dropdown freeze.  No
+;;   target popup: this dialog shows ONE target's structures.  The line table is
+;;   built exactly as the pre-refactor code did: every registry .cl via
+;;   pfxl:entry-cl (the proven path).
+(defun pflabel:run-dialog (title passname anchor
+                           / rd-anchor rd-primary rd-pass rd-lines rd-inlets
+                             rd-pend rd-status rd-res dcl_id xf cl pairs clf r
                              result)
-  (setq rd-reg (pfa:registry) rd-pass passname rd-res nil)
+  (setq rd-anchor anchor rd-pass passname rd-res nil
+        xf        (pfa:anchor->xform anchor))
   (cond
-    ((null rd-reg)
-     (prompt "\nNothing registered -- run PFSETUP.")
-     nil)
+    ((null xf)
+     (prompt "\nTarget grid record unreadable -- cannot label.") nil)
+    ((null (setq cl (pf:xf-get 'clfile xf)))
+     (prompt "\nNo .cl on record for this target -- run PFSETUP (edit).") nil)
     (T
-     ;; the line table is target-independent: every registry .cl, once
-     (setq pairs '())
-     (foreach r rd-reg
+     (setq rd-primary (pf:xf-get 'name xf) pairs '())
+     (foreach r (pfa:registry)
        (if (setq clf (pfxl:entry-cl r))
          (setq pairs (cons (cons clf (cadr r)) pairs))))
      (setq pairs     (pf:dedupe-pairs (reverse pairs))
            rd-lines  (pflabel:build-lines pairs)
            rd-inlets (pflabel:gather-inlets))
-     ;; preselect: the screen-picked anchor, else the first PLACED entry
-     (setq rd-cur nil i 0)
-     (if pre-anchor
+     (if (null (pflabel:rd-compute))
        (progn
-         (setq at (pfa:read-attribs pre-anchor))
-         (foreach r rd-reg
-           (if (and (null rd-cur)
-                    (= (car r) (strcase (pfa:att "UTIL" at)))
-                    (= (cadr r) (strcase (pfa:att "LINE" at))))
-             (setq rd-cur i))
-           (setq i (1+ i)))))
-     (setq i 0)
-     (foreach r rd-reg
-       (if (and (null rd-cur) (eq (caddr r) 'PLACED)) (setq rd-cur i))
-       (setq i (1+ i)))
-     (if (null rd-cur) (setq rd-cur 0))
-     (setq dcl_id (load_dialog (pfset:dcl-file)))
-     (if (< dcl_id 0)
-       (progn (prompt "\nCould not load pfdialog.dcl.") nil)
-       (if (not (new_dialog "pf_run" dcl_id))
-         (progn (unload_dialog dcl_id)
-                (prompt "\nCould not open the run dialog.") nil)
-         (progn
-           (set_tile "run_title" title)
-           (start_list "run_tgt")
-           (foreach r rd-reg (add_list (pfs:reg-item r)))
-           (end_list)
-           (set_tile "run_tgt" (itoa rd-cur))
-           (pflabel:rd-fill)
-           (action_tile "run_tgt" "(pflabel:rd-on-tgt)")
-           (action_tile "run_sel" "(pflabel:rd-sel)")
-           (action_tile "run_all" "(pflabel:rd-all)")
-           (action_tile "run_set" "(pflabel:show-dialog)")
-           (action_tile "cancel"  "(done_dialog 0)")
-           (action_tile "help"
-             (strcat "(pfset:help \"Target Profile = the registry; choosing "
-                     "an unplaced profile and labeling places it first "
-                     "(two corner picks).\\n\\nSelect rows and Label "
-                     "Selected, or Label All for every structure on the "
-                     "primary line.  Label All REPLACES this command's "
-                     "previous tracked pass; Selected appends.\\n\\n"
-                     "[LABELED] = a tracked entity of this command's pass "
-                     "already sits at that station (CLAYER passes are "
-                     "untracked and never marked).\")"))
-           (setq result (vl-catch-all-apply 'start_dialog '()))
-           (unload_dialog dcl_id)
-           (cond
-             ((vl-catch-all-error-p result)
-              (prompt (strcat "\nDialog error: "
-                              (vl-catch-all-error-message result)))
-              nil)
-             ((= result 1) rd-res)
-             (T nil))))))))
+         (prompt (strcat "\nCenterline for '" rd-primary
+                         "' could not be read -- nothing to label."))
+         nil)
+       (progn
+         (setq dcl_id (load_dialog (pfset:dcl-file)))
+         (if (< dcl_id 0)
+           (progn (prompt "\nCould not load pfdialog.dcl.") nil)
+           (if (not (new_dialog "pf_run" dcl_id))
+             (progn (unload_dialog dcl_id)
+                    (prompt "\nCould not open the run dialog.") nil)
+             (progn
+               (set_tile "run_title" title)
+               (pflabel:rd-fill)
+               (action_tile "run_sel" "(pflabel:rd-sel)")
+               (action_tile "run_all" "(pflabel:rd-all)")
+               (action_tile "run_set" "(pflabel:show-dialog)")
+               (action_tile "cancel"  "(done_dialog 0)")
+               (action_tile "help"
+                 (strcat "(pfset:help \"Select rows and Label Selected, or "
+                         "Label All for every structure on the primary line.  "
+                         "Label All REPLACES this command's previous tracked "
+                         "pass; Selected appends.\\n\\n[LABELED] = a tracked "
+                         "entity of this command's pass already sits at that "
+                         "station (CLAYER passes are untracked, never "
+                         "marked).\\n\\nWrong target?  Cancel and rerun.\")"))
+               (setq result (vl-catch-all-apply 'start_dialog '()))
+               (unload_dialog dcl_id)
+               (cond
+                 ((vl-catch-all-error-p result)
+                  (prompt (strcat "\nDialog error: "
+                                  (vl-catch-all-error-message result)))
+                  nil)
+                 ((= result 1) rd-res)
+                 (T nil))))))))))
 
 ;; (pflabel:setup anchor mode prelines preinlets) -> context alist | nil
 ;;   Everything comes from the record + settings; the mode ("All"/"Sel")
@@ -491,7 +467,7 @@
                   ;; ONE scan for the top-of-grid probe; pf:top-at folds
                   ;; over this per station (grids have STEPPED tops)
                   (cons 'toplines (pf:top-lines))
-                  (cons 'fmt      (pflabel:label-fmt s))))))))))
+                  (cons 'fmt (pflabel:label-fmt s (pf:xf-get 'type xf)))))))))))
 
 
 ;;; ==========================================================================
@@ -644,29 +620,22 @@
   (foreach e findings (prompt (strcat "\n  FINDING: " e)))
   (princ))
 
-(defun c:PFLABEL ( / pre rd entry anchor ctx n)
+(defun c:PFLABEL ( / anchor rd ctx n)
   (setq *pflabel-prev-error* *error*
-        *error*               pflabel:*error*
+        *error*              pflabel:*error*
         *pflabel-undo-open*  nil)
   (pf:load-apis)
-  ;; dialog-first (parity with PFXLABEL): the run dialog's list IS the target
-  ;; picker.  pfa:pick-anchor is kept (reserved) for a possible screen-pick
-  ;; button later; no pre-anchor means the dialog preselects the first placed.
-  (setq pre nil)
-  (setq rd (pflabel:run-dialog
-             "PFLABEL -- structure labels at the top of the grid"
-             "LABEL" pre))
-  (if (null rd)
-    (prompt "\nPFLABEL cancelled.")
+  ;; pick-first (PFXLABEL parity): choose/place the target, THEN list only its
+  ;; structures.  choose-or-place places an unplaced pick on the fly.
+  (setq anchor (pfs:choose-or-place))
+  (if (null anchor)
+    (prompt "\nPFLABEL cancelled -- no target.")
     (progn
-      ;; resolve the chosen registry entry: labeling an unplaced profile
-      ;; IS consent to place it (dialog -> two corner picks)
-      (setq entry  (cdr (assoc 'entry rd))
-            anchor (if (eq (caddr entry) 'PLACED)
-                     (nth 3 entry)
-                     (pfs:place-one (nth 4 entry))))
-      (if (null anchor)
-        (prompt "\nNo placed grid -- cancelled.")
+      (setq rd (pflabel:run-dialog
+                 "PFLABEL -- structure labels at the top of the grid"
+                 "LABEL" anchor))
+      (if (null rd)
+        (prompt "\nPFLABEL cancelled.")
         (progn
           (setq ctx (pflabel:setup anchor (cdr (assoc 'mode rd))
                                    (cdr (assoc 'lines rd))

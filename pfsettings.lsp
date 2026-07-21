@@ -31,7 +31,7 @@
   (list
     (cons "sta_pre" "STA.")
     (cons "sta_val" "X+XX.XX")
-    (cons "sta_suf" "STORM LINE '[line]'")
+    (cons "sta_suf" "[util] LINE '[line]'")
     (cons "con_pre" "CONST.")
     (cons "con_val" "[size] [type] [ID]")
     (cons "con_suf" "")
@@ -167,6 +167,65 @@
   (pfa:xrec-put (pfset:nod) "ROOT" (list (cons 1 path)))
   (princ))
 
+;; (pfset:get-company-dir fileType) -> routed directory path | nil
+;;   Routes browse dialogs to company standard subfolders based on file type.
+;;   Prioritizes the established PFROOT, dynamically stepping up to the base project.
+(defun pfset:get-company-dir ( fileType / nodRoot baseProj stdFolders targetSubFolder stdPath cachedPath )
+  ;; 1. The ONLY source of truth is the established PFROOT
+  (setq nodRoot (pfset:root-get))
+  
+  ;; 2. Step up two directory levels to get the base project folder (e.g. 25-7167)
+  (setq baseProj 
+    (if (and nodRoot (/= nodRoot ""))
+      (strcat (vl-filename-directory (vl-filename-directory (vl-string-right-trim "\\/" nodRoot))) "\\")
+      nil
+    )
+  )
+  
+  ;; 3. Define company standard subfolders relative to the base project folder
+  (setq stdFolders '(
+    ("cl"  . "02_ProjectData\\Alignments")
+    ("pro" . "05_Drawings\\DrawingData\\CivilSurvey")
+    ("tin" . "02_ProjectData\\Surfaces")
+  ))
+  
+  (setq targetSubFolder (cdr (assoc (strcase fileType t) stdFolders)))
+  
+  ;; Build the prospective company standard path
+  (setq stdPath
+    (if (and baseProj targetSubFolder)
+        (strcat baseProj targetSubFolder "\\")
+        nil
+    )
+  )
+  
+  ;; Fetch the currently cached path from session variables
+  (setq cachedPath
+    (cond
+      ((= (strcase fileType t) "cl")  *pfset-dir-cl*)
+      ((= (strcase fileType t) "pro") *pfset-dir-pro*)
+      ((= (strcase fileType t) "tin") *pfset-dir-tin*)
+      (t nil)
+    )
+  )
+  
+  ;; Evaluate and route (stripping trailing slashes safely for the directory check)
+  (cond
+    ;; Scenario A: Standard path successfully built and physically exists
+    ((and stdPath (vl-file-directory-p (vl-string-right-trim "\\/" stdPath)))
+     stdPath
+    )
+    ;; Scenario B: Global variable from the active session has a user-selected path
+    ((and cachedPath (vl-file-directory-p (vl-string-right-trim "\\/" cachedPath))) 
+     cachedPath
+    )
+    ;; Scenario C: Fallback to the drawing's manual NOD root (PFROOT)
+    ((and nodRoot (vl-file-directory-p (vl-string-right-trim "\\/" nodRoot)))
+     nodRoot
+    )
+    (t nil) 
+  )
+)
 ;; C:PFROOT -- show / set the project data root for this drawing.
 ;;   Straight to the file dialog; Cancel = unchanged.  (No Yes/No prompt --
 ;;   the file dialog's own Cancel is the No.)
