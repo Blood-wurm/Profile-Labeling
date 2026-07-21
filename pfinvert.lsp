@@ -120,12 +120,14 @@
 ;;; SECTION 3  --  Run setup  (anchor -> context; reuses pflabel's machinery)
 ;;; ==========================================================================
 
-;; (pfi:setup anchor mode) -> context alist | nil
+;; (pfi:setup anchor mode prelines preinlets) -> context alist | nil
 ;;   Same record checks as pflabel:setup, PLUS the _INV .pro is FATAL when
 ;;   missing -- every elevation this command draws comes from it.  The mode
-;;   ("All"/"Sel") was chosen in the shared run dialog.
-(defun pfi:setup (anchor mode / xf cl proinv s style clayer-p layer prim pairs
-                  lines primary inlets)
+;;   ("All"/"Sel") was chosen in the shared run dialog; prelines/preinlets are
+;;   that dialog's already-built line table + inlets, reused when passed.
+(defun pfi:setup (anchor mode prelines preinlets
+                  / xf cl proinv s style clayer-p layer prim pairs
+                    lines primary inlets)
   (setq xf (pfa:anchor->xform anchor))
   (cond
     ((null xf)
@@ -161,11 +163,15 @@
          (prompt (strcat "\nLayer " layer
                          (if clayer-p " (current)" "")
                          ", style " style "."))
-         ;; line table: primary = the record's .cl; secondaries = registry
+         ;; line table: primary = the record's .cl; secondaries = registry.
+         ;; Reuse the dialog's build when handed one; else build it here.
          (setq prim    (cons cl (pf:xf-get 'name xf))
-               pairs   (pf:dedupe-pairs
-                         (cons prim (pflabel:registry-pairs cl)))
-               lines   (pflabel:build-lines pairs)
+               lines   (if prelines
+                         prelines
+                         (progn
+                           (setq pairs (pf:dedupe-pairs
+                                         (cons prim (pflabel:registry-pairs cl))))
+                           (pflabel:build-lines pairs)))
                primary (cdr prim))
          (cond
            ((null lines)
@@ -175,7 +181,7 @@
                             "' failed to load -- aborting."))
             nil)
            (T
-            (setq inlets (pflabel:gather-inlets))
+            (setq inlets (if preinlets preinlets (pflabel:gather-inlets)))
             (list (cons 'xform    xf)
                   (cons 'anchor   anchor)
                   (cons 'lines    lines)
@@ -367,9 +373,10 @@
         *error*               pfinvert:*error*
         *pfinvert-undo-open*  nil)
   (pf:load-apis)
-  ;; optional screen pick preselects the dialog's target popup
-  (setq pre (pfa:pick-anchor
-              "\nSelect profile grid anchor (Enter for the dialog): "))
+  ;; dialog-first (parity with PFXLABEL): the run dialog's list IS the target
+  ;; picker.  pfa:pick-anchor is kept (reserved) for a possible screen-pick
+  ;; button later; no pre-anchor means the dialog preselects the first placed.
+  (setq pre nil)
   (setq rd (pflabel:run-dialog
              "PFINVERT -- invert labels at pipe elevation"
              *pfi-pass-name* pre))
@@ -383,7 +390,9 @@
       (if (null anchor)
         (prompt "\nNo placed grid -- cancelled.")
         (progn
-          (setq ctx (pfi:setup anchor (cdr (assoc 'mode rd))))
+          (setq ctx (pfi:setup anchor (cdr (assoc 'mode rd))
+                               (cdr (assoc 'lines rd))
+                               (cdr (assoc 'inlets rd))))
           (if ctx
             (progn
               (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))

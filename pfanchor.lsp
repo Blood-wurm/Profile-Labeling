@@ -546,6 +546,47 @@
                         out)))))
   (reverse out))
 
+;;; ---- GEOM: drawing-wide cached .cl geometry (content-addressed) -----------
+;;; One xrecord per .cl in the NOD "PFTOOLS" dict, key "GEOM_<basename>".
+;;; Registration (AUTO name / USER place) samples a .cl ONCE and files its
+;;; shape here; label commands READ it instead of re-tracing every run.  The
+;;; store is keyed by .cl IDENTITY, not by a stub or anchor: identity owns the
+;;; registry record, this owns the geometry, so promotion moves nothing.
+;;; Self-validating -- each entry carries the .cl content checksum it was
+;;; sampled at; a reader re-checksums and re-samples on mismatch, so a .cl
+;;; edited on disk heals on next use.
+;;;   (1 .cl path)(300 checksum)(40 sta0)(41 sta1)(10 x y 0.0)*  verts repeat
+
+(defun pfa:geom-key (clfile)
+  (strcat "GEOM_" (pfa:sanitize (strcase (vl-filename-base clfile)))))
+
+;; (pfa:collect-10 data) -> list of (x y) from every (10 x y z) group, in order
+(defun pfa:collect-10 (data / out p)
+  (setq out '())
+  (foreach p data
+    (if (= (car p) 10) (setq out (cons (list (cadr p) (caddr p)) out))))
+  (reverse out))
+
+;; (pfa:geom-get clfile) -> (checksum (s0 s1) verts) | nil
+(defun pfa:geom-get (clfile / d ck s0 s1)
+  (if (setq d (pfa:xrec-data (pfa:nod-dict) (pfa:geom-key clfile)))
+    (progn
+      (setq ck (cdr (assoc 300 d))
+            s0 (cdr (assoc 40 d))
+            s1 (cdr (assoc 41 d)))
+      (if (and ck s0 s1)
+        (list ck (list s0 s1) (pfa:collect-10 d))))))
+
+;; (pfa:geom-put clfile checksum range verts) -> xrecord ename   range=(s0 s1)
+(defun pfa:geom-put (clfile checksum range verts / data v)
+  (setq data (list (cons 1 clfile)
+                   (cons 300 checksum)
+                   (cons 40 (car range))
+                   (cons 41 (cadr range))))
+  (foreach v verts
+    (setq data (append data (list (list 10 (car v) (cadr v) 0.0)))))
+  (pfa:xrec-put (pfa:nod-dict) (pfa:geom-key clfile) data))
+
 ;; (pfa:registry) -> merged sorted list of (type name state ename stub)
 ;;   state 'PLACED (ename set, stub nil) | 'STUB (ename nil, stub data).
 ;;   THE registry: anchors + stubs, sorted by "TYPE NAME".

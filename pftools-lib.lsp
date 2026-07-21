@@ -126,6 +126,29 @@
      (list (list (car (car ends)) (cadr (car ends)))
            (list (car (cadr ends)) (cadr (cadr ends)))))))
 
+;; (pf:cl-geom clfile) -> (range . verts) | nil     range = (s0 s1)
+;;   The cached seam for .cl geometry.  Reads the drawing-wide GEOM store
+;;   (pfa:geom-*); on a checksum match it returns the filed shape WITHOUT a
+;;   single Road-API call -- this is what lets labeling read a shape instead
+;;   of re-tracing it.  On a miss (absent, or the .cl changed on disk) it
+;;   samples ONCE, files the result, and returns it.  A transient sample
+;;   failure is NOT filed, so the next call retries.  Range is returned even
+;;   when verts are unavailable (the proximity filter just goes off).
+(defun pf:cl-geom (clfile / cur cached rng vts)
+  (setq cur (pf:checksum-file clfile))
+  (cond
+    ((null cur) nil)                              ; .cl unreadable
+    ((and (setq cached (pfa:geom-get clfile))
+          (= (car cached) cur))
+     (cons (cadr cached) (caddr cached)))         ; HIT -- no Road-API call
+    (T                                            ; MISS -- sample + file once
+     (setq rng (pf:cl-range clfile)
+           vts (pf:cl-verts clfile))
+     (cond
+       ((and rng vts) (pfa:geom-put clfile cur rng vts) (cons rng vts))
+       (rng (cons rng vts))                       ; range only; don't file a miss
+       (T nil)))))
+
 
 ;;; ==========================================================================
 ;;; SECTION 2  --  Corridor geometry  (pure)

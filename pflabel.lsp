@@ -142,17 +142,22 @@
 ;;; ==========================================================================
 
 ;; (pflabel:build-lines pairs) -> list of (clfile name start end verts)
-(defun pflabel:build-lines (pairs / tbl file nm rng entry p)
+;;   Geometry comes from the cached GEOM store (pf:cl-geom) -- the proximity
+;;   filter's verts are the .cl's OWN sampled shape, not a hunted-for drawn
+;;   twin, so no whole-drawing scan and no Road-API re-sampling on a cache hit.
+(defun pflabel:build-lines (pairs / tbl file nm geom rng vts entry p)
   (setq tbl '())
   (foreach p pairs
     (setq file (car p) nm (cdr p))
-    (if (setq rng (pf:cl-range file))
+    (if (setq geom (pf:cl-geom file))
       (progn
-        (setq entry (pf:attach-corridor (list file nm (car rng) (cadr rng))))
-        (setq tbl (cons entry tbl))
+        (setq rng   (car geom)
+              vts   (cdr geom)
+              entry (list file nm (car rng) (cadr rng) vts)
+              tbl   (cons entry tbl))
         (prompt (strcat "\nLoaded line '" nm "' (Sta " (pf:fmt-station (car rng))
                         " to " (pf:fmt-station (cadr rng)) ")"
-                        (if (nth 4 entry) "." "  [no corridor polyline matched]."))))
+                        (if vts "." "  [geometry unavailable -- proximity filter off]."))))
       (prompt (strcat "\nError: Could not read station range from " file))))
   (reverse tbl))
 
@@ -313,7 +318,11 @@
       (foreach i idxs (setq out (cons (nth i rd-pend) out)))
       (setq rd-res (list (cons 'entry (nth rd-cur rd-reg))
                          (cons 'mode "Sel")
-                         (cons 'sel (reverse out))))
+                         (cons 'sel (reverse out))
+                         ;; hand the already-built line table + inlets to setup
+                         ;; so it need not rebuild them (dialog built them once)
+                         (cons 'lines rd-lines)
+                         (cons 'inlets rd-inlets)))
       (done_dialog 1))))
 
 (defun pflabel:rd-all ()
@@ -322,7 +331,9 @@
     (progn
       (setq rd-res (list (cons 'entry (nth rd-cur rd-reg))
                          (cons 'mode "All")
-                         (cons 'sel rd-pend)))
+                         (cons 'sel rd-pend)
+                         (cons 'lines rd-lines)
+                         (cons 'inlets rd-inlets)))
       (done_dialog 1))))
 
 ;; (pflabel:run-dialog title passname pre-anchor) -> result alist | nil
@@ -400,11 +411,16 @@
              ((= result 1) rd-res)
              (T nil))))))))
 
-;; (pflabel:setup anchor mode) -> context alist | nil
+;; (pflabel:setup anchor mode prelines preinlets) -> context alist | nil
 ;;   Everything comes from the record + settings; the mode ("All"/"Sel")
-;;   was chosen in the run dialog -- nothing is typed here.
-(defun pflabel:setup (anchor mode / xf cl s style clayer-p layer prim pairs
-                       lines primary inlets index d)
+;;   was chosen in the run dialog -- nothing is typed here.  prelines/preinlets
+;;   are the run dialog's already-built line table and inlet set: when passed,
+;;   setup reuses them instead of rebuilding (the dialog built them once).  A
+;;   modal dialog can't change the drawing, and a freshly-placed target's .cl
+;;   was already in that table under its identity, so reuse is always safe.
+(defun pflabel:setup (anchor mode prelines preinlets
+                       / xf cl s style clayer-p layer prim pairs
+                         lines primary inlets index d)
   (setq xf (pfa:anchor->xform anchor))
   (cond
     ((null xf)
@@ -443,11 +459,15 @@
                          (if clayer-p " (current)" "")
                          ", style " style
                          ", text height " (rtos *pf-height* 2 2) "."))
-         ;; line table: primary = the record's .cl; secondaries = registry
+         ;; line table: primary = the record's .cl; secondaries = registry.
+         ;; Reuse the dialog's build when handed one; else build it here.
          (setq prim    (cons cl (pf:xf-get 'name xf))
-               pairs   (pf:dedupe-pairs
-                         (cons prim (pflabel:registry-pairs cl)))
-               lines   (pflabel:build-lines pairs)
+               lines   (if prelines
+                         prelines
+                         (progn
+                           (setq pairs (pf:dedupe-pairs
+                                         (cons prim (pflabel:registry-pairs cl))))
+                           (pflabel:build-lines pairs)))
                primary (cdr prim))
          (cond
            ((null lines)
@@ -458,7 +478,7 @@
             nil)
            (T
             (prompt "\nIndexing structures for ranking...")
-            (setq inlets (pflabel:gather-inlets)
+            (setq inlets (if preinlets preinlets (pflabel:gather-inlets))
                   index  (pflabel:index-stations inlets lines))
             (list (cons 'xform    xf)
                   (cons 'anchor   anchor)
@@ -629,9 +649,10 @@
         *error*               pflabel:*error*
         *pflabel-undo-open*  nil)
   (pf:load-apis)
-  ;; optional screen pick preselects the dialog's target popup
-  (setq pre (pfa:pick-anchor
-              "\nSelect profile grid anchor (Enter for the dialog): "))
+  ;; dialog-first (parity with PFXLABEL): the run dialog's list IS the target
+  ;; picker.  pfa:pick-anchor is kept (reserved) for a possible screen-pick
+  ;; button later; no pre-anchor means the dialog preselects the first placed.
+  (setq pre nil)
   (setq rd (pflabel:run-dialog
              "PFLABEL -- structure labels at the top of the grid"
              "LABEL" pre))
@@ -647,7 +668,9 @@
       (if (null anchor)
         (prompt "\nNo placed grid -- cancelled.")
         (progn
-          (setq ctx (pflabel:setup anchor (cdr (assoc 'mode rd))))
+          (setq ctx (pflabel:setup anchor (cdr (assoc 'mode rd))
+                                   (cdr (assoc 'lines rd))
+                                   (cdr (assoc 'inlets rd))))
           (if ctx
             (progn
               (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))
