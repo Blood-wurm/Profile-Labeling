@@ -87,8 +87,15 @@ pfs:auto
  ├─ pfs:scan-sheet-names      scan PF-NAME text  → (type . name) pairs
  ├─ pfs:cl-lookup             resolve Type_Name.cl in the project root
  ├─ pfs:pro-lookup            auto-bind the _INV / _TOP .pro pair
- └─ pfa:stub-put              write an identity-only STUB to the NOD dict
+ ├─ pfa:stub-put              write an identity-only STUB to the NOD dict
+ └─ pf:cl-geom                sample the .cl ONCE and file its shape (GEOM cache)
 ```
+
+The `pf:cl-geom` step is the V4 speed pivot: `.cl` geometry is traced **once
+at registration** and filed (see §7 GEOM). Label commands then READ the shape
+instead of re-tracing every line every run — the per-run Road-API sampling is
+gone. Placement (`pfs:place-one`) warms the same cache for a directly-placed
+profile.
 
 No matching `.cl`, an ambiguous match, or a `.cl` with no sheet name is
 **reported and skipped** — never guessed. The reverse direction (a `.cl` with
@@ -129,11 +136,12 @@ Edit mode invalidation:
 ### 4.2 `PFLABEL` — structure labels
 
 The V4 run is dialog-first (the Carlson idiom, `pf_run` shared with
-`PFINVERT`): `PFLABEL` → optional anchor screen-pick → **run dialog**
-(target popup = the registry; multi-select structure list, `[LABELED]`
-marked from the pass ledger) → *Label Selected* / *Label All*. Choosing an
-unplaced profile and labeling places it first. Everything the old dialogs
-gathered lives in the anchor record.
+`PFINVERT`): `PFLABEL` → **run dialog** (target popup = the registry;
+multi-select structure list, `[LABELED]` marked from the pass ledger) →
+*Label Selected* / *Label All*. Choosing an unplaced profile and labeling
+places it first. Everything the old dialogs gathered lives in the anchor
+record. (`pfa:pick-anchor` is kept, reserved, for a future screen-pick
+button — no per-run command-line pick today; parity with `PFXLABEL`.)
 
 - **Secondary `.cl` set = the registry** (anchors *and* stubs). Membership is
   plan-view station math, so **identity alone qualifies a line** — the moment
@@ -163,7 +171,7 @@ One target-directed command. Discovery auto-runs, then you label.
 c:PFXLABEL
  ├─ pfxl:resolve-target       session-last (silent if still placed) else registry picker
  ├─ pfxl:discover             target .cl × every OTHER registered .cl
- │    ├─ pf:cl-verts / pf:poly-x        sampled-walk plan intersection (arcs followed)
+ │    ├─ pf:cl-geom / pf:poly-x         cached .cl shapes × plan intersection (sampled once at registration; arcs followed)
  │    ├─ pf:refine-x                    re-sample ~0.1 ft near a hit
  │    ├─ pf:sta-at                      read both stations off the Road API
  │    └─ pfa:xing-merge                 additive merge into the ledger (elevations preserved)
@@ -313,12 +321,12 @@ Carlson API "tool calls" (Road = `EWORKS.ARX`, DTM = `TRI4.ARX`) they make.
 |---|---|---|---|
 | 0 | **Load** | `pftools-load.lsp` loads all 9 in order | — |
 | 1 | **Project root** | `pfsettings.lsp`: `pfset:root-set` (first `PFSETUP` or `PFROOT`) writes it to the NOD | — |
-| 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` | Road `cl_sta_range` (validate ranges) |
+| 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` → `pf:cl-geom` (file .cl shape) | Road `cl_sta_range` + `cl_location_at_sta` (**one-time sample**, then cached) |
 | 3 | **USER place** | `pfsetup.lsp`: `pfs:registry-dialog` → `pfs:place-one` → `pfs:show-dialog` (datum typed here), `pfs:pick-extents` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
-| 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:registry-pairs`, `pflabel:build-lines`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | Road `cl_location_at_pt` (membership), top-of-grid probe (`inters`, no API) |
-| 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-verts`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` | Road `cl_location_at_sta` (walk), `cl_location_at_pt` (station), **`profile z`** (invert/top) |
+| 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → run dialog builds the line table (reused by `pflabel:setup`) → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:build-lines`→`pf:cl-geom`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | Road `cl_location_at_pt` (membership); geometry from **cache**; top-of-grid probe (`inters`, no API) |
+| 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-geom`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` | geometry from **cache**; Road `cl_location_at_pt` (station), **`profile z`** (invert/top); `cl_location_at_sta` only on refine/cache-miss |
 | 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`profile z`** (bracket walk + laterals) |
-| 7 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs | Road (unchanged pairs skipped) |
+| 7 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs; geometry served from the GEOM cache | Road (unchanged pairs skipped; no re-sampling unless a `.cl` changed) |
 | 8 | **Teardown** | `pfanchor.lsp`: `c:PFREMOVE` → `pfa:teardown` (`pfa:erase-pass`, `entdel`) | — |
 
 Per-file responsibility during a run:
@@ -345,6 +353,15 @@ Three record kinds, all keyed by **line name + utility type**:
 STUB    (NOD "PFTOOLS", key STUB_<TYPE>_<NAME>)
         Identity only: .cl path + auto-resolved _INV/_TOP .pro. NO placement.
         AUTO writes it; a stub can DISCOVER but not DRAW. Placement promotes it.
+
+GEOM    (NOD "PFTOOLS", key GEOM_<BASENAME>)  — the .cl geometry cache
+        Content-addressed .cl shape: (1 .cl)(300 checksum)(40/41 sta range)
+        (10 …verts). Filed ONCE at registration; label commands READ it in
+        place of re-sampling the line every run. A reader re-checksums and
+        re-samples on mismatch (self-heals a .cl edited on disk). Keyed by
+        .cl IDENTITY, not the record — so promotion moves nothing, and one
+        entry serves every command that references that line. (Drawing-wide
+        today; a project-folder sidecar shared across sheets is under review.)
 
 ANCHOR  (PF-GRIDANCHOR block, one per PLACED profile)
         Insertion point = grid lower-left (datum + origin). Extents RELATIVE
@@ -423,7 +440,11 @@ Every tunable lives in one file. The load-bearing groups:
 - **Materials per type** — `*pf-materials*` (placeholder lists — edit to the
   firm's real materials; keys must match the types).
 - **Sampling** — `*pfx-sample-step*` 2 ft walk, `*pfx-refine-step*` 0.1 ft
-  near a hit.
+  near a hit. The walk runs **once at registration** (`pf:cl-geom`) and is
+  cached (GEOM, §7); label commands read the cache, so this step is not paid
+  per run. A long alignment at 2 ft is also what drives GEOM vert count — the
+  open lever if xrecord size ever bites is a coarser cached step (refine still
+  pins precision live on changed pairs).
 - **Pipe rendering** — `PF-PIPE_<NN>` block family; circle placeholder when a
   block is missing; `*pfx-zoom-pause*` verification pause (0 disables).
 - **Invert bracket (`PFINVERT`)** — `*pfi-invert-offset*` 5.0 (fixed, un-scaled

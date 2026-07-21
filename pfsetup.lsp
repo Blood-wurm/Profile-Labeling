@@ -379,6 +379,9 @@
               (setq inv (pfs:pro-lookup dir ty nm "INV")
                     top (pfs:pro-lookup dir ty nm "TOP"))
               (pfa:stub-put ty nm m inv top)
+              ;; file the .cl shape ONCE, now -- label commands read it later
+              ;; instead of re-tracing the line every run
+              (pf:cl-geom m)
               (setq new (1+ new))
               (prompt (strcat "\n  Named " ty " '" nm "'  ("
                               (pfs:file-display m)
@@ -496,6 +499,9 @@
         (setq xf     (pfs:build-xform res ll tr datum)
               anchor (pfa:write-anchor nm ty xf cl))
         (pfa:meta-put anchor cl (pf:checksum-file cl))
+        ;; file the .cl shape now (no-op if AUTO already did) so a directly
+        ;; placed profile is cached too -- label commands never re-trace it
+        (pf:cl-geom cl)
         (setq notes (pfs:bind-files anchor res))
         (pfa:status-put anchor 0 notes)
         (if stub (pfa:stub-del (car stub) (cadr stub)))

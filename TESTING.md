@@ -247,3 +247,26 @@ NOTES:
   SKIPPED  SANITARY_A @ tgt sta 5+14.38  -- SOURCE INVERT UNREADABLE (profile z)
 •	Didn’t recognize profile names in drawing. (Don’t need this anyway.)
 •	PICKADD variable change?
+
+*The storage-location deviation I called out in the plan: geometry lives in a shared NOD store keyed by .cl identity, not on the stub/anchor record with promotion carry-forward. Behavior matches what we designed; it's just less machinery. If you specifically want it on the record, that's a different edit.
+
+*Here's the current mechanism, because it reframes the storage decision.
+
+Today the suite does NOT read the project location from Carlson at all. C:PFSETUP calls pfset:root-get, which reads a "ROOT" xrecord from the drawing's NOD dictionary. If it's unset, the user browses to any file in the data folder (pfset:browse → getfiled), and the derived directory is stored back per-drawing (pfset:root-set, also exposed as C:PFROOT). So the data folder is user-declared once and remembered in each drawing — pfs:cl-lookup/pfs:pro-lookup then vl-directory-files that path.
+
+The Carlson bridge itself is cf:road_api (from EWORKS.ARX, scload-ed from lspdir$) — a named-dispatch: the suite calls "cl_sta_range", "cl_location_at_pt", "profile_z", etc. through it. Nothing project-path-related goes through it today.
+
+Whether Carlson can hand us the project path through that bridge is empirical — I can't determine it from the LISP source. The ARX is a black box; the source only shows which ops the suite currently uses, not the full menu EWORKS exposes. So this needs a live probe. Candidates to try in Carlson, best-first:
+
+A cf:road_api op for it — try things like (cf:road_api "project_path") / "data_path" / "current_project". Carlson's civil ARX often exposes the active project's data directory; if EWORKS has such an op, that's the cleanest source.
+Carlson config getters — Carlson SCAD exposes settings via its own config functions (varies by version). The current project/data path is usually queryable there.
+(getvar "DWGPREFIX") — the reliable AutoLISP fallback: the sheet drawing's own folder. In many workflows the .cl/.pro data sits alongside the sheet or in a known subfolder, so this is at minimum a good seed for the browse default even if it's not authoritative.
+Why this matters for the GEOM storage decision — and I think this is the real reason you linked them: the cache I built lives in the drawing's NOD, so it's per-drawing. Every sheet that references the same project data re-traces the lines. If you can reliably resolve the project data folder, the alternative is a sidecar cache file in that folder — traced once per project, shared across every sheet drawing. That's a strictly bigger win than per-drawing, and it's exactly what a reliable project path unlocks.
+
+So the storage fork is really:
+
+In-drawing NOD (what I built) — self-contained, no external files, survives as part of the DWG; but per-drawing, so N sheets = N traces.
+Project-folder sidecar — trace once per project, every sheet reads it; but depends on reliably knowing (and re-finding) the data folder, and it's an external file to manage/invalidate.
+My read: keep the NOD "ROOT" as the source of truth / fallback regardless (it works today and needs no Carlson cooperation), add a Carlson-read as an auto-seed if a probe finds one, and let the in-DWG-vs-sidecar choice come down to one question — do multiple sheet drawings in your workflow share the same project .cl/.pro data? If yes, the sidecar's "trace once per project" is worth the external-file complexity. If each project is basically one drawing, the in-DWG cache I built is already the right shape.
+
+Before I take this further: which is it — one sheet per project, or many sheets sharing one data folder?

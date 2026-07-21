@@ -124,10 +124,11 @@
         ty  (strcase (pf:xf-get 'type xf))
         nm  (strcase (pf:xf-get 'name xf))
         tcl (pfxl:nz (cdr (assoc 1 (pfa:meta-get anchor)))))
+  (prompt "\nChecking for crossings...")
   (cond
     ((null tcl)
      (prompt "\nTarget has no .cl on record -- discovery skipped."))
-    ((null (setq tverts (pf:cl-verts tcl)))
+    ((null (setq tverts (cdr (pf:cl-geom tcl))))
      (prompt "\nCould not read target .cl geometry -- discovery skipped."))
     (T
      (setq tck      (pf:checksum-file tcl)
@@ -146,7 +147,7 @@
              (setq newscope (cons (strcat sbase "|" tck "|" sck) newscope))
              ;; short-circuit: both .cl unchanged since last scan
              (if (not (and triple (= (cadr triple) tck) (= (caddr triple) sck)))
-               (if (setq sverts (pf:cl-verts scl))
+               (if (setq sverts (cdr (pf:cl-geom scl)))
                  (if (setq xy (pf:poly-x tverts sverts))
                    (progn
                      (setq tsta (pf:sta-at tcl xy)
@@ -168,8 +169,11 @@
                                ((eq st 'MOVED) (setq nmov (1+ nmov)))
                                (T              (setq nupd (1+ nupd))))))))))))))
      (pfa:scope-put anchor (reverse newscope))
-     (prompt (strcat "\nDiscovery: " (itoa nnew) " new, " (itoa nupd)
-                     " updated, " (itoa nmov) " moved."))))
+     ;; report only when the scan actually changed something -- a bare
+     ;; "0 new, 0 updated, 0 moved" reads like nothing was labeled
+     (if (> (+ nnew nupd nmov) 0)
+       (prompt (strcat "\nDiscovery: " (itoa nnew) " new, " (itoa nupd)
+                       " updated, " (itoa nmov) " moved.")))))
   (princ))
 
 
