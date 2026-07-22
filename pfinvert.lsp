@@ -9,27 +9,30 @@
 ;;; EVERYTHING AT PIPE ELEVATION.  At each structure on the primary line:
 ;;;
 ;;;   PRIMARY   in/out inverts, TEXT ONLY -- the primary pipe is already
-;;;             drawn longitudinally as its .pro linework.  I.I / I.O come
-;;;             from bracketing the structure at the GRADE BREAKS of the
-;;;             _INV.pro (pfi:invert-bracket): walking outward from the
-;;;             station, the first break each side is the structure edge, so
-;;;             the bracket auto-widens with structure size.  The LOWER of
-;;;             the pair is downstream (self-determining) -> I.O.
+;;;             drawn longitudinally as its .pro linework.  I.O / I.I are the
+;;;             two ADJACENT _INV.pro VERTICES that meet at the structure
+;;;             (pfi:invert-bracket over pf:pro-verts): each vertex IS an
+;;;             invert, so the reading is exact.  The LOWER of the pair is
+;;;             downstream (self-determining) -> I.O.  A polyline endpoint is a
+;;;             terminus -> ONE invert (lower end I.O, higher end I.I).  Each
+;;;             row carries its pipe size: "I.O. 755.83 (8")".
 ;;;
 ;;;   LATERALS  every OTHER registry line the structure sits on: a bare
 ;;;             pipe block at TRUE elevation on the station X (non-present
-;;;             pipe -- same rendering rule as crossings) plus a bare
-;;;             "I.I <elev>" text row.  No size/material text at the block;
-;;;             line identity is already on the structure's top label.
+;;;             pipe -- same rendering rule as crossings) plus an "I.I <elev>
+;;;             (NN")" text row.  No size/material text at the block; line
+;;;             identity is already on the structure's top label.
 ;;;
 ;;;   TEXT      ALL rows share ONE base Y = lowest invert present MINUS
-;;;             *pfi-invert-offset* (FIXED model units -- deliberately NOT
-;;;             scaled by sf), fanning left/right across the station X by
-;;;             the same straddle rule as the top stack.  COLUMNS, not
-;;;             true-elevation rows -- that is what keeps a 0.10' drop from
+;;;             (*pfi-invert-offset-factor* x text height) -- 16 units at H:50,
+;;;             scaling with text like every other label gap.  COLUMNS fan
+;;;             left/right across the station X: I.O. downstream-left, shared
+;;;             lateral I.I.(s) centred, primary I.I. upstream-right.  Columns,
+;;;             not true-elevation rows -- that keeps a 0.10' drop from
 ;;;             colliding two callouts.  Justification MR: right-justified
 ;;;             reading up GROWS DOWNWARD, so the stack hangs below base Y.
-;;;             No leader line -- the top station line already marks the X.
+;;;             The leftmost structure's stack shifts right to clear the grid's
+;;;             elevation-axis labels.  No leader -- the station line marks X.
 ;;;
 ;;; LAYER RULE, PASS LEDGER, UNDO: identical to PFLABEL.  Derived
 ;;; <TYPE>-TEXT_P handle-tracked (PASS "INVERT", All replaces by handle);
@@ -60,60 +63,61 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 2  --  The grade-break bracket  (the isolated helper)
+;;; SECTION 2  --  The vertex bracket  (the isolated helper)
 ;;; ==========================================================================
-;;; SAMPLE-AND-DETECT body.  If a live session finds a Road-API call that
-;;; returns the .pro's vertices/PVIs directly, swap THIS section only --
-;;; the contract (pfi:invert-bracket -> (ii . io) | nil) stays.
+;;; EXACT-VERTEX body.  Each .pro vertex IS an invert (the profile is authored
+;;; from the polyline endpoints), so a structure's in/out inverts are simply the
+;;; two ADJACENT vertices that meet at it -- no sampling, no grade tolerance, no
+;;; half-step bias.  The contract (pfi:invert-bracket verts sta -> (io ii) | nil)
+;;; is what SECTION 4 consumes; io / ii are each (edge-sta . elev) or nil.
+;;; Vertices come from pf:pro-verts (file-parsed, cached).
 
-;; (pfi:break-scan pro sta limit dir) -> elevation at first grade break | nil
-;;   Walks from sta toward limit (dir -1 downstation / +1 upstation) at
-;;   *pfi-scan-step*, comparing successive segment slopes; the first joint
-;;   where |dslope| > *pfi-grade-tol* is the structure edge.  Returns the
-;;   elevation AT that joint.  nil = no break inside the window (flat run).
-(defun pfi:break-scan (pro sta limit dir / step s1 s2 z1 z2 sl sl-prev found)
-  (setq step    (* dir *pfi-scan-step*)
-        s1      sta
-        z1      (pf:pro-z pro s1)
-        sl-prev nil
-        found   nil)
-  (while (and (null found) z1
-              (if (> dir 0)
-                (<= (+ s1 step) (+ limit 1e-6))
-                (>= (+ s1 step) (- limit 1e-6))))
-    (setq s2 (+ s1 step)
-          z2 (pf:pro-z pro s2))
-    (if z2
-      (progn
-        (setq sl (/ (- z2 z1) step))
-        (if (and sl-prev (> (abs (- sl sl-prev)) *pfi-grade-tol*))
-          (setq found z1))                    ; break at the joint = s1
-        (setq sl-prev sl)))
-    (setq s1 s2 z1 z2))
-  found)
+;; (pfi:nearest-vert verts sta) -> index of the vertex closest in station to sta
+(defun pfi:nearest-vert (verts sta / i bi bd d)
+  (setq i 0 bi 0 bd nil)
+  (foreach v verts
+    (setq d (abs (- (car v) sta)))
+    (if (or (null bd) (< d bd)) (setq bd d bi i))
+    (setq i (1+ i)))
+  bi)
 
-;; (pfi:invert-bracket pro sta) -> (ii . io) | nil
-;;   ii = invert in (higher), io = invert out (lower) -- downstream is
-;;   self-determining, so neither the flow direction nor the .cl's station-0
-;;   end needs to be known.  A side with no break inside *pfi-scan-window*
-;;   reads pf:pro-z at the station itself (no drop -> ii = io; both rows
-;;   still drawn).  nil when the .pro is unreadable at the station.
-(defun pfi:invert-bracket (pro sta / rng lo hi z0 em ep)
-  (setq z0 (pf:pro-z pro sta))
-  (if (null z0)
+;; (pfi:invert-bracket verts sta) -> (io ii) | nil
+;;   io = downstream invert (LOWER elev), ii = upstream invert (higher) -- each
+;;   (edge-sta . elev) or nil; downstream is self-determining from elevation.
+;;   Two adjacent vertices a structure-width apart form a normal structure (both
+;;   set).  A polyline ENDPOINT whose only neighbour is a full pipe-run away is a
+;;   terminus (one invert): the LOWER-elevation profile end is downstream -> I.O
+;;   only, the higher -> I.I only.  nil when there are no vertices.
+(defun pfi:invert-bracket (verts sta / n i cur prev nxt gp gn partner a b
+                            io ii other)
+  (if (null verts)
     nil
     (progn
-      (setq rng (pf:pro-range pro)
-            lo  (- sta *pfi-scan-window*)
-            hi  (+ sta *pfi-scan-window*))
-      (if rng
-        (setq lo (max (car rng) lo)
-              hi (min (cadr rng) hi)))
-      (setq em (pfi:break-scan pro sta lo -1)
-            ep (pfi:break-scan pro sta hi  1))
-      (if (null em) (setq em z0))
-      (if (null ep) (setq ep z0))
-      (cons (max em ep) (min em ep)))))
+      (setq n    (length verts)
+            i    (pfi:nearest-vert verts sta)
+            cur  (nth i verts)
+            prev (if (> i 0)      (nth (1- i) verts))
+            nxt  (if (< i (1- n)) (nth (1+ i) verts))
+            gp   (if prev (- (car cur) (car prev)))
+            gn   (if nxt  (- (car nxt) (car cur))))
+      (cond
+        ;; interior vertex: pair with the nearer neighbour (its structure edge)
+        ((and prev nxt) (setq partner (if (<= gp gn) prev nxt)))
+        ;; endpoint with a NARROW neighbour = a structure at the very .pro end
+        ((and prev (<= gp *pfi-struct-width-max*)) (setq partner prev))
+        ((and nxt  (<= gn *pfi-struct-width-max*)) (setq partner nxt))
+        ;; endpoint whose only neighbour is a pipe-run away = terminus (single)
+        (T (setq partner nil)))
+      (if partner
+        (progn                            ; two inverts: lower = io, higher = ii
+          (setq a cur b partner)
+          (if (<= (cdr a) (cdr b)) (setq io a ii b) (setq io b ii a))
+          (list io ii))
+        (progn                            ; terminus: classify by elevation
+          (setq other (if (= i 0) (last verts) (car verts)))
+          (if (<= (cdr cur) (cdr other))
+            (list cur nil)                ; lower profile end -> I.O only
+            (list nil cur)))))))          ; higher profile end -> I.I only
 
 
 ;;; ==========================================================================
@@ -187,6 +191,7 @@
                   (cons 'lines    lines)
                   (cons 'primary  primary)
                   (cons 'proinv   proinv)
+                  (cons 'protop   (pf:xf-get 'pro-top xf))
                   (cons 'mode     mode)
                   (cons 'inlets   inlets)
                   (cons 'clayer-p clayer-p)
@@ -219,19 +224,61 @@
         (cons nil "invert unreadable (profile z)"))
        (T (list (car pipe) (cdr pipe) clfile))))))
 
+;; (pfi:endpoint-hits pt lines seen) -> extra (name station) for same-type
+;;   lines that TERMINATE at this structure -- an endpoint within
+;;   *pfi-junction-tol* of the point -- and are not already in `seen`.  The
+;;   on-line membership (pf:lines-at-point) is tuned for pass-through hits, so a
+;;   lateral joining at its own END (common at the primary's downstream
+;;   structure) slips past it; this recovers those junctions.  The station used
+;;   is the line's near range-end (lo for its start, hi for its end).
+(defun pfi:endpoint-hits (pt lines seen / out pt2d e nm verts lo hi ends p0 pn)
+  (setq out  '()
+        pt2d (list (car pt) (cadr pt)))         ; drop z: 2D plan distance only
+  (foreach e lines
+    (setq nm    (cadr e)
+          verts (nth 4 e)
+          lo    (nth 2 e)
+          hi    (nth 3 e))
+    (if (not (member nm seen))
+      (progn
+        (if (and verts (cdr verts))
+          (setq p0 (car verts) pn (last verts))    ; drawn twin endpoints
+          (if (setq ends (pf:cl-endpoints (car e))) ; stub/no twin: authored ends
+            (setq p0 (car ends) pn (cadr ends))
+            (setq p0 nil pn nil)))
+        (cond
+          ((and p0 (<= (distance pt2d (list (car p0) (cadr p0)))
+                       *pfi-junction-tol*))
+           (setq out (cons (list nm lo) out)))
+          ((and pn (<= (distance pt2d (list (car pn) (cadr pn)))
+                       *pfi-junction-tol*))
+           (setq out (cons (list nm hi) out)))))))
+  out)
+
+;; (pfi:inv-row prefix elev size) -> "PREFIX elev (NN\")" | "PREFIX elev"
+;;   size nil (no _TOP .pro / unreadable) omits the parenthetical.
+(defun pfi:inv-row (prefix elev size)
+  (strcat prefix " " (rtos elev 2 2)
+          (if size (strcat " (" (itoa size) "\")") "")))
+
+;; (pfi:prim-size proinv protop sta) -> nominal size | nil   (pipe at an edge)
+(defun pfi:prim-size (proinv protop sta / pipe)
+  (if (setq pipe (pf:pipe-at proinv protop sta)) (cdr pipe)))
+
 ;; (pfi:process-structure block-ename context) -> nil
 ;;   Draws the invert column + lateral blocks for one structure.
 (defun pfi:process-structure (block-ename context
                               / ed pt name xf primary hits primhit others
-                                proinv bracket ii io rows elevs lat linfo
-                                x baseY offset gapn ht style layer res en
-                                lats)
+                                proinv protop verts bracket io ii rows elevs
+                                lat linfo x drawX baseY offset gapn ht style
+                                layer res en lats first-sta target shift)
   (setq ed      (entget block-ename)
         pt      (cdr (assoc 10 ed))
         name    (cdr (assoc 2 ed))
         xf      (cdr (assoc 'xform context))
         primary (cdr (assoc 'primary context))
         proinv  (cdr (assoc 'proinv context))
+        protop  (cdr (assoc 'protop context))
         style   (cdr (assoc 'style context))
         layer   (cdr (assoc 'layer context))
         ht      (cdr (assoc 'ht context))
@@ -244,39 +291,62 @@
      (prompt (strcat "\n  " name " is on line(s) "
                      (pf:join (mapcar 'car hits) ",")
                      " but the profiled line is '" primary "'; skipped.")))
-    ((null (setq bracket (pfi:invert-bracket proinv (cadr primhit))))
-     (prompt (strcat "\n  " name " -- _INV .pro unreadable at sta "
+    ((null (setq verts (pf:pro-verts proinv)))
+     (prompt (strcat "\n  " name " -- _INV .pro has no readable vertices; skipped.")))
+    ((null (setq bracket (pfi:invert-bracket verts (cadr primhit))))
+     (prompt (strcat "\n  " name " -- no invert at sta "
                      (pf:fmt-station (cadr primhit)) "; skipped.")))
     (T
-     (setq ii     (car bracket)
-           io     (cdr bracket)
+     (setq io     (car bracket)          ; (edge-sta . elev) or nil (downstream)
+           ii     (cadr bracket)         ; (edge-sta . elev) or nil (upstream)
            x      (pf:station->profile-x (cadr primhit) xf)
-           rows   (list (strcat "I.I " (rtos ii 2 2))
-                        (strcat "I.O " (rtos io 2 2)))
-           elevs  (list ii io)
-           others (pf:sort-line-infos-alpha (vl-remove primhit hits))
+           rows   '()
+           elevs  '()
+           others (pf:sort-line-infos-alpha
+                    (append (vl-remove primhit hits)
+                            (pfi:endpoint-hits pt (cdr (assoc 'lines context))
+                                               (mapcar 'car hits))))
            lats   '())
-     ;; laterals: bare I.I row + bare block at true elevation
+     ;; I.O. downstream -- left of the station line (row 0)
+     (if io
+       (setq rows  (list (pfi:inv-row "I.O." (cdr io)
+                                      (pfi:prim-size proinv protop (car io))))
+             elevs (list (cdr io))))
+     ;; shared laterals -- CENTRED (between I.O. and primary I.I.)
      (foreach lat others
        (setq linfo (pfi:lateral-info lat (cdr (assoc 'lines context))))
        (if (car linfo)
-         (progn
-           (setq rows  (append rows
-                               (list (strcat "I.I " (rtos (car linfo) 2 2))))
-                 elevs (cons (car linfo) elevs)
-                 lats  (cons linfo lats)))
+         (setq rows  (append rows
+                             (list (pfi:inv-row "I.I." (car linfo) (cadr linfo))))
+               elevs (cons (car linfo) elevs)
+               lats  (cons linfo lats))
          (prompt (strcat "\n  " name " -- lateral '" (car lat)
                          "' skipped: " (cdr linfo) "."))))
-     ;; one shared base Y: lowest invert present minus the FIXED offset
+     ;; primary I.I. upstream -- far right (row last)
+     (if ii
+       (setq rows  (append rows
+                           (list (pfi:inv-row "I.I." (cdr ii)
+                                              (pfi:prim-size proinv protop (car ii)))))
+             elevs (cons (cdr ii) elevs)))
+     ;; one shared base Y: lowest invert present minus the text-scaled drop
      (setq baseY  (- (pf:elev->profile-y (apply 'min elevs) xf)
-                     *pfi-invert-offset*)
+                     (* ht *pfi-invert-offset-factor*))
            offset (* ht *pf-offset-factor*)
            gapn   (* ht *pf-gap-rest-factor*))
+     ;; leftmost structure: shift the TEXT stack right, clear of the elev axis
+     (setq first-sta (cdr (assoc 'first-sta context))
+           drawX     x)
+     (if (and first-sta (equal (cadr primhit) first-sta *pf-range-eps*))
+       (progn
+         (setq target (+ (pf:xf-leftx xf)
+                         (* *pfi-first-shift-clearance* (pf:xf-sf xf)))
+               shift  (max 0.0 (- target (- x offset))))
+         (setq drawX (+ x shift))))
      ;; the column stack: MR reading up = hangs DOWNWARD from base Y
-     (setq res (pfd:draw-label-stack x baseY rows layer style ht
+     (setq res (pfd:draw-label-stack drawX baseY rows layer style ht
                                      offset gapn 'MR))
      (setq *pfinvert-run-ents* (append (cdr res) *pfinvert-run-ents*))
-     ;; lateral pipe blocks at TRUE elevation (blocks may stack; text never)
+     ;; lateral pipe blocks at TRUE station + elevation (blocks may stack)
      (foreach lat (reverse lats)
        (pfd:ensure-layer (pf:sym-layer (caddr lat)) nil)
        (if (setq en (pfd:insert-pipe
@@ -286,8 +356,10 @@
                       (pf:xf-vscale xf)
                       (pf:xf-sf xf)))
          (setq *pfinvert-run-ents* (cons en *pfinvert-run-ents*))))
-     (prompt (strcat "\n  Inverts labeled at " name "  (I.I "
-                     (rtos ii 2 2) " / I.O " (rtos io 2 2)
+     (prompt (strcat "\n  Inverts labeled at " name "  ("
+                     (if io (strcat "I.O. " (rtos (cdr io) 2 2)) "")
+                     (if (and io ii) " / " "")
+                     (if ii (strcat "I.I. " (rtos (cdr ii) 2 2)) "")
                      (if lats
                        (strcat ", " (itoa (length lats)) " lateral(s)")
                        "")
@@ -298,11 +370,28 @@
 ;;; SECTION 5  --  Modes, pass record, command
 ;;; ==========================================================================
 
+;; (pfi:line-min-sta context) -> lowest station of any structure on the primary
+;;   line (across ALL inlets, not just the selected subset), or nil.  This is
+;;   the leftmost structure on the grid -- the one whose stack shifts clear of
+;;   the elevation-axis labels.
+(defun pfi:line-min-sta (context / lines primary inlets best e pt hits ph)
+  (setq lines   (cdr (assoc 'lines context))
+        primary (cdr (assoc 'primary context))
+        inlets  (cdr (assoc 'inlets context))
+        best    nil)
+  (foreach e inlets
+    (setq pt   (cdr (assoc 10 (entget e)))
+          hits (pf:lines-at-point pt lines)
+          ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
+    (if (and ph (or (null best) (< (cadr ph) best))) (setq best (cadr ph))))
+  best)
+
 ;; (pfi:label-sel context) -> nil
 ;;   Labels the structures picked in the run dialog's list (sorted by
 ;;   station).  Replaces the old entsel Pick loop.
 (defun pfi:label-sel (context / sel pr)
-  (setq sel (cdr (assoc 'sel context)))
+  (setq context (cons (cons 'first-sta (pfi:line-min-sta context)) context)
+        sel     (cdr (assoc 'sel context)))
   (prompt (strcat "\nLabeling inverts at " (itoa (length sel))
                   " selected structure(s)..."))
   (foreach pr sel (pfi:process-structure (cadr pr) context))
@@ -319,6 +408,8 @@
           ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
     (if ph (setq pending (cons (list (cadr ph) e) pending))))
   (setq pending (vl-sort pending '(lambda (a b) (< (car a) (car b)))))
+  ;; first structure = lowest station (pending is sorted ascending)
+  (setq context (cons (cons 'first-sta (caar pending)) context))
   (prompt (strcat "\nLabeling inverts at " (itoa (length pending))
                   " structure(s) on '" primary "'."))
   (foreach pr pending (pfi:process-structure (cadr pr) context))

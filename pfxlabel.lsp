@@ -213,16 +213,16 @@
            (setq ybot (- (pf:xf-basey xf) (* *pfx-line-ext* sf))
                  ents '())
            (pfd:ensure-layer *pfa-xing-layer* nil)
-           (pfd:ensure-layer *pfx-xing-text-layer* nil)
            (pfd:ensure-layer (pf:sym-layer srcfile) nil)
            ;; station line (LWPOLYLINE on PF-XING -- recon scans this)
            (if (setq en (pfd:station-line x ybot gtop *pfa-xing-layer*))
              (setq ents (cons en ents)))
-           ;; vertical station text, reading upward from the lower end
+           ;; vertical station text on PF-XING (recon selects LWPOLYLINE only,
+           ;; so text on this layer is never mistaken for a station line)
            (if (setq en (pfd:text (list x ybot 0.0)
                                   (strcat (pf:fmt-station tsta) " "
                                           (pf:cross-desc srcfile))
-                                  *pfx-xing-text-layer* style ht
+                                  *pfa-xing-layer* style ht
                                   (/ pi 2.0) 'MR))
              (setq ents (cons en ents)))
            ;; the crossing pipe at its invert elevation

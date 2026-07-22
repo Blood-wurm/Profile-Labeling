@@ -13,13 +13,18 @@ numbers on a plan sheet are the worst outcome.
 
 ## PFINVERT
 
-- **[wrong-output — CRITICAL] I.I / I.O are swapped and collapsed.** The I.O
-  elevation is applied to *both* inverts and mislabeled I.I; shared-structure
-  inverts are missed; every reading is consistently **~0.05 ft high**. The
-  2026-07-21 upload changed only PFINVERT's dialog (`pfi_run`) — the bracket
-  math (`pfi:invert-bracket`, `pfi:process-structure`) is untouched, so this is
-  fully live. The 0.05 ft offset sits suspiciously close to `*pfi-grade-tol*`
-  0.05 — first place to look. *(field note 258)*
+- ~~**[wrong-output — CRITICAL] I.I / I.O are swapped and collapsed.**~~
+  **FIXED (untested in CAD).** Root cause was the sample-and-detect bracket
+  (`pfi:break-scan`): 0.5-ft sampling read the break ~half a step past the true
+  vertex (the ~0.05-ft-high bias, ≈ `*pfi-grade-tol*`) and couldn't classify
+  one-sided/no-break structures. Replaced with an **exact vertex bracket** —
+  `pf:pro-verts` parses the `.pro` file directly (the Road API has no vertex
+  accessor, confirmed) and `pfi:invert-bracket` takes the two adjacent vertices
+  meeting at the structure: lower = I.O., higher = I.I., a polyline endpoint = a
+  single-invert terminus. Also added pipe size to callouts, the
+  I.O.|shared|I.I. column order, text-scaled drop, and the leftmost-structure
+  shift. **Verify in CAD:** numbers match the `.pro` to the penny; no
+  station-domain warning fires. *(field note 258)*
 - ~~**[scope] Type-scoping.**~~ **FIXED 2026-07-21** with PFLABEL (shared
   builders). Laterals now come only from same-type lines via the scoped table.
 
@@ -133,7 +138,9 @@ hand-entered or hardcoded values.
   open question left: **one sheet per project, or many sheets sharing one data
   folder?** If many, build the sidecar; if one, the in-DWG NOD cache is already
   right. *(TESTING.md storage-location discussion)*
-- **[question] PVI probe.** Test whether the Road API returns `.pro` vertices
-  directly (`profile vertices` and similar spellings). If yes, swap
-  `pfi:invert-bracket`'s sample-and-detect body for an exact PVI read.
-  *(TESTING.md known-open)*
+- ~~**[question] PVI probe.**~~ **RESOLVED 2026-07-22.** The Road API exposes
+  **no** vertex accessor — the only profile calls are `profile z` and `profile
+  sta range` (confirmed against the live `cf:road_api` catalog). `pfi:invert-
+  bracket` now reads exact vertices by **parsing the `.pro` file** (`pf:pro-
+  verts`), the suite's one file read, with a `profile_z` cross-check guarding the
+  station domain.

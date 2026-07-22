@@ -87,6 +87,55 @@
   (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_sta_range" pro)))
   (if (and (not (vl-catch-all-error-p r)) (listp r)) r nil))
 
+;; (pf:pro-verts pro) -> ((sta . elev) ...) sorted by sta | nil
+;;   Reads the .pro FILE directly for its EXACT vertices -- the one file read in
+;;   the suite (every other profile access goes through the Road API), forced by
+;;   the API exposing no vertex accessor (only profile_z / profile_sta_range).
+;;   A .pro is CSV "sta,elev,0.0" rows, terminated by a "0,0,0" row (then a "1"
+;;   and EOF).  Each vertex IS an invert -- PFINVERT brackets structures on them.
+;;   Cross-checks one vertex against pf:pro-z (the trusted authored reader) and
+;;   warns on a station-domain mismatch.  Cached per path+checksum.
+(setq *pf-proverts-cache* '())   ; (path checksum verts)*
+
+(defun pf:pro-verts (pro / cur cell f line parts sta elev verts done vs zz)
+  (setq cur (pf:checksum-file pro))
+  (cond
+    ((null cur) nil)                                   ; unreadable
+    ((and (setq cell (assoc pro *pf-proverts-cache*))
+          (= (cadr cell) cur))
+     (caddr cell))                                     ; HIT -- no re-read
+    (T
+     (setq verts '() done nil)
+     (if (setq f (open pro "r"))
+       (progn
+         (while (and (not done) (setq line (read-line f)))
+           (setq parts (pf:split line ","))
+           (if (>= (length parts) 2)
+             (progn
+               (setq sta  (atof (pf:trim (car parts)))
+                     elev (atof (pf:trim (cadr parts))))
+               (if (and (equal sta 0.0 1e-9) (equal elev 0.0 1e-9))
+                 (setq done T)                          ; "0,0,0" terminator
+                 (setq verts (cons (cons sta elev) verts))))))
+         (close f)))
+     (if verts
+       (progn
+         (setq verts (vl-sort verts '(lambda (a b) (< (car a) (car b)))))
+         ;; station-domain sanity: a mid vertex must match profile_z there
+         (setq vs (nth (/ (length verts) 2) verts)
+               zz (pf:pro-z pro (car vs)))
+         (if (and zz (> (abs (- zz (cdr vs))) 0.02))
+           (prompt (strcat "\n  Warning: .pro vertex vs profile_z mismatch at "
+                           (pf:fmt-station (car vs)) " (" (rtos (cdr vs) 2 2)
+                           " vs " (rtos zz 2 2)
+                           ") -- station domain may differ; inverts suspect.")))
+         (setq *pf-proverts-cache*
+               (cons (list pro cur verts)
+                     (vl-remove-if '(lambda (c) (= (car c) pro))
+                                   *pf-proverts-cache*))))
+       (prompt (strcat "\n  Warning: no vertices parsed from " pro ".")))
+     verts)))
+
 ;; (pf:pipe-at inv-pro top-pro sta) -> (inv-elev . nominal-size) | nil
 ;;   inv = invert (flowline) elev; size = nearest nominal to (top-inv) x 12.
 ;;   Missing/failed TOP leaves size nil (placeholder handled downstream);

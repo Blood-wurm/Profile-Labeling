@@ -261,27 +261,38 @@ it.
 c:PFINVERT
  ├─ pfi:setup                  anchor record + registry line table (pflabel's walk)
  └─ pfi:process-structure  (per structure on the primary)
-      ├─ pfi:invert-bracket        I.I/I.O at the .pro GRADE BREAKS each side
+      ├─ pf:pro-verts              exact .pro vertices (file-parsed, cached)
+      ├─ pfi:invert-bracket        I.O/I.I from the two adjacent .pro VERTICES
+      ├─ pfi:endpoint-hits         same-type lines TERMINATING here (end junctions)
       ├─ pfi:lateral-info          each other line here: registry .pro → invert + size
       ├─ pfd:draw-label-stack 'MR  the invert COLUMN (hangs below base Y)
       └─ pfd:insert-pipe           bare lateral pipe block at TRUE elevation
 ```
 
-- **Primary = text only** (`I.I <elev>` / `I.O <elev>`) — its pipe is already
-  the `.pro` linework on the grid. **Laterals = bare block at true elevation
-  + bare `I.I <elev>` row** (non-present pipes; line identity is already on
-  the structure's top label). No leader line.
-- **Grade-break bracket, not a fixed offset:** walking the `_INV.pro` outward
-  from the station, the first grade break each side is the structure edge —
-  the bracket **auto-widens with structure size**. The *lower* invert of the
-  pair is downstream (self-determining) → `I.O`. A flat run (no drop) reads
-  the station itself; both rows still drawn.
+- **Primary = text only** (`I.O. <elev> (NN")` / `I.I. <elev> (NN")`) — its pipe
+  is already the `.pro` linework on the grid. **Laterals = bare block at true
+  elevation + `I.I. <elev> (NN")` row** (non-present pipes; line identity is
+  already on the structure's top label). No leader line.
+- **Junctions at a line's end:** the on-line membership tolerances are tuned for
+  *pass-through* hits, so a lateral that **terminates** at a structure (its own
+  endpoint — common at the primary's downstream structure) slips past them.
+  `pfi:endpoint-hits` recovers those: any same-type registered line whose
+  endpoint lands within `*pfi-junction-tol*` (2 ft) of the structure is added as
+  a shared lateral, read at that line's range-end.
+- **Vertex bracket, exact numbers:** the `.pro` is authored from the polyline
+  endpoints, so each vertex **is** an invert. `pfi:invert-bracket` reads the two
+  adjacent vertices meeting at the structure (via `pf:pro-verts`, the suite's
+  one file read — the Road API exposes no vertex accessor). The *lower* of the
+  pair is downstream → `I.O.`, the higher → `I.I.` A polyline **endpoint** is a
+  terminus (one invert): the lower profile end → single `I.O.`, the higher →
+  single `I.I.` No sampling, so no 0.05-ft bias and no swap.
 - **The column rule (collision-proof):** all text rows share **one base Y** =
-  lowest invert present − `*pfi-invert-offset*` (fixed model units, **not**
-  scaled by `sf`), fanning left/right across the station X by the same
-  straddle rule as the top stack. Columns, not true-elevation rows — a 0.10'
-  drop can never overlap two callouts. Blocks sit at true elevation and may
-  stack; text never does.
+  lowest invert present − (`*pfi-invert-offset-factor*` × text height; 16 units
+  at H:50), fanning across the station X: **I.O. downstream-left, shared lateral
+  I.I.(s) centred, primary I.I. upstream-right**. Columns, not true-elevation
+  rows — a 0.10' drop can never overlap two callouts. The **leftmost** structure
+  shifts its stack right to clear the elevation-axis labels. Blocks sit at true
+  elevation and may stack; text never does.
 - **Layer / pass / undo — identical to `PFLABEL`:** derived `<TYPE>-TEXT_P`
   handle-tracked (PASS `INVERT`, `All` replaces by handle) vs the
   *"Use current layer"* toggle (PASS `INVERT-CLAYER`, fire-and-forget).
@@ -370,7 +381,7 @@ Carlson API "tool calls" (Road = `EWORKS.ARX`, DTM = `TRI4.ARX`) they make.
 | 3 | **USER place** | `pfsetup.lsp`: `pfs:registry-dialog` → `pfs:place-one` → `pfs:show-dialog` (datum typed here), `pfs:pick-extents` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
 | 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → `pfs:choose-or-place` (pick target) → `pflabel:run-dialog` builds the line table (reused by `pflabel:setup`) → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:build-lines`→`pf:cl-geom` + `pf:twin-verts`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | membership pre-filter = drawn twin verts (no API); Road `cl_location_at_pt` (authored test); geometry from **cache**; top-of-grid probe (`inters`, no API) |
 | 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-geom`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` | geometry from **cache**; Road `cl_location_at_pt` (station), **`profile_z`** (invert/top); `cl_location_at_sta` only on refine/cache-miss |
-| 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfs:choose-or-place` → `pfi:run-dialog` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`profile_z`** (bracket walk + laterals) |
+| 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfs:choose-or-place` → `pfi:run-dialog` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pf:pro-verts`, `pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`.pro` file parse** (`pf:pro-verts`, exact vertices), `profile_z` (sizes + laterals) |
 | 7 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs; geometry served from the GEOM cache | Road (unchanged pairs skipped; no re-sampling unless a `.cl` changed) |
 | 8 | **Teardown** | `pfanchor.lsp`: `c:PFREMOVE` → `pfa:teardown` (`pfa:erase-pass`, `entdel`) | — |
 
@@ -494,8 +505,7 @@ if the firm's project template changes.
 | `PF-GRID-MNR`, `PF-HBOX` | Carlson | Grid frame; used by the anchor corner sanity probe. |
 | `PF-NAME` | Carlson | Grid identity text — AUTO reads it. |
 | `PF-ANCHOR` | tool | `PF-GRIDANCHOR` blocks. Created **no-plot**, visible in model space. |
-| `PF-XING` | tool | Crossing station lines — the layer reconciliation scans (by handle for erase). |
-| `PF-XING-TEXT` | tool | Vertical crossing station text. |
+| `PF-XING` | tool | Crossing station lines **and** their vertical station text — recon scans it for `LWPOLYLINE` only, so text on it is ignored (erase is by handle). |
 | `PF-TEMP` | tool | Reserved (legacy invert-tick concept). As built, `PFINVERT` is handle-tracked on `<TYPE>-TEXT_P` instead. |
 | `<TYPE>_P` / `<TYPE>-TEXT_P` | derived | Crossing pipe block + its text, by utility type. |
 | `ALIGN-<TYPE>_P` | derived | Per-type alignment layer. |
@@ -522,9 +532,10 @@ Every tunable lives in one file. The load-bearing groups:
   pins precision live on changed pairs).
 - **Pipe rendering** — `PF-PIPE_<NN>` block family; circle placeholder when a
   block is missing; `*pfx-zoom-pause*` verification pause (0 disables).
-- **Invert bracket (`PFINVERT`)** — `*pfi-invert-offset*` 5.0 (fixed, un-scaled
-  column drop), `*pfi-scan-window*` 25 ft, `*pfi-scan-step*` 0.5 ft,
-  `*pfi-grade-tol*` 0.05 Δslope (what reads as a structure edge).
+- **Invert bracket (`PFINVERT`)** — `*pfi-invert-offset-factor*` 4.0 (× text
+  height column drop → 16 units at H:50), `*pfi-struct-width-max*` 15 ft (max
+  gap for two vertices to be one structure), `*pfi-first-shift-clearance*` 12
+  (× sf, leftmost-stack clearance from the elevation axis).
 - **Project data folders** — `*pfset-std-subfolders*` (firm-standard `.cl` /
   `.pro` / `.tin` subfolders, searched up from the native `tmpdir$` root) and
   `*pfset-std-search-depth*` (how many parent levels to search). Retarget these

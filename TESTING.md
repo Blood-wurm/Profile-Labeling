@@ -20,9 +20,9 @@ surprises):
   CMDECHO returns to its prior value after the command (and after an Esc).
 - **MR justification:** confirmed "grows down" by recollection — **verify
   visually** in 6.6; it decides the invert stack's direction.
-- **PVI check:** while in the session, test whether the Road API returns
-  `.pro` vertices (try `(cf:road_api "profile vertices" <pro>)` and similar
-  spellings). If yes → swap `pfi:break-scan` later.
+- **PVI check:** RESOLVED 2026-07-22 — the Road API has no vertex accessor
+  (only `profile z` / `profile sta range`). `pfi:invert-bracket` now reads exact
+  vertices by parsing the `.pro` file (`pf:pro-verts`); `pfi:break-scan` is gone.
 - **Dialog layer (2026-07-19 rework + 2026-07-21 pick-first split):**
   the registry manager (`pfsetup_registry`), PFLABEL's `pf_run`, PFINVERT's
   own `pfi_run` (separate definition, `pi_*` tiles), the crossings dialog

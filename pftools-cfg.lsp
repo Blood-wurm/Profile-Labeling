@@ -107,7 +107,8 @@
 (setq *pfx-row-gap*   3.20)             ; pipe-label row gap
 (setq *pfx-line-ext*  30.0)             ; station line extension below the grid
 (setq *pfx-tick-layer* "PF-TEMP")       ; invert ticks + elev text; NEVER erased
-(setq *pfx-xing-text-layer* "PF-XING-TEXT") ; vertical crossing station text
+(setq *pfx-xing-text-layer* "PF-XING-TEXT") ; RETIRED -- station text now goes on
+                                        ; PF-XING (recon selects LWPOLYLINE only); kept for compatibility
 (setq *pfx-zoom-pause* 1.5)             ; seconds to pause on each inserted block
                                         ; (PFXLABEL verification pause -- boss ask)
 
@@ -120,18 +121,28 @@
 ;;; --------------------------------------------------------------------------
 ;;; PFINVERT  (invert labels at structures)
 ;;; --------------------------------------------------------------------------
-;;; Text base Y = lowest invert present MINUS this offset.  FIXED model units;
-;;; deliberately NOT scaled by sf (see the V4 handoff, section 4.10).
-(setq *pfi-invert-offset* 5.0)
+;;; Text base Y = lowest invert present MINUS (this factor x text height).  The
+;;; label drop now SCALES with text height like every other label spacing in
+;;; the suite: 4.0 x height = 16 model units at H:50 (height 4.0), 6.4 at H:20.
+(setq *pfi-invert-offset-factor* 4.0)
 
-;;; Grade-break bracket (pfi:invert-bracket): the structure's in/out inverts
-;;; are read at the first grade break each side of the station -- the
-;;; structure edge -- so the bracket auto-widens with structure size.
-(setq *pfi-scan-window* 25.0)  ; ft each side -- must not reach the next structure
-(setq *pfi-scan-step*   0.5)   ; ft -- .pro sampling interval for the walk
-(setq *pfi-grade-tol*   0.05)  ; dslope (ft/ft) that reads as a break; catches
-                               ; drop faces, ignores mild run-to-run grade
-                               ; changes (the flat-case fallback covers those)
+;;; Vertex bracket (pfi:invert-bracket): the structure's in/out inverts are the
+;;; two ADJACENT .pro vertices that straddle the station -- exact endpoints, no
+;;; sampling.  Two vertices count as one structure only when their station gap
+;;; is <= this width (a real pipe run between structures is far wider); a lone
+;;; endpoint vertex is a terminus (single invert).
+(setq *pfi-struct-width-max* 15.0)  ; ft -- max gap for a vertex pair to be ONE structure
+
+;;; Junction detection: a lateral that TERMINATES at a structure sits at its own
+;;; endpoint, beyond the tight on-line membership tolerances (built for
+;;; pass-through hits).  PFINVERT adds any same-type registered line whose
+;;; endpoint lands within this distance of the structure as a shared lateral.
+(setq *pfi-junction-tol* 2.0)  ; ft -- line endpoint <= this from a structure = a junction
+
+;;; First (leftmost) structure: its label stack is shifted right so the left
+;;; column clears the grid's elevation-axis labels.  Target left edge =
+;;; grid leftx + (this base scalar x sf).  Tune against a real sheet.
+(setq *pfi-first-shift-clearance* 12.0)  ; base model units (x sf) of axis clearance
 
 ;;; --------------------------------------------------------------------------
 ;;; Anchor & ledger  (pfanchor.lsp)
