@@ -367,6 +367,7 @@
   (setq *pfxl-prev-error* *error*
         *error*           pfxl:*error*
         *pfxl-undo-open*  nil)
+  (pf:echo-off)
   (pf:load-apis)
   (setq anchor (pfxl:resolve-target))
   (if (null anchor)
@@ -464,6 +465,7 @@
                                    (nth 3 e))))))))))
         (if *pfxl-undo-open*
           (progn (command "_.UNDO" "_End") (setq *pfxl-undo-open* nil))))))
+  (pf:echo-on)
   (setq *error* *pfxl-prev-error*)
   (princ))
 

@@ -14,39 +14,62 @@ surprises):
 
 - **Backtick names bug (UNFIXED):** `pf:parse-sheet-name` closes only on a
   straight `'` — a PF-NAME like ``STORM LINE `DA` `` silently skips in AUTO.
-- **Command echo:** `CMDECHO` is never suppressed — UNDO/ZOOM/DELAY chatter
-  is expected noise, not a bug (§13.2).
+- **Command echo (FIXED 2026-07-21, verify):** `CMDECHO` is now saved/zeroed
+  per command (`pf:echo-off`/`pf:echo-on`) and restored on both normal and
+  error exit. Confirm no UNDO/ZOOM/DELAY chatter during a run, and that
+  CMDECHO returns to its prior value after the command (and after an Esc).
 - **MR justification:** confirmed "grows down" by recollection — **verify
   visually** in 6.6; it decides the invert stack's direction.
 - **PVI check:** while in the session, test whether the Road API returns
   `.pro` vertices (try `(cf:road_api "profile vertices" <pro>)` and similar
   spellings). If yes → swap `pfi:break-scan` later.
-- **Dialog layer is BRAND-NEW (2026-07-19 rework, never opened in CAD):**
-  the registry manager (`pfsetup_registry`), the shared run dialog
-  (`pf_run`), the crossings dialog (`pfxl_run`), `pf_confirm`, and the
-  slot-based `pfsetup_main` all shipped together. Expect DCL layout
-  findings (tile widths, list column drift under the proportional font) on
-  top of logic findings. Command line now carries ONLY screen picks.
+- **Dialog layer (2026-07-19 rework + 2026-07-21 pick-first split):**
+  the registry manager (`pfsetup_registry`), PFLABEL's `pf_run`, PFINVERT's
+  own `pfi_run` (separate definition, `pi_*` tiles), the crossings dialog
+  (`pfxl_run`), `pf_confirm`, and the slot-based `pfsetup_main`. **Both label
+  commands are now pick-first:** `pfs:choose-or-place` resolves the target
+  (a `pf_pick` list) *before* the run dialog opens — there is **no target
+  popup**, and the dialog lists a single target's structures. Expect DCL
+  layout findings (tile widths, list column drift under the proportional
+  font) on top of logic findings.
+- **PFINVERT bracket is BROKEN (wrong-output, CRITICAL — probe first):**
+  I.I/I.O swapped, the I.O elevation applied to both inverts, shared inverts
+  missed, ~0.05 ft high. The 2026-07-21 upload touched only PFINVERT's
+  dialog, not its bracket math — this is live. See §6 and `OPEN-ISSUES.md`.
+- **Cross-utility scoping (FIXED 2026-07-21, verify):** PFLABEL/PFINVERT
+  membership is now scoped to the primary's utility type (was whole-registry).
+  Verify in 3.1 and 6.4 that other-utility blocks no longer leak in and
+  same-type junctions still combine.
 
 ---
 
 ## 0. Load
 
 - [ ] 0.1 `(load ".../V4/pftools-load.lsp")` → banner lists **PFSETUP,
-      PFLABEL (PFL), PFXLABEL (PFX), PFINVERT (PFI), PFLABELSET, PFROOT**,
-      "Coming this cycle: PFCHECK". No load errors.
+      PFLABEL (PFL), PFXLABEL (PFX), PFINVERT (PFI), PFLABELSET** (PFROOT is
+      retired — project root is native `tmpdir$`), "Coming this cycle:
+      PFCHECK". No load errors.
 - [ ] 0.2 `*pftools-dir*` inside `pftools-load.lsp` points at THIS V4
       folder (it ships hardcoded — fix the path first or nothing loads).
 - [ ] 0.3 Each command name autocompletes / runs from the command line.
 - [ ] 0.4 **Dialog smoke:** every dialog OPENS (a DCL syntax error kills
       the whole file — `pfsetup_registry`, `pfsetup_main`, `pf_run`,
-      `pfxl_run`, `pf_confirm`, `pf_pick`, `pflabel_settings`). Help
-      buttons show their text; Esc/Cancel closes clean everywhere.
+      `pfi_run`, `pfxl_run`, `pf_confirm`, `pf_pick`, `pflabel_settings`).
+      Help buttons show their text; Esc/Cancel closes clean everywhere.
 
 ## 1. Project root + AUTO registration (PFSETUP first run)
 
-- [x] 1.1 Fresh drawing: `PFSETUP` prompts for a `.cl` in the data folder;
-      root stored (verify: `PFROOT` shows it; survives save/reopen).
+- [ ] 1.1 **Native root (tmpdir$) — CHANGED 2026-07-21, re-verify.** With an
+      active Carlson project: `PFSETUP` uses the project folder with NO browse
+      — reports `Project data folder: <dir>  (Carlson project)`. **Empirical
+      check that gates the whole rewrite:** confirm `get-company-dir`'s
+      search-up actually lands on the firm subfolders — AUTO finds the
+      `.cl` under `…\Alignments` and the `_INV/_TOP.pro` under `…\CivilSurvey`.
+      If it can't, note what `tmpdir$` returned and where the files really sit
+      (the `*pfset-std-subfolders*` map or `*pfset-std-search-depth*` may need
+      retargeting). With NO active project: falls back to a one-shot browse
+      (reports `(session)`), good for the session only — does NOT survive
+      save/reopen (no persistent root by design).
 - [x] 1.2 AUTO names every PF-NAME profile: each gets `Named <TY> '<NM>'`
       with its `.cl` + INV/TOP note. Count matches the sheet.
 - [ ] 1.3 **Skip cases report loudly, never guess:** a PF-NAME with no
@@ -65,6 +88,12 @@ surprises):
 
 ## 2. PFSETUP placement
 
+- [ ] 2.0 **Native scale seed (NEW 2026-07-21, verify):** on a NEW placement
+      the H/V fields prefill from Carlson `sv:sm`/`sv:vs` — confirm they match
+      the profile grid's actual H/V scale (if not, note what they returned;
+      they may be the plan scale, not the grid's). Fields stay editable; on
+      Edit the stored value prefills, not the native read. Also confirm the
+      settings file lands under `usrdir$\PFTools` (native), not LOCALAPPDATA.
 - [x] 2.1 Dialog validation rejects: empty name; zero/negative scales;
       empty datum; ONE `.pro` bound (pair rule); `.pro` whose name ≠ the
       Name field; one `.tin` bound. Each shows the errtile message, no
@@ -91,16 +120,23 @@ surprises):
 
 ## 3. PFLABEL
 
-- [ ] 3.0 **Run dialog:** the structure list matches the plan (every
-      structure on the primary line, sorted by station); switching the
-      Target popup repopulates it; Label Selected with nothing selected →
-      errtile; Settings... opens PFLABELSET nested and changes apply to
-      the same run; choosing an UNPLACED profile + labeling places it
-      first (dialog → two picks), then labels.
+- [ ] 3.0 **Pick-first + run dialog:** target is chosen by the `pf_pick` list
+      BEFORE the dialog opens (no target popup); the structure list then
+      matches the plan (every structure on the primary line, sorted by
+      station); Label Selected with nothing selected → errtile; Settings...
+      opens PFLABELSET nested and changes apply to the same run; picking an
+      UNPLACED profile places it first (two corner picks) then lists it.
+      **Ghost-dropdown check:** the list paints cleanly on open (the
+      compute-before-`new_dialog` fix) — no flicker/glitch.
 - [ ] 3.1 Select the junction structure in the list → station rows primary
       first then alphabetical; combined ID alphabetical (`AA-1/BB-2`); const
       row from the rule table (SMH/DMH before MH — label one of each);
       elevation row placeholder; HDWL drops the elevation row.
+      **Cross-utility scoping (FIXED 2026-07-21, verify):** on a sheet with
+      mixed types near the same station, confirm the label does NOT pull in a
+      different-type line's structure/block — membership is now scoped to the
+      primary's type. A same-type junction (two STORM lines) MUST still get the
+      combined ID; a SANITARY line the STORM merely crosses MUST NOT appear.
 - [ ] 3.2 **Stub contribution:** with a secondary line UNPLACED (stub
       only), the junction ID still includes it.
 - [x] 3.3 Stepped-top grid: labels sit on the top **at each station**, not
@@ -235,7 +271,33 @@ surprises):
 (crash / wrong-output / annoyance). Wrong-output beats crash — a crash is
 honest, silently wrong numbers on a plan sheet are not.
 
-NOTES:
+## Field-test findings (2026-07-20), triaged 2026-07-21
+
+Open issues are now tracked in **`OPEN-ISSUES.md`** (separated by tool). This
+section keeps the record of what the pull resolved; the raw log is archived
+below it.
+
+**Resolved by the 2026-07-21 pull — re-verify, then close:**
+
+- PFXLABEL `"Checking for crossings"` progress message added (was silent).
+- PFXLABEL zero-count `"Discovery: 0 new, 0 updated, 0 moved"` now suppressed
+  (prints only when something changed).
+- `profile z` → **`profile_z`** Road-API fix. This is almost certainly why
+  `SANITARY_A @ 5+14.38` skipped "SOURCE INVERT UNREADABLE" **and** why the
+  crossing line "dropped" (skipped crossings draw nothing). Re-run that case.
+- PFLABEL station-line prefix now per-type via the `[util]` token
+  (`sta_suf` = `"[util] LINE '[line]'"`), not a hardcoded "STORM".
+- Perpendicular-deflection miss fixed by the drawn-twin pre-filter (exact PIs).
+- Ghost dropdown *likely* fixed by the pick-first refactor — verify in 3.0.
+
+**Still open → see `OPEN-ISSUES.md`:** PFINVERT I.I/I.O bracket bug (CRITICAL),
+cross-utility scoping, PFSETUP Place-All flow + dialog size, discover-at-setup,
+anchor block style, CMDECHO, per-crossing scan perf, backtick names, PICKADD,
+GEOM sidecar decision, PVI probe.
+
+---
+
+### Raw field log (2026-07-20, archived)
 
 •	.cl crossings and shared stations need to be found at pfsetup.
 •	For pflabel and pfinvert we don’t need to run checks against other utility types. If STORM we only need to compare to STORM etc.
@@ -259,6 +321,14 @@ NOTES:
 - pflabel grabs block from other utilities
 - pflabel names by [UTIL]
 - 
+
+> **UPDATE 2026-07-21 — the project-path question below is ANSWERED.** The
+> suite now reads the project data folder natively from Carlson's `tmpdir$`
+> (`pfset:root-get`); the user-declared NOD "ROOT" / `C:PFROOT` mechanism is
+> retired. This *unblocks* the GEOM-sidecar option (a reliable project path was
+> its prerequisite) — that decision still rides on the one open question:
+> **one sheet per project, or many sheets sharing one data folder?** The
+> discussion below is kept as the rationale.
 
 *The storage-location deviation I called out in the plan: geometry lives in a shared NOD store keyed by .cl identity, not on the stub/anchor record with promotion carry-forward. Behavior matches what we designed; it's just less machinery. If you specifically want it on the record, that's a different edit.
 

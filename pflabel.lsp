@@ -176,13 +176,17 @@
 ;;   secondary set.  Stubs count because membership is plan-view station
 ;;   math: IDENTITY IS ENOUGH -- an unplaced line still contributes to a
 ;;   junction's combined ID.  (This closes the old silently-shorter-ID gap.)
-(defun pflabel:registry-pairs (primary-cl / out e meta tfile at s)
-  (setq out '())
+;;   Secondaries are SAME-UTILITY-TYPE only: a STORM profile's junctions are
+;;   other STORM lines.  A different type sharing a station is a CROSSING, not
+;;   a junction -- that's PFXLABEL's job, not a combined-ID contributor here.
+(defun pflabel:registry-pairs (primary-cl / out e meta tfile at s ptype)
+  (setq out '() ptype (pf:type-of primary-cl))
   (foreach e (pfa:all-anchors)
     (setq meta  (pfa:meta-get e)
           tfile (if (and meta (assoc 1 meta)) (cdr (assoc 1 meta)) ""))
     (if (and (/= tfile "")
-             (/= (strcase tfile) (strcase primary-cl)))
+             (/= (strcase tfile) (strcase primary-cl))
+             (= (pf:type-of tfile) ptype))          ; same type only
       (progn
         (setq at (pfa:read-attribs e))
         (setq out (cons (cons tfile (pfa:att "LINE" at)) out)))))
@@ -190,6 +194,7 @@
     (setq tfile (caddr s))
     (if (and tfile (/= tfile "")
              (/= (strcase tfile) (strcase primary-cl))
+             (= (pf:type-of tfile) ptype)            ; same type only
              (not (assoc tfile out)))
       (setq out (cons (cons tfile (cadr s)) out))))
   (reverse out))
@@ -344,8 +349,11 @@
      (prompt "\nNo .cl on record for this target -- run PFSETUP (edit).") nil)
     (T
      (setq rd-primary (pf:xf-get 'name xf) pairs '())
+     ;; SAME-UTILITY-TYPE only (parity with pflabel:registry-pairs): cross-type
+     ;; lines sharing a station are crossings (PFXLABEL), not junctions here.
      (foreach r (pfa:registry)
-       (if (setq clf (pfxl:entry-cl r))
+       (if (and (setq clf (pfxl:entry-cl r))
+                (= (pf:type-of clf) (pf:type-of cl)))
          (setq pairs (cons (cons clf (cadr r)) pairs))))
      (setq pairs     (pf:dedupe-pairs (reverse pairs))
            rd-lines  (pflabel:build-lines pairs)
@@ -624,6 +632,7 @@
   (setq *pflabel-prev-error* *error*
         *error*              pflabel:*error*
         *pflabel-undo-open*  nil)
+  (pf:echo-off)
   (pf:load-apis)
   ;; pick-first (PFXLABEL parity): choose/place the target, THEN list only its
   ;; structures.  choose-or-place places an unplaced pick on the fly.
@@ -662,6 +671,7 @@
               (pflabel:write-pass ctx)
               (command "_.UNDO" "_End")
               (setq *pflabel-undo-open* nil)))))))
+  (pf:echo-on)
   (setq *error* *pflabel-prev-error*)
   (princ))
 

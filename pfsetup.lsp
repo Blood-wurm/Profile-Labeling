@@ -246,12 +246,16 @@
                      (cdr (assoc (strcase ity) *pfs-mat-last*))))
         (pfs:fill-materials ity imat)
         (set_tile "s_name" (if (assoc 'name init) (cdr (assoc 'name init)) ""))
+        ;; scale seed: stored value (Edit) wins; else NATIVE sv:sm/sv:vs; else
+        ;; the last-used setting.  The field stays editable either way.
         (set_tile "s_hs"
-          (if (assoc 'hs init) (rtos (cdr (assoc 'hs init)) 2 2)
-                               (cdr (assoc "hscale" s))))
+          (cond ((assoc 'hs init) (rtos (cdr (assoc 'hs init)) 2 2))
+                ((pfset:native-scale 'sv:sm))
+                (T (cdr (assoc "hscale" s)))))
         (set_tile "s_vs"
-          (if (assoc 'vs init) (rtos (cdr (assoc 'vs init)) 2 2)
-                               (cdr (assoc "vscale" s))))
+          (cond ((assoc 'vs init) (rtos (cdr (assoc 'vs init)) 2 2))
+                ((pfset:native-scale 'sv:vs))
+                (T (cdr (assoc "vscale" s)))))
         (if d-cl   (set_tile "s_cl"   (pfs:file-display d-cl)))
         (if d-inv  (set_tile "s_inv"  (pfs:file-display d-inv)))
         (if d-top  (set_tile "s_top"  (pfs:file-display d-top)))
@@ -777,19 +781,24 @@
   (setq *pfs-prev-error* *error*
         *error*          pfs:*error*
         *pfs-undo-open*  nil)
+  (pf:echo-off)
   (pf:load-apis)
   
-  ;; Bootstrap: If PFROOT hasn't been set in this drawing yet, prompt for it once
+  ;; Project root is NATIVE (Carlson tmpdir$).  Only when there's no active
+  ;; project does the one-shot browse seed a session fallback.
   (setq rootDir (pfset:root-get))
-  (if (null rootDir)
+  (if rootDir
+    (prompt (strcat "\nProject data folder: " rootDir
+                    (if (pfset:tmpdir) "  (Carlson project)" "  (session)")))
     (progn
-      (setq rootDir (pfset:browse "Select ANY .cl in the Project Data Folder to Initialize Project"
-                                  '*pfset-dir-cl* "cl"))
+      (setq rootDir (pfset:browse
+                      "No active Carlson project -- select ANY file in the Project Data Folder"
+                      '*pfset-dir-cl* "cl"))
       (if rootDir
         (progn
           (setq rootDir (strcat (vl-filename-directory rootDir) "\\"))
           (pfset:root-set rootDir)
-          (prompt (strcat "\nProject data root initialized: " rootDir))))))
+          (prompt (strcat "\nProject data folder (session): " rootDir))))))
 
   ;; AUTO fires when the drawing has no registry
   (if (null (pfa:registry)) (pfs:auto))
@@ -812,6 +821,7 @@
        (pfs:place-one (nth 4 (nth (cdr act) reg))))
       ((eq (car act) 'edit)
        (pfs:edit-one (nth 3 (nth (cdr act) reg))))))
+  (pf:echo-on)
   (setq *error* *pfs-prev-error*)
   (princ))
 

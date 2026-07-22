@@ -175,6 +175,20 @@
 (setq *pfset-fname-legacy* "pflabel-settings.txt")   ; v3 fallback, read once
 (setq *pfset-nod-name*     "PFTOOLS")                ; drawing dictionary (NOD)
 
+;;; --------------------------------------------------------------------------
+;;; Project data folders  (NATIVE routing off Carlson's tmpdir$)
+;;; --------------------------------------------------------------------------
+;;; The project data root comes from Carlson (tmpdir$); file picks and AUTO
+;;; lookups route to these firm-standard subfolders.  pfset:find-std-dir
+;;; SEARCHES UP from the root (0..depth parent levels) for each subfolder, so
+;;; it self-calibrates no matter which level tmpdir$ lands on -- no fixed
+;;; "step up N" assumption.  Edit these paths to the firm's project template.
+(setq *pfset-std-subfolders*
+  '(("cl"  . "02_ProjectData\\Alignments")
+    ("pro" . "05_Drawings\\DrawingData\\CivilSurvey")
+    ("tin" . "02_ProjectData\\Surfaces")))
+(setq *pfset-std-search-depth* 3)   ; parent levels to search up from the root
+
 (princ "\npftools-cfg.lsp loaded (V4 configuration).")
 (princ)
 ;;; ==========================================================================

@@ -500,6 +500,7 @@
   (setq *pfinvert-prev-error* *error*
         *error*               pfinvert:*error*
         *pfinvert-undo-open*  nil)
+  (pf:echo-off)
   (pf:load-apis)
   ;; pick-first (PFXLABEL parity): choose/place the target, THEN list only its
   ;; structures.  choose-or-place places an unplaced pick on the fly.
@@ -538,6 +539,7 @@
               (pfi:write-pass ctx)
               (command "_.UNDO" "_End")
               (setq *pfinvert-undo-open* nil)))))))
+  (pf:echo-on)
   (setq *error* *pfinvert-prev-error*)
   (princ))
 

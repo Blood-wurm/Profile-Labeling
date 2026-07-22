@@ -36,7 +36,7 @@
   (princ "\n  Structure labels:  PFLABEL  (alias PFL)")
   (princ "\n  Crossings:         PFXLABEL (alias PFX)")
   (princ "\n  Inverts:           PFINVERT (alias PFI)")
-  (princ "\n  Settings:          PFLABELSET, PFROOT (project data root)")
+  (princ "\n  Settings:          PFLABELSET   (project root: native tmpdir$)")
   (princ "\n  Coming this cycle: PFCHECK")
   (princ "\n----------------------------------------------")
   (princ))

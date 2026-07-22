@@ -916,6 +916,7 @@
         *pfxl-undo-open*     nil
         *pfinvert-undo-open* nil
         *pfrem-undo-open*    nil)
+  (pf:echo-on)                       ; error path always restores CMDECHO
   (princ))
 
 
@@ -961,6 +962,7 @@
   (setq *pfrem-prev-error* *error*
         *error*            pfrem:*error*
         *pfrem-undo-open*  nil)
+  (pf:echo-off)
   (setq anchor (pfa:pick-anchor
                  "\nSelect grid anchor to REMOVE (Enter to list): "))
   (if (null anchor) (setq anchor (pfa:choose-anchor)))
@@ -1008,6 +1010,7 @@
           (prompt (strcat "\nRemoved anchor + ledger + " (itoa n)
                           " entit" (if (= n 1) "y" "ies")
                           ".  (One U reverses it.)"))))))
+  (pf:echo-on)
   (setq *error* *pfrem-prev-error*)
   (princ))
 

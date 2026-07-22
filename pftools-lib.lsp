@@ -26,6 +26,23 @@
   (vl-catch-all-apply 'scload (list (strcat dir "eworks")))
   (princ))
 
+;; ---- Command-echo silencing (native commands are quiet) ------------------
+;; Every c: command runs pf:echo-off at its prologue and pf:echo-on at exit;
+;; the error path restores via pfa:undo-cleanup.  Saves and restores the
+;; user's actual CMDECHO (0 is a valid value -- non-nil in LISP), so a user
+;; who runs with echo off keeps it off.
+(if (not (boundp '*pf-echo-save*)) (setq *pf-echo-save* nil))
+
+(defun pf:echo-off ()
+  (setq *pf-echo-save* (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (princ))
+
+(defun pf:echo-on ()
+  (setvar "CMDECHO" (if *pf-echo-save* *pf-echo-save* 1))
+  (setq *pf-echo-save* nil)
+  (princ))
+
 ;; DTM wrappers -----------------------------------------------------------
 (defun pf:tin-load (file)   (apply *pf-dtm-fn* (list "load_tin" file)))
 (defun pf:tin-unload ()     (apply *pf-dtm-fn* (list "unload_tin")))

@@ -58,10 +58,15 @@
 ;;; ==========================================================================
 
 ;; (pfset:dir) -> "...\PFTools\"   (created if missing)
+;;   NATIVE first: Carlson's usrdir$ (its program-settings/temp folder).  Falls
+;;   back to LOCALAPPDATA, then TEMP, so it works with or without Carlson.
 (defun pfset:dir ( / base dir)
-  (setq base (getenv "LOCALAPPDATA"))
-  (if (or (null base) (= base "")) (setq base (getenv "TEMP")))
-  (setq dir (strcat base "\\PFTools"))
+  (setq base (cond ((and (boundp 'usrdir$) (= (type usrdir$) 'STR)
+                         (/= usrdir$ "")) usrdir$)
+                   ((getenv "LOCALAPPDATA"))
+                   ((getenv "TEMP"))
+                   (T "")))
+  (setq dir (strcat (vl-string-right-trim "\\/" base) "\\PFTools"))
   (if (not (vl-file-directory-p dir)) (vl-mkdir dir))
   (strcat dir "\\"))
 
@@ -130,7 +135,7 @@
 
 ;; (pfset:browse title dirvar ext) -> full path | nil
 ;;   dirvar is the QUOTED symbol of the session directory global.  When the
-;;   session directory is empty the project data root (NOD) seeds it.
+;;   session directory is empty the native project data root (tmpdir$) seeds it.
 (defun pfset:browse (title dirvar ext / start f)
   (setq start (eval dirvar))
   (if (or (null start) (= start ""))
@@ -153,94 +158,77 @@
 ;;   pfanchor (the stub registry shares it); this is the settings-side name.
 (defun pfset:nod () (pfa:nod-dict))
 
-;; (pfset:root-get) -> project data root path | nil
-(defun pfset:root-get ( / nod sub data v)
-  (setq nod (namedobjdict))
-  (if (setq sub (dictsearch nod *pfset-nod-name*))
-    (progn
-      (setq data (pfa:xrec-data (cdr (assoc -1 sub)) "ROOT")
-            v    (if data (cdr (assoc 1 data))))
-      (if (and v (/= v "")) v))))
+;;; ---- Project data root: NATIVE (Carlson tmpdir$) --------------------------
+;;; Carlson binds tmpdir$ to the active project data folder, so the root is
+;;; read live -- no per-drawing NOD record, no PFROOT command.  When tmpdir$
+;;; is unbound/empty (no active project) a one-shot browse seeds a SESSION
+;;; fallback (pfset:root-set), which lasts until the drawing is closed.
 
-;; (pfset:root-set path) -> nil
+(if (not (boundp '*pfset-root-fallback*)) (setq *pfset-root-fallback* nil))
+
+;; (pfset:dir-norm d) -> d with exactly one trailing backslash
+(defun pfset:dir-norm (d)
+  (if (member (substr d (strlen d) 1) '("\\" "/")) d (strcat d "\\")))
+
+;; (pfset:tmpdir) -> Carlson's current project data folder | nil
+(defun pfset:tmpdir ()
+  (if (and (boundp 'tmpdir$) (= (type tmpdir$) 'STR) (/= tmpdir$ ""))
+    (pfset:dir-norm tmpdir$)))
+
+;; (pfset:root-get) -> project data root | nil    tmpdir$ first, then the
+;;   session browse-fallback.  No NOD read -- the drawing stores no root.
+(defun pfset:root-get ()
+  (cond ((pfset:tmpdir))
+        ((and *pfset-root-fallback* (/= *pfset-root-fallback* ""))
+         *pfset-root-fallback*)
+        (T nil)))
+
+;; (pfset:root-set path) -> nil   session fallback only (no persistence)
 (defun pfset:root-set (path)
-  (pfa:xrec-put (pfset:nod) "ROOT" (list (cons 1 path)))
+  (setq *pfset-root-fallback* (if path (pfset:dir-norm path) nil))
   (princ))
+
+;; (pfset:find-std-dir start subfolder) -> existing dir (trailing \) | nil
+;;   Walks UP from start (0..*pfset-std-search-depth* parent levels) testing
+;;   start+subfolder at each; returns the first that exists.  Self-calibrating:
+;;   works whether tmpdir$ is the base project, a data subfolder, or deeper.
+(defun pfset:find-std-dir (start subfolder / base lvl cand hit)
+  (setq base (vl-string-right-trim "\\/" start) lvl 0 hit nil)
+  (while (and (null hit) (<= lvl *pfset-std-search-depth*) base (/= base ""))
+    (setq cand (strcat base "\\" subfolder))
+    (if (vl-file-directory-p cand)
+      (setq hit (strcat cand "\\"))
+      (setq base (vl-filename-directory base) lvl (1+ lvl))))
+  hit)
 
 ;; (pfset:get-company-dir fileType) -> routed directory path | nil
-;;   Routes browse dialogs to company standard subfolders based on file type.
-;;   Prioritizes the established PFROOT, dynamically stepping up to the base project.
-(defun pfset:get-company-dir ( fileType / nodRoot baseProj stdFolders targetSubFolder stdPath cachedPath )
-  ;; 1. The ONLY source of truth is the established PFROOT
-  (setq nodRoot (pfset:root-get))
-  
-  ;; 2. Step up two directory levels to get the base project folder (e.g. 25-7167)
-  (setq baseProj 
-    (if (and nodRoot (/= nodRoot ""))
-      (strcat (vl-filename-directory (vl-filename-directory (vl-string-right-trim "\\/" nodRoot))) "\\")
-      nil
-    )
-  )
-  
-  ;; 3. Define company standard subfolders relative to the base project folder
-  (setq stdFolders '(
-    ("cl"  . "02_ProjectData\\Alignments")
-    ("pro" . "05_Drawings\\DrawingData\\CivilSurvey")
-    ("tin" . "02_ProjectData\\Surfaces")
-  ))
-  
-  (setq targetSubFolder (cdr (assoc (strcase fileType t) stdFolders)))
-  
-  ;; Build the prospective company standard path
-  (setq stdPath
-    (if (and baseProj targetSubFolder)
-        (strcat baseProj targetSubFolder "\\")
-        nil
-    )
-  )
-  
-  ;; Fetch the currently cached path from session variables
-  (setq cachedPath
-    (cond
-      ((= (strcase fileType t) "cl")  *pfset-dir-cl*)
-      ((= (strcase fileType t) "pro") *pfset-dir-pro*)
-      ((= (strcase fileType t) "tin") *pfset-dir-tin*)
-      (t nil)
-    )
-  )
-  
-  ;; Evaluate and route (stripping trailing slashes safely for the directory check)
+;;   Firm-standard subfolder under the native root (searched up), else the
+;;   session's last-used dir for that type, else the root itself.
+(defun pfset:get-company-dir (fileType / ft root sub std cached)
+  (setq ft   (strcase fileType t)
+        root (pfset:root-get)
+        sub  (cdr (assoc ft *pfset-std-subfolders*))
+        std  (if (and root sub) (pfset:find-std-dir root sub))
+        cached (cond ((= ft "cl")  *pfset-dir-cl*)
+                     ((= ft "pro") *pfset-dir-pro*)
+                     ((= ft "tin") *pfset-dir-tin*)
+                     (T nil)))
   (cond
-    ;; Scenario A: Standard path successfully built and physically exists
-    ((and stdPath (vl-file-directory-p (vl-string-right-trim "\\/" stdPath)))
-     stdPath
-    )
-    ;; Scenario B: Global variable from the active session has a user-selected path
-    ((and cachedPath (vl-file-directory-p (vl-string-right-trim "\\/" cachedPath))) 
-     cachedPath
-    )
-    ;; Scenario C: Fallback to the drawing's manual NOD root (PFROOT)
-    ((and nodRoot (vl-file-directory-p (vl-string-right-trim "\\/" nodRoot)))
-     nodRoot
-    )
-    (t nil) 
-  )
-)
-;; C:PFROOT -- show / set the project data root for this drawing.
-;;   Straight to the file dialog; Cancel = unchanged.  (No Yes/No prompt --
-;;   the file dialog's own Cancel is the No.)
-(defun c:PFROOT ( / cur f dir)
-  (setq cur (pfset:root-get))
-  (prompt (strcat "\nProject data root: " (if cur cur "<not set>")))
-  (setq f (getfiled "Select ANY File in the Project Data Root Folder"
-                    (if cur cur "") "" 0))
-  (if f
-    (progn
-      (setq dir (strcat (vl-filename-directory f) "\\"))
-      (pfset:root-set dir)
-      (prompt (strcat "\nProject data root set: " dir)))
-    (prompt "\nUnchanged."))
-  (princ))
+    (std std)
+    ((and cached (vl-file-directory-p (vl-string-right-trim "\\/" cached)))
+     cached)
+    ((and root (vl-file-directory-p (vl-string-right-trim "\\/" root)))
+     root)
+    (T nil)))
+
+;; (pfset:native-scale sym) -> formatted scale string | nil
+;;   Reads a Carlson scale global (sv:sm = horizontal, sv:vs = vertical) to
+;;   SEED the setup dialog's plot-scale fields.  nil when unbound/nonpositive
+;;   so the caller falls back to the last-used setting; the field stays fully
+;;   editable, so a wrong native read costs one keystroke, never correctness.
+(defun pfset:native-scale (sym / v)
+  (if (and (boundp sym) (numberp (setq v (eval sym))) (> v 0.0))
+    (rtos v 2 2)))
 
 
 ;;; ==========================================================================
@@ -390,7 +378,7 @@
         (read (strcat "(" sel ")"))))))
 
 
-(princ "\npfsettings.lsp loaded (user state).  Command: PFROOT.")
+(princ "\npfsettings.lsp loaded (user state).  Project root: native (tmpdir$).")
 (princ)
 ;;; ==========================================================================
 ;;; end of pfsettings.lsp

@@ -44,7 +44,7 @@ drawing itself remembers what's been labeled and what's left.
 |---|---|---|
 | **Registration** | Grid re-picked every run | **Register once** (an *anchor block*), every command reads it |
 | **Two tiers** | — | **AUTO** names every profile on the sheet (stubs); **USER** places each grid (anchors) |
-| **Crossing inverts** | Vertical **bore probe** of the drawn grid | **Read from the source `.pro`** via the Road API (`profile z`) — the probe is *dead* |
+| **Crossing inverts** | Vertical **bore probe** of the drawn grid | **Read from the source `.pro`** via the Road API (`profile_z`) — the probe is *dead* |
 | **Crossing draw** | Both grids | **Target grid only**; a source needs its `.pro` *bound*, not its grid *placed*. Reciprocal annotation = run again with that profile as target |
 | **Material** | — | Asserted per-type in PFSETUP, stored on the anchor, read into the crossing label (`NN" <MAT>`) |
 | **Commands** | `PFXFIND` + `PFXLABEL` + `PFXGRID` trio | Collapsed to **one** `PFXLABEL` (discovery auto-runs) |
@@ -71,7 +71,6 @@ in/out at the grade breaks, and pulls lateral inverts from the registry.
 | `PFINVERT` | `PFI` | `pfinvert.lsp` | Label every invert at each structure — primary I.I/I.O from the `_INV.pro` grade breaks, laterals from the registry. |
 | `PFREMOVE` | — | `pfanchor.lsp` | Tear down one profile's record — anchor + ledger + every handle-tracked entity. Untracked work is never touched. |
 | `PFLABELSET` | — | `pflabel.lsp` | Open the label settings dialog standalone (prefix/suffix, layer, style). |
-| `PFROOT` | — | `pfsettings.lsp` | Show / set the drawing's project-data-root folder. |
 | `PFCHECK` | — | *(planned)* | Record-integrity check. Announced by the loader, not yet built. |
 
 ### 4.1 `PFSETUP` — two-tier registration
@@ -85,17 +84,44 @@ time a drawing has no registry:
 ```
 pfs:auto
  ├─ pfs:scan-sheet-names      scan PF-NAME text  → (type . name) pairs
- ├─ pfs:cl-lookup             resolve Type_Name.cl in the project root
+ ├─ pfs:cl-lookup             resolve Type_Name.cl in the alignments folder
  ├─ pfs:pro-lookup            auto-bind the _INV / _TOP .pro pair
  ├─ pfa:stub-put              write an identity-only STUB to the NOD dict
- └─ pf:cl-geom                sample the .cl ONCE and file its shape (GEOM cache)
+ ├─ pf:cl-geom                sample the .cl ONCE and file its shape (GEOM cache)
+ └─ pfa:twin-put              match the DRAWN centerline once, file its handle (TWIN)
 ```
 
 The `pf:cl-geom` step is the V4 speed pivot: `.cl` geometry is traced **once
 at registration** and filed (see §7 GEOM). Label commands then READ the shape
 instead of re-tracing every line every run — the per-run Road-API sampling is
-gone. Placement (`pfs:place-one`) warms the same cache for a directly-placed
-profile.
+gone. Alongside it, `pfa:twin-put` matches the `.cl`'s **drawn** centerline by
+endpoint pair and files its handle (see §7 TWIN) — the membership pre-filter
+reads that drawn line's live verts (exact PIs) instead of the sampled corridor.
+Placement (`pfs:place-one`) warms both caches for a directly-placed profile.
+
+**Project root is native (no PFROOT).** The project data folder comes straight
+from Carlson — `pfset:root-get` reads `tmpdir$` (the active project's data
+folder) live, so there's nothing to declare or store per drawing. Only when
+there's no active Carlson project does a one-shot browse seed a **session**
+fallback (lost on close). The old `PFROOT` command and its per-drawing NOD
+record are retired.
+
+**Folder routing (firm standard).** Registration and the setup dialog's file
+picks don't browse one flat root: `pfset:get-company-dir` takes that native
+root and **searches up** from it (0–`*pfset-std-search-depth*` parent levels)
+for each firm-standard subfolder — `.cl` → `Alignments`, `.pro` →
+`…\CivilSurvey`, `.tin` → `Surfaces` (see §8). The search-up self-calibrates to
+wherever `tmpdir$` lands (no fixed level assumption). A missing standard folder
+falls back to the last-used directory, then to the root itself.
+
+**Other native reads.** The suite prefers Carlson's own values over hand entry
+wherever it can: the setup dialog **seeds the plot scales** from `sv:sm` /
+`sv:vs` (`pfset:native-scale` — still editable; the stored value wins on Edit),
+and the settings/temp folder is **Carlson's `usrdir$`** (`pfset:dir`, falling
+back to `LOCALAPPDATA`/`TEMP`). Deliberately *not* adopted: `sv:ts`/`sv:ps`
+text/symbol scalers (label size is the firm-standard `*pf-text-base-height*`,
+not Carlson's scaler). Still open: a metric guard off the english/metric flag
+(the suite currently hardcodes english).
 
 No matching `.cl`, an ambiguous match, or a `.cl` with no sheet name is
 **reported and skipped** — never guessed. The reverse direction (a `.cl` with
@@ -135,18 +161,30 @@ Edit mode invalidation:
 
 ### 4.2 `PFLABEL` — structure labels
 
-The V4 run is dialog-first (the Carlson idiom, `pf_run` shared with
-`PFINVERT`): `PFLABEL` → **run dialog** (target popup = the registry;
-multi-select structure list, `[LABELED]` marked from the pass ledger) →
-*Label Selected* / *Label All*. Choosing an unplaced profile and labeling
-places it first. Everything the old dialogs gathered lives in the anchor
-record. (`pfa:pick-anchor` is kept, reserved, for a future screen-pick
-button — no per-run command-line pick today; parity with `PFXLABEL`.)
+The V4 run is **pick-first** (PFXLABEL parity, `pf_run`): `PFLABEL` →
+`pfs:choose-or-place` picks the target from the registry (`pf_pick` list) →
+**run dialog** for that ONE target (multi-select structure list, `[LABELED]`
+marked from the pass ledger) → *Label Selected* / *Label All*. There is **no
+target popup in the dialog** — the target is resolved before it opens, and
+choosing an unplaced profile at the pick *is* consent to place it (two corner
+picks, on the fly). Everything the old dialogs gathered lives in the anchor
+record. The dialog does all its Road-API / recon work **before** `new_dialog`
+(`pflabel:rd-compute`); the init block only paints — this cured the
+ghost-dropdown freeze. (Wrong target → Cancel and rerun.)
 
-- **Secondary `.cl` set = the registry** (anchors *and* stubs). Membership is
-  plan-view station math, so **identity alone qualifies a line** — the moment
-  AUTO names the sheet, every junction's combined ID (`AA-1/BB-2`) is complete,
-  placed or not. This closes v3's silently-shorter-ID gap.
+- **Secondary `.cl` set = the registry, SAME UTILITY TYPE only** (anchors
+  *and* stubs). A STORM profile's junctions are other STORM lines; a different
+  type sharing a station is a *crossing* (PFXLABEL's job), not a combined-ID
+  contributor. Membership is plan-view station math, so **identity alone
+  qualifies a same-type line** — the moment AUTO names the sheet, every
+  junction's combined ID (`AA-1/BB-2`) is complete, placed or not. This closes
+  v3's silently-shorter-ID gap while keeping other utilities out of the label.
+- **Membership pre-filter = the drawn "twin" line's live verts.** Before the
+  authored `cl_location_at_pt` test, structures are cheaply pre-filtered
+  against the `.cl`'s *drawn* centerline (its exact PIs, read live by the filed
+  TWIN handle — no sampled corner-cut). `pflabel:build-lines` self-heals a
+  missing/purged twin by re-matching once; if none is found the pre-filter
+  simply drops and the authored test governs alone.
 - **Label Y = the top-of-grid probe** at each structure's station (grids have
   stepped tops). A station with no `PF-GRID-MJR` hit is skipped and reported.
 - **Layer** = derived `<TYPE>-TEXT_P`, handle-tracked, erase-and-replace on an
@@ -202,14 +240,20 @@ c:PFXLABEL
   track; the LABELED/OUTSTANDING list in the crossings dialog is the
   surface now.)
 - **Verification zoom** (`*pfx-zoom-pause*`): each drawn crossing is framed
-  and paused on (`ZOOM Center` + `DELAY`), then the pre-run view is restored
-  after the pass. Set the pause to `0` to disable.
+  and paused on (`ZOOM Window` + `DELAY`), then the pre-run view is restored
+  after the pass. Set the pause to `0` to disable. Every view change routes
+  through `pfxl:zoom-corners` — `ZOOM _Center` miscomputes in this Carlson/Map
+  build ("No Center found for specified point"), so a center+height is
+  converted to window corners at the current viewport aspect.
 
 ### 4.4 `PFINVERT` — invert labels at structures
 
 **The command split: `PFLABEL` owns top-of-grid text; `PFINVERT` owns
-everything at pipe elevation.** Same anchor-driven, dialog-first run shape
-(the shared `pf_run` dialog: target popup + structure list). The
+everything at pipe elevation.** Same anchor-driven, **pick-first** run shape
+(`pfs:choose-or-place`, then a structure list), but through its **own**
+dialog — `pfi_run` (tile keys `pi_*`, handlers `pfi:rd-*`), a separate
+definition from `pf_run` so invert-specific fields can grow without
+disturbing PFLABEL. Compute-before-`new_dialog`, same as PFLABEL. The
 `_INV.pro` binding is **fatal** when missing — every elevation comes from
 it.
 
@@ -277,8 +321,8 @@ pfdraw.lsp         ← Drawing boundary. The ONLY file that entmakes label outpu
 pfanchor.lsp       ← Record + registry. Anchor block, stub registry, ledger
       │              (ext-dict), reconciliation.  C:PFREMOVE
       │
-pfsettings.lsp     ← User state: settings file, session dirs, NOD (project root),
-      │              shared dialog pickers, layer/style lookups.  C:PFROOT
+pfsettings.lsp     ← User state: settings file, session dirs, native project
+      │              root (tmpdir$), shared dialog pickers, layer/style lookups.
       │
 pfsetup.lsp        ← C:PFSETUP  (AUTO names, USER places)
       │
@@ -299,9 +343,10 @@ pfinvert.lsp       ← C:PFINVERT / C:PFI  (reuses pflabel's walk + pfxlabel's
 
 > `pfdialog.dcl` is still live — reworked 2026-07-19 to the native-Carlson
 > style contract. It holds `pfsetup_registry` (the PFSETUP menu),
-> `pfsetup_main`, `pf_run` (PFLABEL/PFINVERT), `pfxl_run` (crossings),
-> `pflabel_settings`, and the shared `pf_pick` / `pf_name` / `pf_scan` /
-> `pf_confirm` dialogs. The command line keeps only screen picks.
+> `pfsetup_main`, `pf_run` (PFLABEL), `pfi_run` (PFINVERT — its own definition,
+> `pi_*` tiles), `pfxl_run` (crossings), `pflabel_settings`, and the shared
+> `pf_pick` / `pf_name` / `pf_scan` / `pf_confirm` dialogs. The command line
+> keeps only screen picks.
 
 Config split — **keep these apart:**
 
@@ -320,12 +365,12 @@ Carlson API "tool calls" (Road = `EWORKS.ARX`, DTM = `TRI4.ARX`) they make.
 | # | Phase | Files → key calls | Carlson API |
 |---|---|---|---|
 | 0 | **Load** | `pftools-load.lsp` loads all 9 in order | — |
-| 1 | **Project root** | `pfsettings.lsp`: `pfset:root-set` (first `PFSETUP` or `PFROOT`) writes it to the NOD | — |
-| 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` → `pf:cl-geom` (file .cl shape) | Road `cl_sta_range` + `cl_location_at_sta` (**one-time sample**, then cached) |
+| 1 | **Project root** | `pfsettings.lsp`: `pfset:root-get` reads Carlson `tmpdir$` live (browse-to-session-fallback only if no active project) | — |
+| 2 | **AUTO register** | `pfsetup.lsp`: `pfs:auto` → `pfs:scan-sheet-names`, `pfs:cl-lookup`, `pfs:pro-lookup` → `pfanchor.lsp`: `pfa:stub-put` → `pf:cl-geom` (file .cl shape) + `pfa:twin-put` (file drawn twin handle) | Road `cl_sta_range` + `cl_location_at_sta` (**one-time sample**, then cached) |
 | 3 | **USER place** | `pfsetup.lsp`: `pfs:registry-dialog` → `pfs:place-one` → `pfs:show-dialog` (datum typed here), `pfs:pick-extents` → `pfanchor.lsp`: `pfa:write-anchor`, `pfa:files-put`, `pfa:stub-del` | Road `cl_sta_range` |
-| 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → run dialog builds the line table (reused by `pflabel:setup`) → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:build-lines`→`pf:cl-geom`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | Road `cl_location_at_pt` (membership); geometry from **cache**; top-of-grid probe (`inters`, no API) |
-| 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-geom`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` | geometry from **cache**; Road `cl_location_at_pt` (station), **`profile z`** (invert/top); `cl_location_at_sta` only on refine/cache-miss |
-| 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`profile z`** (bracket walk + laterals) |
+| 4 | **Structure labels** | `pflabel.lsp`: `c:PFLABEL` → `pfs:choose-or-place` (pick target) → `pflabel:run-dialog` builds the line table (reused by `pflabel:setup`) → `pflabel:setup` (`pfa:anchor->xform`, `pflabel:build-lines`→`pf:cl-geom` + `pf:twin-verts`, `pflabel:gather-inlets`) → `pflabel:process-structure` → `pfdraw.lsp`: `pfd:draw-label-stack`, `pfd:station-line` → `pflabel:write-pass` (`pfa:pass-put`, `pfa:status-put`) | membership pre-filter = drawn twin verts (no API); Road `cl_location_at_pt` (authored test); geometry from **cache**; top-of-grid probe (`inters`, no API) |
+| 5 | **Crossings** | `pfxlabel.lsp`: `c:PFXLABEL` → `pfxl:discover` (`pf:cl-geom`, `pf:poly-x`, `pf:refine-x`, `pf:sta-at`, `pfa:xing-merge`) → `pfxl:label-one` (`pf:pipe-at`, `pf:top-at`) → `pfdraw.lsp`: `pfd:insert-pipe`, `pfd:label-pipe` | geometry from **cache**; Road `cl_location_at_pt` (station), **`profile_z`** (invert/top); `cl_location_at_sta` only on refine/cache-miss |
+| 6 | **Inverts** | `pfinvert.lsp`: `c:PFINVERT` → `pfs:choose-or-place` → `pfi:run-dialog` → `pfi:setup` (pflabel's line table + inlets) → `pfi:process-structure` (`pfi:invert-bracket`, `pfi:lateral-info`) → `pfdraw.lsp`: `pfd:draw-label-stack 'MR`, `pfd:insert-pipe` → `pfi:write-pass` | Road `cl_location_at_pt` (membership), **`profile_z`** (bracket walk + laterals) |
 | 7 | **Re-run** | Same commands; `All` mode replaces prior passes **by handle**; discovery short-circuits unchanged `.cl` pairs; geometry served from the GEOM cache | Road (unchanged pairs skipped; no re-sampling unless a `.cl` changed) |
 | 8 | **Teardown** | `pfanchor.lsp`: `c:PFREMOVE` → `pfa:teardown` (`pfa:erase-pass`, `entdel`) | — |
 
@@ -363,6 +408,16 @@ GEOM    (NOD "PFTOOLS", key GEOM_<BASENAME>)  — the .cl geometry cache
         entry serves every command that references that line. (Drawing-wide
         today; a project-folder sidecar shared across sheets is under review.)
 
+TWIN    (NOD "PFTOOLS", key TWIN_<BASENAME>)  — drawn-centerline binding
+        (1 . handle) only. The .cl's DRAWN plan centerline, matched ONCE at
+        registration by endpoint pair (`pf:cl-twin-handle`) and filed as a
+        bare handle. The membership pre-filter reads its LIVE verts each run
+        (`pf:twin-verts` → exact PIs, no sampled corner-cut); a moved/redrawn
+        twin reads as-drawn, never cached stale. Nothing to invalidate — a
+        purged handle resolves to nil and the reader re-matches or drops the
+        pre-filter (the authored `cl_location_at_pt` test still governs).
+        Keyed by .cl IDENTITY, like GEOM, so promotion moves nothing.
+
 ANCHOR  (PF-GRIDANCHOR block, one per PLACED profile)
         Insertion point = grid lower-left (datum + origin). Extents RELATIVE
         (X-scale = width, Y-scale = height to the top-right pick).
@@ -395,7 +450,9 @@ memory," never the drawing.
 
 ## 8. File-naming convention (identity keys)
 
-The whole registry rides on filename convention in the project data root:
+The whole registry rides on filename convention within the project data folders
+(rooted at the native project folder, Carlson `tmpdir$`; see the folder table
+below):
 
 | File | Pattern | Role |
 |---|---|---|
@@ -408,6 +465,24 @@ The whole registry rides on filename convention in the project data root:
 
 Types: `STORM`, `SANITARY`, `WATER`. A `.pro` with neither `_INV` nor `_TOP`
 is an error the setup dialog rejects.
+
+**Where the files live (firm-standard folders).** `pfset:get-company-dir`
+takes the native root (`tmpdir$`) and **searches up** from it (via
+`pfset:find-std-dir`, up to `*pfset-std-search-depth*` parent levels) for each
+type's standard subfolder — file picks and AUTO lookups open there, not a flat
+root:
+
+| Type | Standard subfolder (`*pfset-std-subfolders*`) |
+|---|---|
+| `.cl` | `02_ProjectData\Alignments` |
+| `.pro` | `05_Drawings\DrawingData\CivilSurvey` |
+| `.tin` | `02_ProjectData\Surfaces` |
+
+The search-up means no fixed assumption about how deep `tmpdir$` sits. The
+routing is best-effort: a standard folder that doesn't exist falls back to the
+session's last-used directory for that type, then to the root itself. The map
+lives in **`pftools-cfg.lsp`** (`*pfset-std-subfolders*`) — retarget it there
+if the firm's project template changes.
 
 ---
 
@@ -450,6 +525,10 @@ Every tunable lives in one file. The load-bearing groups:
 - **Invert bracket (`PFINVERT`)** — `*pfi-invert-offset*` 5.0 (fixed, un-scaled
   column drop), `*pfi-scan-window*` 25 ft, `*pfi-scan-step*` 0.5 ft,
   `*pfi-grade-tol*` 0.05 Δslope (what reads as a structure edge).
+- **Project data folders** — `*pfset-std-subfolders*` (firm-standard `.cl` /
+  `.pro` / `.tin` subfolders, searched up from the native `tmpdir$` root) and
+  `*pfset-std-search-depth*` (how many parent levels to search). Retarget these
+  if the firm's project template changes (§4.1, §8).
 
 ---
 
@@ -471,6 +550,14 @@ Every tunable lives in one file. The load-bearing groups:
   verified only; validate I.I/I.O against a known drop manhole first. Its
   grade-break scan is sample-and-detect; if the Road API turns out to expose
   `.pro` PVIs directly, swap `pfi:invert-bracket`'s body only.
+- **English units only (no metric guard yet).** Pipe size is `(TOP−INV)×12`
+  inches; stations/elevations are feet. A metric drawing would be silently
+  wrong — a guard off Carlson's english/metric flag is an open item
+  (`OPEN-ISSUES.md`, "Native Carlson integration").
+- **`PFINVERT` I.I/I.O bracket is a known live bug** — in field testing the
+  in/out inverts came back swapped/collapsed and ~0.05 ft high; the fix needs a
+  real `_INV.pro` to diagnose (see `OPEN-ISSUES.md`). Don't trust `PFINVERT`
+  output until that's closed.
 - **`PFCHECK` is announced by the loader but not built yet.**
 
 ---
@@ -482,8 +569,32 @@ against a completed job; the V4 rewrite moves inverts onto authored `.pro`
 files (the fragile bore probe is retired) and makes the grid a registered,
 drawing-resident record.
 
-Shipped this cycle:
+Shipped 2026-07-21 (post-pull; statically verified, **not yet CAD-tested**):
 
+- **Native Carlson integration** — project root from `tmpdir$` (PFROOT
+  retired), setup dialog seeds plot scales from `sv:sm`/`sv:vs`, settings folder
+  from `usrdir$`, firm subfolders searched up from the native root (§4.1, §8).
+- **Cross-utility scoping** — PFLABEL/PFINVERT membership scoped to the
+  primary's utility type; PFXLABEL crossings stay cross-type (§4.2).
+- **`CMDECHO` suppression** — shared `pf:echo-off`/`pf:echo-on`, restored on
+  normal and error exit (§13.2).
+- **Still open, critical:** the `PFINVERT` I.I/I.O bracket bug (needs a real
+  `_INV.pro`); metric guard; PFSETUP Place-All flow. Tracked in `OPEN-ISSUES.md`.
+
+Shipped prior cycle:
+
+- **Pick-first labeling + PFINVERT's own dialog** — PFLABEL and PFINVERT now
+  resolve the target through `pfs:choose-or-place` *before* the dialog opens
+  (no target popup); PFINVERT moved to its own `pfi_run` definition (§4.2,
+  §4.4). All heavy work runs before `new_dialog` (`rd-compute`), curing the
+  ghost-dropdown freeze.
+- **Drawn-centerline ("twin") membership pre-filter** — filed once at
+  registration (`TWIN`, §7), read live; exact PIs replace the sampled corridor.
+- **Firm-standard folder routing** — `.cl`/`.pro`/`.tin` picks and AUTO
+  lookups route to standard project subfolders via `pfset:get-company-dir`
+  (§8); the `[util]` label token replaces the hardcoded `STORM` in `sta_suf`.
+- **`ZOOM _Window` everywhere** — `ZOOM _Center` miscomputes in this
+  Carlson/Map build; all view changes route through `pfxl:zoom-corners` (§4.3).
 - **`PFINVERT`** — invert labels at structures: primary I.I/I.O from the
   `_INV.pro` grade breaks, laterals from the registry, all text in one column
   below the lowest invert (§4.4). *Awaiting first live-drawing validation.*
@@ -526,9 +637,11 @@ drafter-facing skin was an afterthought.**
 - ~~Numbered text menus everywhere~~ — **fixed**: `pfa:choose-anchor` and
   `pfs:choose-or-place` are `pf_pick` list dialogs; PFSETUP's
   `[All-unplaced/Edit/Refresh/New] <1-N>` REPL is the `pfsetup_registry`
-  dialog; PFLABEL/PFINVERT run through `pf_run` (target popup + structure
-  list, replacing `[All/Pick]`); PFXLABEL's crossing pick is `pfxl_run`.
-  The mixed `(initget 6 "All Target")(getint …)` idiom died with the menus.
+  dialog; PFLABEL runs through `pf_run` and PFINVERT through its own `pfi_run`
+  (both now **pick-first** — `pfs:choose-or-place` resolves the target, then
+  the dialog lists that one target's structures; the target popup is gone);
+  PFXLABEL's crossing pick is `pfxl_run`. The mixed
+  `(initget 6 "All Target")(getint …)` idiom died with the menus.
   Command line keeps only screen picks; the datum moved into
   `pfsetup_main`; Yes/No confirms are `pf_confirm` (No = Enter = Esc).
 - **PFXLABEL's Change Target is still a dead end** — it clears the session
@@ -543,12 +656,15 @@ drafter-facing skin was an afterthought.**
   (tile widths, proportional-font column drift in the list "grids") are
   expected on first contact; see `TESTING.md` 0.4.
 
-### 13.2 `CMDECHO` is never suppressed
+### 13.2 `CMDECHO` suppression — **RESOLVED (2026-07-21)**
 
-Not one command sets `CMDECHO 0`. Every `(command "_.UNDO" "_Begin")` echoes
-UNDO chatter; the crossing zoom-pause echoes `ZOOM`/`DELAY` per crossing.
-Native commands are silent except for their own prompts. ~6 lines per
-command wrapper; the cheapest perceived-quality win available.
+~~Not one command sets `CMDECHO 0`.~~ Shared `pf:echo-off` / `pf:echo-on`
+(pftools-lib) save the user's `CMDECHO` and zero it for the run. Every
+command's prologue calls `echo-off`; every normal epilogue calls `echo-on`;
+`pfa:undo-cleanup` restores it on the error path (so Esc can't leave echo off).
+The UNDO/`ZOOM`/`DELAY` chatter is gone. (The ×5 error/undo scaffolding of
+§13.4 is still un-shared — but CMDECHO no longer needs to be part of that
+eventual `pf:run-command` wrapper.)
 
 ### 13.3 Performance smells (will surface on real drawings)
 
@@ -624,6 +740,6 @@ Future dialog run PFT (working name) dialog gives you choices of each main comma
 Format achor block style and output
 Dialog/Docked "Propoerties" style modeless window ala road network command.
 Structure block with pflabel
-Ask Andy about folder setting (then we can lose pfroot)
+~~Ask Andy about folder setting (then we can lose pfroot)~~ — DONE 2026-07-21: went native on Carlson `tmpdir$`; PFROOT retired. (Firm subfolder map in cfg still wants Andy's confirmation.)
 Workflow/prompts for initial registration and un registered profiles.
 PFINVERT and PFCHECK
