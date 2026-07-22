@@ -622,6 +622,7 @@ Notes:
 
 Future dialog run PFT (working name) dialog gives you choices of each main command.
 Format achor block style and output
+Dialog/Docked "Propoerties" style modeless window ala road network command.
 Structure block with pflabel
 Ask Andy about folder setting (then we can lose pfroot)
 Workflow/prompts for initial registration and un registered profiles.

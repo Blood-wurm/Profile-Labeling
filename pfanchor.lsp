@@ -619,6 +619,31 @@
        (car cell))
     keys))
 
+;;; ---- TWIN: drawn plan-centerline binding per .cl (handle only) ------------
+;;; The membership PRE-FILTER reads the .cl's DRAWN centerline (exact PIs, no
+;;; sampled corner-cut).  Matched ONCE at registration by endpoint pair and
+;;; filed here as a bare HANDLE; label runs entget it LIVE, so a moved/redrawn
+;;; twin reads as-drawn, never cached stale.  Nothing to invalidate -- a
+;;; purged/erased twin resolves to nil and the reader re-matches or drops the
+;;; pre-filter (the authored cl_location_at_pt test still governs membership).
+;;;   key "TWIN_<basename>":  (1 . handle)
+
+(defun pfa:twin-key (clfile)
+  (strcat "TWIN_" (pfa:sanitize (strcase (vl-filename-base clfile)))))
+
+;; (pfa:twin-get clfile) -> handle string | nil
+(defun pfa:twin-get (clfile / d h)
+  (if (setq d (pfa:xrec-data (pfa:nod-dict) (pfa:twin-key clfile)))
+    (progn
+      (setq h (cdr (assoc 1 d)))
+      (if (and h (/= h "")) h))))
+
+;; (pfa:twin-put clfile handle) -> xrecord ename | nil
+;;   nil / "" clears the binding (no drawn twin matched -> pre-filter off).
+(defun pfa:twin-put (clfile handle)
+  (if (and handle (/= handle ""))
+    (pfa:xrec-put (pfa:nod-dict) (pfa:twin-key clfile) (list (cons 1 handle)))
+    (pfa:xrec-del (pfa:nod-dict) (pfa:twin-key clfile))))
 ;;; ---- STATUS: state + timestamp + findings --------------------------------
 ;;; state: 0 unchecked / 1 passing / 2 failing / 3 stale.
 ;;; UNCHECKED NEVER RENDERS GREEN.

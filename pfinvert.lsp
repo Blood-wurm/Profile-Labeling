@@ -368,27 +368,150 @@
   (foreach e findings (prompt (strcat "\n  FINDING: " e)))
   (princ))
 
-(defun c:PFINVERT ( / pre rd entry anchor ctx n)
+;;; ==========================================================================
+;;; SECTION 5b  --  PFINVERT run dialog  (its OWN dialog: pfi_run)
+;;;   Pick-first, compute-then-render, mirroring pflabel but standalone so
+;;;   invert-specific fields can grow here.  Pure compute helpers (pending /
+;;;   build-lines / gather-inlets / pass-xs / labeled-x-p) are shared from
+;;;   pflabel; the dialog wiring is local (pi_* tiles, id-* dynamic locals).
+;;; ==========================================================================
+
+;; RENDER ONLY -- id-* precomputed by pfi:rd-compute.
+(defun pfi:rd-fill ( / i p v ndone)
+  (setq i 0)
+  (start_list "pi_list")
+  (foreach p id-pend
+    (add_list (strcat (pfset:pad (caddr p) 22)
+                      (pfset:pad (pf:fmt-station (car p)) 16)
+                      (if (nth i id-status) "[LABELED]" "")))
+    (setq i (1+ i)))
+  (end_list)
+  (setq ndone 0)
+  (foreach v id-status (if v (setq ndone (1+ ndone))))
+  (set_tile "pi_count"
+            (strcat (itoa (length id-pend)) " structure(s) on '" id-primary
+                    "'; " (itoa ndone) " already inverted."))
+  (set_tile "error" "")
+  (princ))
+
+;; ALL HEAVY WORK, BEFORE new_dialog.  -> T when there is a list; nil on no line.
+(defun pfi:rd-compute ( / xf xs eps p)
+  (setq id-pend (if (pflabel:line-loaded-p id-primary id-lines)
+                  (pflabel:pending id-inlets id-lines id-primary)
+                  'NOLINE))
+  (cond
+    ((eq id-pend 'NOLINE) (setq id-pend '()) nil)
+    (T
+     (setq xf        (pfa:anchor->xform id-anchor)
+           xs        (pflabel:pass-xs id-anchor id-pass)
+           eps       (max *pfa-recon-eps*
+                          (* 1.5 (pf:text-height (pf:xf-hplot xf))))
+           id-status '())
+     (foreach p id-pend
+       (setq id-status
+             (append id-status
+                     (list (pflabel:labeled-x-p
+                             (pf:station->profile-x (car p) xf) xs eps)))))
+     T)))
+
+(defun pfi:rd-sel ( / s idxs out i)
+  (setq s (get_tile "pi_list"))
+  (if (or (null s) (= s ""))
+    (set_tile "error" "Select structures in the list first -- or Label All.")
+    (progn
+      (setq idxs (read (strcat "(" s ")")) out '())
+      (foreach i idxs (setq out (cons (nth i id-pend) out)))
+      (setq id-res (list (cons 'mode   "Sel")
+                         (cons 'sel    (reverse out))
+                         (cons 'lines  id-lines)
+                         (cons 'inlets id-inlets)))
+      (done_dialog 1))))
+
+(defun pfi:rd-all ()
+  (if (null id-pend)
+    (set_tile "error" "No structures on this line -- nothing to label.")
+    (progn
+      (setq id-res (list (cons 'mode   "All")
+                         (cons 'sel    id-pend)
+                         (cons 'lines  id-lines)
+                         (cons 'inlets id-inlets)))
+      (done_dialog 1))))
+
+;; (pfi:run-dialog title passname anchor) -> result alist | nil
+(defun pfi:run-dialog (title passname anchor
+                       / id-anchor id-primary id-pass id-lines id-inlets
+                         id-pend id-status id-res dcl_id xf cl pairs result)
+  (setq id-anchor anchor id-pass passname id-res nil
+        xf        (pfa:anchor->xform anchor))
+  (cond
+    ((null xf)
+     (prompt "\nTarget grid record unreadable -- cannot label.") nil)
+    ((null (setq cl (pf:xf-get 'clfile xf)))
+     (prompt "\nNo .cl on record for this target -- run PFSETUP (edit).") nil)
+    (T
+     (setq id-primary (pf:xf-get 'name xf)
+           pairs      (pf:dedupe-pairs
+                        (cons (cons cl id-primary)
+                              (pflabel:registry-pairs cl)))
+           id-lines   (pflabel:build-lines pairs)
+           id-inlets  (pflabel:gather-inlets))
+     (if (null (pfi:rd-compute))
+       (progn
+         (prompt (strcat "\nCenterline for '" id-primary
+                         "' could not be read -- nothing to label."))
+         nil)
+       (progn
+         (setq dcl_id (load_dialog (pfset:dcl-file)))
+         (if (< dcl_id 0)
+           (progn (prompt "\nCould not load pfdialog.dcl.") nil)
+           (if (not (new_dialog "pfi_run" dcl_id))
+             (progn (unload_dialog dcl_id)
+                    (prompt "\nCould not open the invert dialog.") nil)
+             (progn
+               (set_tile "pi_title" title)
+               (pfi:rd-fill)
+               (action_tile "pi_sel" "(pfi:rd-sel)")
+               (action_tile "pi_all" "(pfi:rd-all)")
+               (action_tile "pi_set" "(pflabel:show-dialog)")
+               (action_tile "cancel" "(done_dialog 0)")
+               (action_tile "help"
+                 (strcat "(pfset:help \"Every elevation comes from the target's "
+                         "bound _INV .pro.  Select rows and Label Selected, or "
+                         "Label All for every structure on the primary line.  "
+                         "Label All REPLACES this command's previous tracked "
+                         "pass; Selected appends.\\n\\n[LABELED] = an invert of "
+                         "this command's pass already sits at that station.\\n\\n"
+                         "Wrong target?  Cancel and rerun.\")"))
+               (setq result (vl-catch-all-apply 'start_dialog '()))
+               (unload_dialog dcl_id)
+               (cond
+                 ((vl-catch-all-error-p result)
+                  (prompt (strcat "\nDialog error: "
+                                  (vl-catch-all-error-message result)))
+                  nil)
+                 ((= result 1) id-res)
+                 (T nil))))))))))
+
+
+;;; ==========================================================================
+;;; SECTION 6  --  C:PFINVERT   (pick-first, then the invert dialog)
+;;; ==========================================================================
+(defun c:PFINVERT ( / anchor rd ctx n)
   (setq *pfinvert-prev-error* *error*
         *error*               pfinvert:*error*
         *pfinvert-undo-open*  nil)
   (pf:load-apis)
-  ;; dialog-first (parity with PFXLABEL): the run dialog's list IS the target
-  ;; picker.  pfa:pick-anchor is kept (reserved) for a possible screen-pick
-  ;; button later; no pre-anchor means the dialog preselects the first placed.
-  (setq pre nil)
-  (setq rd (pflabel:run-dialog
-             "PFINVERT -- invert labels at pipe elevation"
-             *pfi-pass-name* pre))
-  (if (null rd)
-    (prompt "\nPFINVERT cancelled.")
+  ;; pick-first (PFXLABEL parity): choose/place the target, THEN list only its
+  ;; structures.  choose-or-place places an unplaced pick on the fly.
+  (setq anchor (pfs:choose-or-place))
+  (if (null anchor)
+    (prompt "\nPFINVERT cancelled -- no target.")
     (progn
-      (setq entry  (cdr (assoc 'entry rd))
-            anchor (if (eq (caddr entry) 'PLACED)
-                     (nth 3 entry)
-                     (pfs:place-one (nth 4 entry))))
-      (if (null anchor)
-        (prompt "\nNo placed grid -- cancelled.")
+      (setq rd (pfi:run-dialog
+                 "PFINVERT -- invert labels at pipe elevation"
+                 *pfi-pass-name* anchor))
+      (if (null rd)
+        (prompt "\nPFINVERT cancelled.")
         (progn
           (setq ctx (pfi:setup anchor (cdr (assoc 'mode rd))
                                (cdr (assoc 'lines rd))

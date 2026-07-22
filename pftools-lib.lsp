@@ -212,10 +212,12 @@
   (setq hits (vl-sort hits '(lambda (a b) (< (car a) (car b)))))
   (mapcar '(lambda (h) (list (cadr h) (caddr h))) hits))
 
-;; (pf:sort-line-infos-alpha line-infos) -> sorted by name (A->Z)
 (defun pf:sort-line-infos-alpha (line-infos / names)
-  (setq names (acad_strlsort (mapcar 'car line-infos)))
-  (mapcar '(lambda (nm) (assoc nm line-infos)) names))
+  (if (cdr line-infos)                    ; 2+ entries -> sort by name
+    (progn
+      (setq names (acad_strlsort (mapcar 'car line-infos)))
+      (mapcar '(lambda (nm) (assoc nm line-infos)) names))
+    line-infos))                          ; 0 or 1 -> nothing to sort
 
 ;; (pf:rank-on-line station all-stations ascending eps) -> integer (1-based)
 (defun pf:rank-on-line (station all-stations ascending eps / n)
@@ -720,6 +722,41 @@
     (setq verts (pf:find-cl-polyline (car ends) (cadr ends) *pf-corridor*)))
   (append entry (list verts)))
 
+;; (pf:match-twin-ename p0 pn tol) -> ename | nil
+;;   The drawn LWPOLYLINE/LINE/POLYLINE whose two ENDS match the .cl termini
+;;   (either direction) within tol.  Endpoint match only -- the interior is
+;;   the pre-filter, never a value source.
+(defun pf:match-twin-ename (p0 pn tol / ss i e vs a b found)
+  (setq ss (ssget "_X" '((0 . "LWPOLYLINE,LINE,POLYLINE"))) i 0)
+  (if ss
+    (while (and (< i (sslength ss)) (null found))
+      (setq e  (ssname ss i)
+            vs (pf:poly-verts e))
+      (if (and vs (> (length vs) 1))
+        (progn
+          (setq a (car vs) b (last vs))
+          (if (or (and (pf:pt2d-near a p0 tol) (pf:pt2d-near b pn tol))
+                  (and (pf:pt2d-near a pn tol) (pf:pt2d-near b p0 tol)))
+            (setq found e))))
+      (setq i (1+ i))))
+  found)
+
+;; (pf:cl-twin-handle clfile tol) -> handle string | nil
+;;   Match the drawn twin by the .cl's endpoints; return its HANDLE for filing.
+(defun pf:cl-twin-handle (clfile tol / ends e)
+  (if (and (setq ends (pf:cl-endpoints clfile))
+           (setq e (pf:match-twin-ename (car ends) (cadr ends) tol)))
+    (cdr (assoc 5 (entget e)))))
+
+;; (pf:twin-verts handle) -> (x y)* | nil    LIVE read of the filed twin
+;;   Resolves the handle each call -> verts are always as-drawn.  nil when the
+;;   handle is absent, purged, or no longer a usable polyline.
+(defun pf:twin-verts (handle / e vs)
+  (if (and handle (/= handle "")
+           (setq e (handent handle))
+           (setq vs (pf:poly-verts e))
+           (> (length vs) 1))
+    vs))
 
 ;;; ==========================================================================
 ;;; SECTION 13  --  Sheet reads  (identity scan + top-of-grid probe)

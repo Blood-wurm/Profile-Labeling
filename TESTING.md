@@ -242,11 +242,23 @@ NOTES:
 •	Performance improvements?
 •	Pfxlabel suppressed cmdecho for .cl checks. Need at least “Checking for crossings” so the user doesn’t think it is freezing up.
 •	Pfxlabel “Discovery: 0 new, 0 updated, 0 moved.” is a bit confusing makes it seem like nothing was labeled. Probably move this to an output only if something has changed.
-•	Pfxlabel dropped the corossing line 
+•	Pfxlabel dropped the crossing line 
 •	First pfxlabel run. == PFXLABEL: 0 labeled, 1 skipped ==
   SKIPPED  SANITARY_A @ tgt sta 5+14.38  -- SOURCE INVERT UNREADABLE (profile z)
 •	Didn’t recognize profile names in drawing. (Don’t need this anyway.)
 •	PICKADD variable change?
+- pfsetup place all gives you an unskipple dialog paraded one after the other. Think about being able to pause dialog to navigate to profile then reopen.
+- Dialog for pfsetup needs to allow navigation between each placement. (or something....its current dialog flow is annoying. Click place > dialog > elevation > extents pick > back to main dialog.....leaves no way to navigate to next profile without closing the main dialog and reopening afterward)
+- Size of dialog box should be increased.
+- anchorblock style.
+- pflabel is using STORM LINE prefix for station line instead of defaulting per type.
+- pflabel dialog has ghost dropdown upon opening. Looks glitchy/unprofessional.
+- pflabel is labeling structures that aren't there, may be using multiple .cl files instead of just target.
+- missed a structure at a perpendicular deflection. - solved- 
+- pfinvert labels I.I. and I.O. swapped. Is applying the I.O. elevation (Incorrectly labeled I.I) to bothe inverts. Missed shared structure inverts. elevation is consistently .05 feet higher than the actual elevation.
+- pflabel grabs block from other utilities
+- pflabel names by [UTIL]
+- 
 
 *The storage-location deviation I called out in the plan: geometry lives in a shared NOD store keyed by .cl identity, not on the stub/anchor record with promotion carry-forward. Behavior matches what we designed; it's just less machinery. If you specifically want it on the record, that's a different edit.
 
@@ -270,3 +282,15 @@ Project-folder sidecar — trace once per project, every sheet reads it; but dep
 My read: keep the NOD "ROOT" as the source of truth / fallback regardless (it works today and needs no Carlson cooperation), add a Carlson-read as an auto-seed if a probe finds one, and let the in-DWG-vs-sidecar choice come down to one question — do multiple sheet drawings in your workflow share the same project .cl/.pro data? If yes, the sidecar's "trace once per project" is worth the external-file complexity. If each project is basically one drawing, the in-DWG cache I built is already the right shape.
 
 Before I take this further: which is it — one sheet per project, or many sheets sharing one data folder?
+
+The following is a list of useful variables:
+lspdir$ - Carlson LSP folder where program files are located (string)
+tmpdir$ - current project data folder (string)
+usrdir$ - folder for program settings and temporary files (string)
+psname - Carlson Support folder (string)
+sv:sm - horizontal scale (real)
+sv:vs - vertical scale (real)
+sv:ts - text size scaler (real)
+sv:ps - symbol size scaler (real)
+is metric - english/metric mode (0=english, 1=metric)
+crdfile - current coordinate file (string)
