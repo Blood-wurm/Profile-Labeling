@@ -44,8 +44,60 @@ numbers on a plan sheet are the worst outcome.
   *Likely fixed* by the pick-first refactor (target popup removed from `pf_run`;
   all compute moved before `new_dialog` via `pflabel:rd-compute`) — re-check in
   CAD before closing. *(field note 255)*
-
-## PFXLABEL
+- **[wrong-output — OPEN, investigating] Structures silently dropped from the
+  run.** *(session 2026-07-23, unresolved — stopped mid-diagnosis)* On line
+  **DF** (`F:\Data\2020\20-6229 CARLSON\02_ProjectData\Alignments\DF.cl`, 5×
+  `DBI_24x24` structures, all identical), PFLABEL labelled only 3 of 5; the run
+  **dialog itself listed only 3**, so the loss is **pre-dialog** (in
+  `pflabel:pending` → `pf:lines-at-point`), and no per-structure skip message
+  fires (those only print for structures that reach the run). The 3 that label
+  station perfectly.
+  - **Case structure that stays missing:** handle **51FF8**, insertion pt
+    ≈(1263193.51, 2166998.10), station **628.846** on DF. The five on-DF
+    stations are 600.000 / 628.846 / 704.186 / 724.390 / 810.387 (all distinct).
+  - **Ruled out, with evidence (all via command-line probes against the live
+    drawing):**
+    - *Name filter / dynamic-block anonymous name* — `(assoc 2 (entget e))` =
+      `"DBI_24x24"`, `pf:rule-for` = MATCH. It is a plain top-level INSERT (LIST
+      confirmed), not nested, not `*U…`.
+    - *Offset tolerance* — after rebuilding `DF.cl` from the on-screen polyline,
+      `pf:cl-locate-safe` gives **offset 0.000** at this point. Re-snapping and
+      widening `*pf-offset-tol*` (0.2→0.8) did **not** recover it; this failure
+      is **tolerance-independent** (missed identically at 0.2 and 0.8).
+    - *Station range* — 628.846 is interior to range (600.0, 820.552); the 1st
+      and last structures label.
+    - *Corridor pre-filter (against the filed twin `pfa:twin-get cl`)* —
+      handle **5200B**, 6 verts, **corridor-dist 0.000**.
+    - *`vl-sort` station-collision dedup* (the initial theory) — reproduced the
+      sort: `on-DF=5, after-vl-sort=5`, no elements dropped. **Innocent.**
+  - **Where it actually breaks (the live lead):** rebuilding the run's OWN line
+    table via `pflabel:build-lines` on the registry pairs and testing this point
+    against it returns **`real-lines-at-point = nil`** — i.e. the table the run
+    builds says 51FF8 is *not on DF*, even though a hand-built entry keyed on the
+    true `cl` path accepts it (offset 0, corridor 0). Crucially the built entry's
+    stored `.cl` path string is **not `=` to the on-disk path** (a
+    `(strcase (car L)) = (strcase cl)` match came back MISSING while build-lines
+    still loaded `'DF'` Sta 600→820.55). So the registry filed DF under a
+    **different path string** than the actual file, and the entry build-lines
+    produced from it (its Road-API locate and/or the twin it self-heals to via
+    `pf:cl-twin-handle`) rejects this one point while accepting the other four.
+  - **Leading hypothesis:** path-string mismatch in the record → `build-lines`
+    either binds a stale/other `DF.cl` (locate fails at this point) or
+    self-heals to the **wrong twin polyline** (corridor rejects just this
+    station). Tolerance changes can't touch it; that's why nothing the field
+    tried worked.
+  - **NEXT PROBE (resume here):** with `lines` and `p` still built, read the one
+    real entry — `(setq L (car lines) f (car L) vv (nth 4 L))` then print
+    `f` (compare to `F:\…\DF.cl`), `(cadr L)` name, vert count,
+    `(pf:cl-locate-safe f p)`, and `(pf:pt-poly-dist p vv)`. Split:
+    **corridor-dist > `*pf-corridor*`** → wrong/self-healed twin (a filing bug in
+    `build-lines`/`pfa:twin-*` keyed on a non-canonical path); **locate = nil or
+    file path differs** → the record's `.cl` binding is stale/non-canonical →
+    re-bind in PFSETUP and/or **canonicalise `.cl` path strings** (case/format)
+    wherever they're filed and looked up (`pfa:twin-get`/`-put`,
+    `pfxl:entry-cl`, geom cache).
+  - **Note:** all diagnosis was command-line only; **no source files were
+    changed** this session (an earlier speculative edit set was fully reverted).
 
 - Field findings 243, 244, 245, 247 are **resolved** by this pull
   (`"Checking for crossings"` message; zero-count report suppressed;
