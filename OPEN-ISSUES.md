@@ -144,3 +144,6 @@ hand-entered or hardcoded values.
   bracket` now reads exact vertices by **parsing the `.pro` file** (`pf:pro-
   verts`), the suite's one file read, with a `profile_z` cross-check guarding the
   station domain.
+
+## PFPALETTE
+- Palette persists across drawings. Intentional? 

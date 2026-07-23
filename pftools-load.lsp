@@ -1,5 +1,5 @@
 ;;; ==========================================================================
-;;; pftools-load.lsp  --  loads the PFTools V4 suite
+;;; pftools-load.lsp  --  loads the PFTools V5 suite (self-contained copy)
 ;;; --------------------------------------------------------------------------
 ;;; Loads by FULL path in dependency order.  Each file may only depend on
 ;;; files above it (the V4 guardrail):
@@ -18,7 +18,7 @@
 ;;;                    kept in _v3\ for reference only.
 ;;; ==========================================================================
 
-(setq *pftools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/.strlabel/V4/")
+(setq *pftools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/.strlabel/V5/")
 
 (progn
   (load (strcat *pftools-dir* "pftools-cfg.lsp"))   ; constants      -- first
@@ -30,13 +30,15 @@
   (load (strcat *pftools-dir* "pflabel.lsp"))       ; C:PFLABEL
   (load (strcat *pftools-dir* "pfxlabel.lsp"))      ; C:PFXLABEL
   (load (strcat *pftools-dir* "pfinvert.lsp"))      ; C:PFINVERT
+  (load (strcat *pftools-dir* "pfpalette.lsp"))     ; C:PFPALETTE  -- last
   (princ "\n----------------------------------------------")
-  (princ "\nPFTools V4 loaded.")
+  (princ "\nPFTools V5 loaded.")
   (princ "\n  Grid records:      PFSETUP (register/edit), PFREMOVE (teardown)")
   (princ "\n  Structure labels:  PFLABEL  (alias PFL)")
   (princ "\n  Crossings:         PFXLABEL (alias PFX)")
   (princ "\n  Inverts:           PFINVERT (alias PFI)")
   (princ "\n  Settings:          PFLABELSET   (project root: native tmpdir$)")
+  (princ "\n  Palette:           PFPALETTE    (V5 read-only, milestone 2)")
   (princ "\n  Coming this cycle: PFCHECK")
   (princ "\n----------------------------------------------")
   (princ))

@@ -364,3 +364,7 @@ sv:ts - text size scaler (real)
 sv:ps - symbol size scaler (real)
 is metric - english/metric mode (0=english, 1=metric)
 crdfile - current coordinate file (string)
+
+Both right-flags on = the whole label rides the right edge at fixed width; top-flags off = it stays pinned near the top.
+
+For reference later, that 4-flag model maps the README table like this: fixed top-left = 0/0/0/0; stretch horizontally (like tvwLines, metaList) = Left-from-right 0, Right-from-right 1; stretch vertically = Top-from-bottom 0, Bottom-from-bottom 1. tvwLines (stretches both) ends up 0/1/0/1.
