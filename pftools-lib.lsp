@@ -211,7 +211,9 @@
      (setq rng (pf:cl-range clfile)
            vts (pf:cl-verts clfile))
      (cond
-       ((and rng vts) (pfa:geom-put clfile cur rng vts) (cons rng vts))
+       ;; SAMPLED until pf:cl-parse lands (stage 2 flips storm/sanitary to EXACT
+       ;; with authoritative per-vertex stations); walked verts carry no station.
+       ((and rng vts) (pfa:geom-put clfile cur rng vts *pf-geom-sampled*) (cons rng vts))
        (rng (cons rng vts))                       ; range only; don't file a miss
        (T nil)))))
 
@@ -421,11 +423,34 @@
     (setq i (1+ i)))
   (reverse out))
 
-;; (pf:dedupe-pairs pairs) -> pairs with duplicate cars dropped (first wins)
-(defun pf:dedupe-pairs (pairs / out)
-  (setq out '())
+;; (pf:cl-id file) -> canonical identity string for a .cl/.pro path.
+;;   Slash-normalized (/ -> \) and upcased so spelling variants of ONE file
+;;   compare and key identically.  This is the single source of file identity
+;;   for GEOM/TWIN keys and pair dedup -- it closes the "stored path string
+;;   != requested path string" self-match gap.  Pure string work (no disk
+;;   resolution: absolute paths are already what the records store; UNC/mapped
+;;   and relative->absolute canonicalisation are deferred).
+(defun pf:cl-id (file / i c out)
+  (if (or (null file) (= file ""))
+    ""
+    (progn
+      (setq out "" i 1)
+      (while (<= i (strlen file))
+        (setq c (substr file i 1))
+        (setq out (strcat out (if (= c "/") "\\" c)))
+        (setq i (1+ i)))
+      (strcase out))))
+
+;; (pf:dedupe-pairs pairs) -> pairs with duplicate cars dropped (first wins).
+;;   Identity is pf:cl-id, so two spellings of one path collapse to one entry
+;;   and the run's answer no longer depends on which spelling came first.
+(defun pf:dedupe-pairs (pairs / out seen id)
+  (setq out '() seen '())
   (foreach p pairs
-    (if (not (assoc (car p) out)) (setq out (cons p out))))
+    (setq id (pf:cl-id (car p)))
+    (if (not (member id seen))
+      (setq seen (cons id seen)
+            out  (cons p out))))
   (reverse out))
 
 
@@ -957,6 +982,111 @@
 
 ;; (pf:timestamp) -> decimal-date string (CDATE, stable rtos mode 2)
 (defun pf:timestamp () (rtos (getvar "CDATE") 2 6))
+
+
+;;; ==========================================================================
+;;; SECTION 15  --  View: the zoom-to verification parade  (command-agnostic)
+;;; ==========================================================================
+;;; The ONE place the pure lib issues (command ...) -- and every call is a VIEW
+;;; op (ZOOM / DELAY), never an entity write, so the "nothing here writes the
+;;; drawing" guardrail holds.  Every input is a resolved number (center, height,
+;;; station X, a Y span): no record, anchor, or dialog knowledge crosses this
+;;; seam, so all three label commands share it.
+;;;
+;;; The parade: after each item is drawn, frame it and DELAY so the drafter can
+;;; verify the placement; restore the pre-run view when the pass ends.  Born in
+;;; PFXLABEL (boss ask); generalized here so PFLABEL/PFINVERT get it too when the
+;;; palette's "Zoom To" option is ticked.
+;;;
+;;; GATE (two independent switches, both must be on):
+;;;   *pf-zoom-active*  the per-run flag -- set by pf:zoom-resolve at each engine's
+;;;                     entry from either the palette override or the command's own
+;;;                     default (PFXLABEL on, PFLABEL/PFINVERT off).
+;;;   *pf-zoom-pause*   the DURATION (cfg); 0 disables regardless.
+
+;; ---- gate state ----------------------------------------------------------
+(if (not (boundp '*pf-zoom-to*))        (setq *pf-zoom-to* nil))     ; palette override channel: 'ON | 'OFF | nil (read once, cleared)
+(if (not (boundp '*pf-zoom-active*))    (setq *pf-zoom-active* nil)) ; the effective per-run flag the primitives read
+(if (not (boundp '*pf-zoom-count*))     (setq *pf-zoom-count* 0))    ; items framed this pass (drives the end-restore)
+(if (not (boundp '*pf-zoom-view-save*)) (setq *pf-zoom-view-save* nil)) ; (ctr . size); global so an *error* handler can reach it
+
+;; (pf:zoom-resolve default) -> boolean   Establish *pf-zoom-active* for this run.
+;;   A pending palette override (*pf-zoom-to* 'ON/'OFF) wins and is consumed;
+;;   otherwise the command's own default.  Mirrors the *pf-preset-target* pattern
+;;   (README 6a).  Call ONCE at the top of each pfX:run engine so BOTH the modal
+;;   command and the future deferred palette command route through it.
+(defun pf:zoom-resolve (default / v)
+  (setq v (cond ((eq *pf-zoom-to* 'ON)  T)
+                ((eq *pf-zoom-to* 'OFF) nil)
+                (T default))
+        *pf-zoom-to*     nil          ; read once, cleared
+        *pf-zoom-active* v)
+  v)
+
+;; (pf:zoom-on-p) -> T when the parade should run this pass
+(defun pf:zoom-on-p () (and *pf-zoom-active* (> *pf-zoom-pause* 0.0)))
+
+;; (pf:zoom-corners ctr h) -> (p1 p2)
+;;   Window corners reproducing a center+height view at the current screen
+;;   aspect.  ZOOM _Center <pt> <height> miscomputes in this Carlson/Map build
+;;   (fails "No Center found for specified point"); ZOOM _Window is the robust
+;;   equivalent, so every view change routes through here.  The framed area is
+;;   identical -- height drives, width follows the viewport aspect.
+(defun pf:zoom-corners (ctr h / scr asp w)
+  (setq scr (getvar "SCREENSIZE")
+        asp (/ (car scr) (cadr scr))
+        w   (* h asp))
+  (list (list (- (car ctr) (* 0.5 w)) (- (cadr ctr) (* 0.5 h)))
+        (list (+ (car ctr) (* 0.5 w)) (+ (cadr ctr) (* 0.5 h)))))
+
+;; (pf:zoom-cwh ctr h) -> nil   Window zoom in NORMAL command context.
+;;   An *error* handler must NOT use this (command is illegal there) -- it issues
+;;   its own command-s zoom off pf:zoom-corners (see pf:zoom-onerror).
+(defun pf:zoom-cwh (ctr h / cw)
+  (setq cw (pf:zoom-corners ctr h))
+  (command "_.ZOOM" "_Window" (car cw) (cadr cw)))
+
+;; (pf:zoom-begin) -> nil   Open a parade: reset the frame count and, when on,
+;;   snapshot the pre-run view for the end-restore.  Call before the label loop.
+(defun pf:zoom-begin ()
+  (setq *pf-zoom-count* 0)
+  (if (pf:zoom-on-p)
+    (setq *pf-zoom-view-save* (cons (getvar "VIEWCTR") (getvar "VIEWSIZE"))))
+  (princ))
+
+;; (pf:zoom-item x ylo yhi) -> nil   THE COMMAND-AGNOSTIC SEAM.  Frame the item
+;;   at station X over the vertical span [ylo yhi] (centered, 1.4x margin) and
+;;   DELAY.  No-op unless the parade is on.  Each command computes its own span:
+;;   PFXLABEL grid-top->below-base, PFLABEL grid-top->stack-top, PFINVERT the
+;;   pipe-elevation zone.  Counts a frame so pf:zoom-end knows work happened.
+(defun pf:zoom-item (x ylo yhi)
+  (if (pf:zoom-on-p)
+    (progn
+      (pf:zoom-cwh (list x (* 0.5 (+ ylo yhi)) 0.0) (* 1.4 (- yhi ylo)))
+      (command "_.DELAY" (fix (* *pf-zoom-pause* 1000.0)))
+      (setq *pf-zoom-count* (1+ *pf-zoom-count*))))
+  (princ))
+
+;; (pf:zoom-end) -> nil   Close a parade: restore the pre-run view when at least
+;;   one item was framed (skip the redundant zoom when nothing drew).  Clears the
+;;   snapshot either way.  Call after the label loop, before the pass report.
+(defun pf:zoom-end ()
+  (if (and *pf-zoom-view-save* (> *pf-zoom-count* 0))
+    (pf:zoom-cwh (car *pf-zoom-view-save*) (cdr *pf-zoom-view-save*)))
+  (setq *pf-zoom-view-save* nil)
+  (princ))
+
+;; (pf:zoom-onerror) -> nil   *error*-safe view restore.  `command` is illegal in
+;;   an error handler, so this uses command-s.  Call from each command's *error*
+;;   AFTER the undo group closes, so the restore is not part of the undo group.
+(defun pf:zoom-onerror ( / cw)
+  (if *pf-zoom-view-save*
+    (progn
+      (setq cw (pf:zoom-corners (car *pf-zoom-view-save*)
+                                (cdr *pf-zoom-view-save*)))
+      (command-s "_.ZOOM" "_Window" (car cw) (cadr cw))
+      (setq *pf-zoom-view-save* nil)))
+  (princ))
 
 
 (princ "\npftools-lib.lsp loaded (V4 engine).")

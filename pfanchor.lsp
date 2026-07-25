@@ -547,18 +547,22 @@
   (reverse out))
 
 ;;; ---- GEOM: drawing-wide cached .cl geometry (content-addressed) -----------
-;;; One xrecord per .cl in the NOD "PFTOOLS" dict, key "GEOM_<basename>".
-;;; Registration (AUTO name / USER place) samples a .cl ONCE and files its
-;;; shape here; label commands READ it instead of re-tracing every run.  The
-;;; store is keyed by .cl IDENTITY, not by a stub or anchor: identity owns the
-;;; registry record, this owns the geometry, so promotion moves nothing.
-;;; Self-validating -- each entry carries the .cl content checksum it was
-;;; sampled at; a reader re-checksums and re-samples on mismatch, so a .cl
-;;; edited on disk heals on next use.
-;;;   (1 .cl path)(300 checksum)(40 sta0)(41 sta1)(10 x y 0.0)*  verts repeat
+;;; One xrecord per .cl in the NOD "PFTOOLS" dict, key "GEOM_<cl-id>".
+;;; Registration (AUTO name / USER place) captures a .cl's shape ONCE and files
+;;; it here; label commands READ it instead of re-tracing every run.  The store
+;;; is keyed by CANONICAL .cl IDENTITY (pf:cl-id), not by a stub or anchor:
+;;; identity owns the registry record, this owns the geometry, so promotion
+;;; moves nothing.  Self-validating -- each entry carries the .cl content
+;;; checksum it was captured at; a reader re-checksums and re-samples on
+;;; mismatch, so a .cl edited on disk heals on next use.
+;;;   KIND: *pf-geom-exact*  = parsed .cl vertices (z slot = vertex station)
+;;;         *pf-geom-sampled* = Road-API station walk (z slot = 0.0)
+;;;   (1 .cl path)(300 checksum)(70 kind)(40 sta0)(41 sta1)(10 x y sta)*  verts repeat
 
+;; Keyed by CANONICAL .cl identity (pf:cl-id): spelling variants of one path
+;; collapse to one record, and two projects' same-basename .cl no longer alias.
 (defun pfa:geom-key (clfile)
-  (strcat "GEOM_" (pfa:sanitize (strcase (vl-filename-base clfile)))))
+  (strcat "GEOM_" (pfa:sanitize (pf:cl-id clfile))))
 
 ;; (pfa:collect-10 data) -> list of (x y) from every (10 x y z) group, in order
 (defun pfa:collect-10 (data / out p)
@@ -567,24 +571,44 @@
     (if (= (car p) 10) (setq out (cons (list (cadr p) (caddr p)) out))))
   (reverse out))
 
-;; (pfa:geom-get clfile) -> (checksum (s0 s1) verts) | nil
-(defun pfa:geom-get (clfile / d ck s0 s1)
+;; (pfa:collect-10-sta data) -> list of (x y sta) from every (10 x y sta) group.
+;;   The z slot carries the vertex STATION for EXACT records; SAMPLED (and
+;;   legacy) records store 0.0 there, so sta is meaningful only when KIND=EXACT.
+(defun pfa:collect-10-sta (data / out p)
+  (setq out '())
+  (foreach p data
+    (if (= (car p) 10)
+      (setq out (cons (list (cadr p) (caddr p)
+                            (if (cadddr p) (cadddr p) 0.0))
+                      out))))
+  (reverse out))
+
+;; (pfa:geom-get clfile) -> (checksum (s0 s1) verts kind sta-verts) | nil
+;;   First three elements are unchanged for existing callers; kind + stationed
+;;   verts are appended.  Records without a (70) group are read as SAMPLED.
+(defun pfa:geom-get (clfile / d ck s0 s1 kind)
   (if (setq d (pfa:xrec-data (pfa:nod-dict) (pfa:geom-key clfile)))
     (progn
-      (setq ck (cdr (assoc 300 d))
-            s0 (cdr (assoc 40 d))
-            s1 (cdr (assoc 41 d)))
+      (setq ck   (cdr (assoc 300 d))
+            s0   (cdr (assoc 40 d))
+            s1   (cdr (assoc 41 d))
+            kind (if (assoc 70 d) (cdr (assoc 70 d)) *pf-geom-sampled*))
       (if (and ck s0 s1)
-        (list ck (list s0 s1) (pfa:collect-10 d))))))
+        (list ck (list s0 s1) (pfa:collect-10 d) kind (pfa:collect-10-sta d))))))
 
-;; (pfa:geom-put clfile checksum range verts) -> xrecord ename   range=(s0 s1)
-(defun pfa:geom-put (clfile checksum range verts / data v)
+;; (pfa:geom-put clfile checksum range verts kind) -> xrecord ename
+;;   range=(s0 s1).  verts entries may be (x y) or (x y sta); the station (or
+;;   0.0) is written into the (10 x y sta) z slot.  kind = *pf-geom-exact* |
+;;   *pf-geom-sampled*.
+(defun pfa:geom-put (clfile checksum range verts kind / data v)
   (setq data (list (cons 1 clfile)
                    (cons 300 checksum)
+                   (cons 70 kind)
                    (cons 40 (car range))
                    (cons 41 (cadr range))))
   (foreach v verts
-    (setq data (append data (list (list 10 (car v) (cadr v) 0.0)))))
+    (setq data (append data (list (list 10 (car v) (cadr v)
+                                        (if (caddr v) (caddr v) 0.0))))))
   (pfa:xrec-put (pfa:nod-dict) (pfa:geom-key clfile) data))
 
 ;; (pfa:registry) -> merged sorted list of (type name state ename stub)
@@ -626,10 +650,13 @@
 ;;; twin reads as-drawn, never cached stale.  Nothing to invalidate -- a
 ;;; purged/erased twin resolves to nil and the reader re-matches or drops the
 ;;; pre-filter (the authored cl_location_at_pt test still governs membership).
-;;;   key "TWIN_<basename>":  (1 . handle)
+;;;   key "TWIN_<cl-id>":  (1 . handle)(300 . cl-checksum-at-match)
+;;; Keyed by CANONICAL .cl identity (pf:cl-id), not basename.  The .cl checksum
+;;; at match time is stored so the witness step can tell whether the recorded
+;;; twin still corresponds to the current .cl.
 
 (defun pfa:twin-key (clfile)
-  (strcat "TWIN_" (pfa:sanitize (strcase (vl-filename-base clfile)))))
+  (strcat "TWIN_" (pfa:sanitize (pf:cl-id clfile))))
 
 ;; (pfa:twin-get clfile) -> handle string | nil
 (defun pfa:twin-get (clfile / d h)
@@ -638,11 +665,21 @@
       (setq h (cdr (assoc 1 d)))
       (if (and h (/= h "")) h))))
 
+;; (pfa:twin-cksum clfile) -> .cl checksum stored at match time | nil
+;;   Lets the witness step detect a twin recorded against an older .cl.
+(defun pfa:twin-cksum (clfile / d)
+  (if (setq d (pfa:xrec-data (pfa:nod-dict) (pfa:twin-key clfile)))
+    (cdr (assoc 300 d))))
+
 ;; (pfa:twin-put clfile handle) -> xrecord ename | nil
-;;   nil / "" clears the binding (no drawn twin matched -> pre-filter off).
-(defun pfa:twin-put (clfile handle)
+;;   Stores the drawn-twin handle plus the .cl checksum at match time.
+;;   nil / "" clears the binding (no drawn twin matched -> witness unavailable).
+(defun pfa:twin-put (clfile handle / ck)
   (if (and handle (/= handle ""))
-    (pfa:xrec-put (pfa:nod-dict) (pfa:twin-key clfile) (list (cons 1 handle)))
+    (progn
+      (setq ck (pf:checksum-file clfile))
+      (pfa:xrec-put (pfa:nod-dict) (pfa:twin-key clfile)
+                    (list (cons 1 handle) (cons 300 (if ck ck "")))))
     (pfa:xrec-del (pfa:nod-dict) (pfa:twin-key clfile))))
 ;;; ---- STATUS: state + timestamp + findings --------------------------------
 ;;; state: 0 unchecked / 1 passing / 2 failing / 3 stale.

@@ -56,6 +56,7 @@
            (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFLABEL error: " msg)))
   (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
+  (pf:zoom-onerror)                 ; Esc mid-parade: restore the pre-run view (no-op when off)
   (setq *error* *pflabel-prev-error*)
   (princ))
 
@@ -550,7 +551,8 @@
          (setq *pflabel-run-ents* (append (cdr res) *pflabel-run-ents*))
          (setq e2 (pfd:station-line px gtop topy *pf-layer*))
          (if e2 (setq *pflabel-run-ents* (cons e2 *pflabel-run-ents*)))
-         (prompt (strcat "\n  Labeled " id ".")))))))
+         (prompt (strcat "\n  Labeled " id "."))
+         (pf:zoom-item px gtop topy))))))   ; verification parade (no-op unless "Zoom To" on)
 
 
 ;;; ==========================================================================
@@ -628,7 +630,44 @@
   (foreach e findings (prompt (strcat "\n  FINDING: " e)))
   (princ))
 
-(defun c:PFLABEL ( / anchor rd ctx n)
+;; (pflabel:run anchor rd) -> nil
+;;   The ENGINE: consumes the gathered order ticket (mode/lines/inlets/sel) and
+;;   does all the drawing.  Called by C:PFLABEL after its modal gather, and by
+;;   the palette's deferred command with the identical alist.  Assumes a command
+;;   context with pflabel:*error* already installed -- the CALLER owns the
+;;   *error*/echo wrapper, so this body is unchanged from the old inline form.
+(defun pflabel:run (anchor rd / ctx n)
+  (setq ctx (pflabel:setup anchor (cdr (assoc 'mode rd))
+                           (cdr (assoc 'lines rd))
+                           (cdr (assoc 'inlets rd))))
+  (pf:zoom-resolve nil)              ; PFLABEL does NOT parade unless the palette asks (palette override wins)
+  (if ctx
+    (progn
+      (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))
+      (setq *pflabel-run-ents* '())
+      (command "_.UNDO" "_Begin")
+      (setq *pflabel-undo-open* T)
+      ;; All + derived layer = replace this pass's previous output
+      ;; (erase-by-handle; hand work and CLAYER output untouched)
+      (if (and (= (cdr (assoc 'mode ctx)) "All")
+               (not (cdr (assoc 'clayer-p ctx))))
+        (progn
+          (setq n (pfa:erase-pass anchor "LABEL"))
+          (if (> n 0)
+            (prompt (strcat "\nReplaced previous label pass ("
+                            (itoa n)
+                            " entities erased by handle).")))))
+      (pf:zoom-begin)                 ; snapshot the pre-run view when on
+      (if (= (cdr (assoc 'mode ctx)) "All")
+        (pflabel:label-all ctx)
+        (pflabel:label-sel ctx))
+      (pf:zoom-end)                   ; restore the pre-run view after the parade
+      (pflabel:write-pass ctx)
+      (command "_.UNDO" "_End")
+      (setq *pflabel-undo-open* nil)))
+  (princ))
+
+(defun c:PFLABEL ( / anchor rd)
   (setq *pflabel-prev-error* *error*
         *error*              pflabel:*error*
         *pflabel-undo-open*  nil)
@@ -645,32 +684,7 @@
                  "LABEL" anchor))
       (if (null rd)
         (prompt "\nPFLABEL cancelled.")
-        (progn
-          (setq ctx (pflabel:setup anchor (cdr (assoc 'mode rd))
-                                   (cdr (assoc 'lines rd))
-                                   (cdr (assoc 'inlets rd))))
-          (if ctx
-            (progn
-              (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))
-              (setq *pflabel-run-ents* '())
-              (command "_.UNDO" "_Begin")
-              (setq *pflabel-undo-open* T)
-              ;; All + derived layer = replace this pass's previous output
-              ;; (erase-by-handle; hand work and CLAYER output untouched)
-              (if (and (= (cdr (assoc 'mode ctx)) "All")
-                       (not (cdr (assoc 'clayer-p ctx))))
-                (progn
-                  (setq n (pfa:erase-pass anchor "LABEL"))
-                  (if (> n 0)
-                    (prompt (strcat "\nReplaced previous label pass ("
-                                    (itoa n)
-                                    " entities erased by handle).")))))
-              (if (= (cdr (assoc 'mode ctx)) "All")
-                (pflabel:label-all ctx)
-                (pflabel:label-sel ctx))
-              (pflabel:write-pass ctx)
-              (command "_.UNDO" "_End")
-              (setq *pflabel-undo-open* nil)))))))
+        (pflabel:run anchor rd))))       ; gather done -> hand to the engine
   (pf:echo-on)
   (setq *error* *pflabel-prev-error*)
   (princ))

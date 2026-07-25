@@ -35,10 +35,11 @@
 
 (if (not (boundp '*pfxl-undo-open*)) (setq *pfxl-undo-open* nil))
 (if (not (boundp '*pfxl-last*))      (setq *pfxl-last* nil))  ; (type . name)
-(if (not (boundp '*pfxl-view-save*)) (setq *pfxl-view-save* nil)) ; (ctr . size)
-                                     ; global, NOT a command local: the *error*
-                                     ; handler must reach it to restore the
-                                     ; view on Esc mid-zoom-parade
+                                     ; The verification zoom+pause is now the
+                                     ; shared pf:zoom-* facility (pftools-lib 15);
+                                     ; the pre-run view lives in the global
+                                     ; *pf-zoom-view-save* so the *error* handler
+                                     ; can restore it on an Esc mid-parade.
 
 (setq *pfxl-pass-name* "XING")   ; the crossing pass in the handle ledger
 
@@ -86,18 +87,13 @@
 ;;; SECTION 2  --  Error handler
 ;;; ==========================================================================
 
-(defun pfxl:*error* (msg / cw)
+(defun pfxl:*error* (msg)
   (if (and msg (/= msg "Function cancelled") (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFXLABEL error: " msg)))
   (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
   ;; Esc mid-zoom-parade: put the view back where the run started (after the
   ;; group closes, so the restore itself isn't part of the undo group)
-  (if *pfxl-view-save*
-    (progn
-      (setq cw (pfxl:zoom-corners (car *pfxl-view-save*)
-                                  (cdr *pfxl-view-save*)))
-      (command-s "_.ZOOM" "_Window" (car cw) (cadr cw))
-      (setq *pfxl-view-save* nil)))
+  (pf:zoom-onerror)
   (setq *error* *pfxl-prev-error*)
   (princ))
 
@@ -328,42 +324,63 @@
 ;;; SECTION 6  --  C:PFXLABEL
 ;;; ==========================================================================
 
-;; (pfxl:zoom-corners ctr h) -> (p1 p2)
-;;   Window corners reproducing a center+height view at the current screen
-;;   aspect.  ZOOM _Center <pt> <height> miscomputes in this Carlson/Map
-;;   build (fails "No Center found for specified point"); ZOOM _Window is
-;;   the robust equivalent, so every view change routes through here.  The
-;;   framed area is identical -- height drives, width follows viewport aspect.
-(defun pfxl:zoom-corners (ctr h / scr asp w)
-  (setq scr (getvar "SCREENSIZE")
-        asp (/ (car scr) (cadr scr))
-        w   (* h asp))
-  (list (list (- (car ctr) (* 0.5 w)) (- (cadr ctr) (* 0.5 h)))
-        (list (+ (car ctr) (* 0.5 w)) (+ (cadr ctr) (* 0.5 h)))))
-
-;; (pfxl:zoom-cwh ctr h) -> nil   window zoom in NORMAL command context.
-;;   The *error* handler must NOT use this (command is illegal there) -- it
-;;   issues its own command-s zoom off pfxl:zoom-corners.
-(defun pfxl:zoom-cwh (ctr h / cw)
-  (setq cw (pfxl:zoom-corners ctr h))
-  (command "_.ZOOM" "_Window" (car cw) (cadr cw)))
-
 ;; (pfxl:zoom-to xf e sf) -> nil
 ;;   Verification zoom+pause on one just-drawn crossing (boss ask): frame the
-;;   station line (grid top down to the line extension) and DELAY.  No-op when
-;;   *pfx-zoom-pause* is 0.  Caller saves/restores the pre-run view.
-(defun pfxl:zoom-to (xf e sf / x ylo yhi)
-  (if (> *pfx-zoom-pause* 0.0)
-    (progn
-      (setq x   (pf:station->profile-x (pfa:xr-tsta e) xf)
-            ylo (- (pf:xf-basey xf) (* *pfx-line-ext* sf))
-            yhi (pf:grid-top-y xf))
-      (pfxl:zoom-cwh (list x (* 0.5 (+ ylo yhi)) 0.0)
-                     (* 1.4 (- yhi ylo)))
-      (command "_.DELAY" (fix (* *pfx-zoom-pause* 1000.0))))))
+;;   station line (grid top down to the line extension) and hand off to the
+;;   shared parade (pf:zoom-item, pftools-lib 15).  This wrapper is only the
+;;   crossing-specific FRAME; the gate, view math, and DELAY are all shared.
+(defun pfxl:zoom-to (xf e sf)
+  (pf:zoom-item (pf:station->profile-x (pfa:xr-tsta e) xf)
+                (- (pf:xf-basey xf) (* *pfx-line-ext* sf))   ; ylo: below the base
+                (pf:grid-top-y xf)))                          ; yhi: the grid top
 
-(defun c:PFXLABEL ( / anchor xf style sf ht toplines work recon act ndup
-                    allmode sel e drawn skips res oldh newh lay)
+;; (pfxl:run anchor xf sel) -> nil
+;;   The ENGINE: draws the resolved crossing selection on the sheet.  Discovery,
+;;   recon and the run dialog build `sel` on the GATHER side (discovery also
+;;   writes the ledger under the caller's undo group), so they stay in the
+;;   command; this is only the sheet-drawing pass -- the piece a modeless palette
+;;   cannot do itself and will reuse via its deferred command.  style/sf/ht/
+;;   toplines derive here from xf.  Caller owns the *error*/echo wrapper and the
+;;   undo group; body is unchanged from the old inline loop.
+(defun pfxl:run (anchor xf sel / style sf ht toplines res newh drawn skips
+                                  oldh lay e)
+  (setq style    (pfset:active-style)
+        sf       (pf:xf-sf xf)
+        ht       (* *pf-text-base-height* sf)
+        toplines (pf:top-lines)
+        drawn    0
+        skips    '())
+  (pf:zoom-resolve T)                  ; PFXLABEL parades by default (palette override wins)
+  (pf:zoom-begin)                      ; snapshot the pre-run view when on
+  (foreach e sel
+    (setq res (pfxl:label-one anchor xf e style sf ht toplines))
+    (if (car res)
+      (progn
+        (setq newh (append newh (car res))
+              drawn (1+ drawn))
+        (pfxl:zoom-to xf e sf))       ; verification zoom+pause
+      (setq skips (cons (list (pfa:xr-key e) (pfa:xr-sbase e)
+                              (pfa:xr-tsta e) (cdr res))
+                        skips))))
+  (pf:zoom-end)                        ; restore the pre-run view after the parade
+  ;; append this pass's handles to the crossing pass ledger
+  (if newh
+    (progn
+      (setq oldh (pfa:pass-handles anchor *pfxl-pass-name*)
+            lay  *pfa-xing-layer*)
+      (pfa:pass-put anchor *pfxl-pass-name* lay nil
+                    (append oldh newh))))
+  ;; pass report
+  (prompt (strcat "\n== PFXLABEL: " (itoa drawn)
+                  " labeled, " (itoa (length skips))
+                  " skipped =="))
+  (foreach e (reverse skips)
+    (prompt (strcat "\n  SKIPPED  " (cadr e) " @ tgt sta "
+                    (pf:fmt-station (caddr e)) "  -- "
+                    (nth 3 e))))
+  (princ))
+
+(defun c:PFXLABEL ( / anchor xf work recon act ndup allmode sel)
   (setq *pfxl-prev-error* *error*
         *error*           pfxl:*error*
         *pfxl-undo-open*  nil)
@@ -376,12 +393,7 @@
       (prompt "\nTarget grid record unreadable -- cannot label.")
       (progn
         (setq *pfxl-last* (cons (strcase (pf:xf-get 'type xf))
-                                (strcase (pf:xf-get 'name xf)))
-              style (pfset:active-style)
-              sf    (pf:xf-sf xf)
-              ht    (* *pf-text-base-height* sf)
-              drawn 0
-              skips '())
+                                (strcase (pf:xf-get 'name xf))))
         (command "_.UNDO" "_Begin")
         (setq *pfxl-undo-open* T)
 
@@ -428,41 +440,7 @@
                  (prompt (if allmode
                            "\nAll crossings already labeled -- nothing to do."
                            "\nCancelled.")))
-                (T
-                 (setq toplines (pf:top-lines))
-                 (if (> *pfx-zoom-pause* 0.0)
-                   (setq *pfxl-view-save*
-                         (cons (getvar "VIEWCTR") (getvar "VIEWSIZE"))))
-                 (foreach e sel
-                   (setq res (pfxl:label-one anchor xf e style sf ht toplines))
-                   (if (car res)
-                     (progn
-                       (setq newh (append newh (car res))
-                             drawn (1+ drawn))
-                       (pfxl:zoom-to xf e sf))       ; verification zoom+pause
-                     (setq skips (cons (list (pfa:xr-key e) (pfa:xr-sbase e)
-                                             (pfa:xr-tsta e) (cdr res))
-                                       skips))))
-                 ;; restore the pre-run view after the verification zooms
-                 (if (and *pfxl-view-save* (> drawn 0))
-                   (pfxl:zoom-cwh (car *pfxl-view-save*)
-                                  (cdr *pfxl-view-save*)))
-                 (setq *pfxl-view-save* nil)
-                 ;; append this pass's handles to the crossing pass ledger
-                 (if newh
-                   (progn
-                     (setq oldh (pfa:pass-handles anchor *pfxl-pass-name*)
-                           lay  *pfa-xing-layer*)
-                     (pfa:pass-put anchor *pfxl-pass-name* lay nil
-                                   (append oldh newh))))
-                 ;; pass report
-                 (prompt (strcat "\n== PFXLABEL: " (itoa drawn)
-                                 " labeled, " (itoa (length skips))
-                                 " skipped =="))
-                 (foreach e (reverse skips)
-                   (prompt (strcat "\n  SKIPPED  " (cadr e) " @ tgt sta "
-                                   (pf:fmt-station (caddr e)) "  -- "
-                                   (nth 3 e))))))))))
+                (T (pfxl:run anchor xf sel)))))))    ; resolved -> sheet engine
         (if *pfxl-undo-open*
           (progn (command "_.UNDO" "_End") (setq *pfxl-undo-open* nil))))))
   (pf:echo-on)

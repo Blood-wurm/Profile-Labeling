@@ -1,3 +1,4 @@
+
 ;;; ==========================================================================
 ;;; pfinvert.lsp  --  C:PFINVERT : invert labels at structures  (V4)
 ;;; --------------------------------------------------------------------------
@@ -58,6 +59,7 @@
            (/= msg "quit / exit abort"))
     (prompt (strcat "\nPFINVERT error: " msg)))
   (pfa:undo-cleanup)                ; closes ANY pf group, incl. a nested one
+  (pf:zoom-onerror)                 ; Esc mid-parade: restore the pre-run view (no-op when off)
   (setq *error* *pfinvert-prev-error*)
   (princ))
 
@@ -363,7 +365,13 @@
                      (if lats
                        (strcat ", " (itoa (length lats)) " lateral(s)")
                        "")
-                     ").")))))
+                     ")."))
+     ;; verification parade (no-op unless "Zoom To" on): frame the true station
+     ;; from the grid top down past the invert text base.  Bottom margin is
+     ;; tunable -- the invert-offset factor comfortably clears the hanging stack.
+     (pf:zoom-item x
+                   (- baseY (* ht *pfi-invert-offset-factor*))
+                   (pf:grid-top-y xf)))))
 
 
 ;;; ==========================================================================
@@ -587,7 +595,43 @@
 ;;; ==========================================================================
 ;;; SECTION 6  --  C:PFINVERT   (pick-first, then the invert dialog)
 ;;; ==========================================================================
-(defun c:PFINVERT ( / anchor rd ctx n)
+;; (pfi:run anchor rd) -> nil
+;;   The ENGINE: consumes the gathered order ticket (mode/lines/inlets/sel) and
+;;   does all the drawing.  Twin of pflabel:run -- called by C:PFINVERT after
+;;   its modal gather, and by the palette's deferred command with the identical
+;;   alist.  Caller owns the *error*/echo wrapper; body unchanged from inline.
+(defun pfi:run (anchor rd / ctx n)
+  (setq ctx (pfi:setup anchor (cdr (assoc 'mode rd))
+                       (cdr (assoc 'lines rd))
+                       (cdr (assoc 'inlets rd))))
+  (pf:zoom-resolve nil)             ; PFINVERT does NOT parade unless the palette asks (palette override wins)
+  (if ctx
+    (progn
+      (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))
+      (setq *pfinvert-run-ents* '())
+      (command "_.UNDO" "_Begin")
+      (setq *pfinvert-undo-open* T)
+      ;; All + derived layer = replace this pass's previous output
+      ;; (erase-by-handle; hand work and CLAYER output untouched)
+      (if (and (= (cdr (assoc 'mode ctx)) "All")
+               (not (cdr (assoc 'clayer-p ctx))))
+        (progn
+          (setq n (pfa:erase-pass anchor *pfi-pass-name*))
+          (if (> n 0)
+            (prompt (strcat "\nReplaced previous invert pass ("
+                            (itoa n)
+                            " entities erased by handle).")))))
+      (pf:zoom-begin)                ; snapshot the pre-run view when on
+      (if (= (cdr (assoc 'mode ctx)) "All")
+        (pfi:label-all ctx)
+        (pfi:label-sel ctx))
+      (pf:zoom-end)                  ; restore the pre-run view after the parade
+      (pfi:write-pass ctx)
+      (command "_.UNDO" "_End")
+      (setq *pfinvert-undo-open* nil)))
+  (princ))
+
+(defun c:PFINVERT ( / anchor rd)
   (setq *pfinvert-prev-error* *error*
         *error*               pfinvert:*error*
         *pfinvert-undo-open*  nil)
@@ -604,32 +648,7 @@
                  *pfi-pass-name* anchor))
       (if (null rd)
         (prompt "\nPFINVERT cancelled.")
-        (progn
-          (setq ctx (pfi:setup anchor (cdr (assoc 'mode rd))
-                               (cdr (assoc 'lines rd))
-                               (cdr (assoc 'inlets rd))))
-          (if ctx
-            (progn
-              (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))
-              (setq *pfinvert-run-ents* '())
-              (command "_.UNDO" "_Begin")
-              (setq *pfinvert-undo-open* T)
-              ;; All + derived layer = replace this pass's previous output
-              ;; (erase-by-handle; hand work and CLAYER output untouched)
-              (if (and (= (cdr (assoc 'mode ctx)) "All")
-                       (not (cdr (assoc 'clayer-p ctx))))
-                (progn
-                  (setq n (pfa:erase-pass anchor *pfi-pass-name*))
-                  (if (> n 0)
-                    (prompt (strcat "\nReplaced previous invert pass ("
-                                    (itoa n)
-                                    " entities erased by handle).")))))
-              (if (= (cdr (assoc 'mode ctx)) "All")
-                (pfi:label-all ctx)
-                (pfi:label-sel ctx))
-              (pfi:write-pass ctx)
-              (command "_.UNDO" "_End")
-              (setq *pfinvert-undo-open* nil)))))))
+        (pfi:run anchor rd))))          ; gather done -> hand to the engine
   (pf:echo-on)
   (setq *error* *pfinvert-prev-error*)
   (princ))

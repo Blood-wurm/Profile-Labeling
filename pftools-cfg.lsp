@@ -27,6 +27,28 @@
 (setq *pf-range-eps*  0.01)   ; station-range slack (ft) for line-end structures
 (setq *pf-rank-ascending* T)  ; T => rank 1 at the LOWEST station
 
+;; Vertex-proximity membership (segment-distance model).  RADIAL distance to
+;; the .cl polyline -- semantically distinct from the perpendicular
+;; *pf-offset-tol*; kept separate so the two can diverge.
+;;   <= hi          : member, high confidence
+;;   hi < d <= lo   : member, LOW confidence -- labeled, flagged, distance reported
+;;   > lo           : not a member
+(setq *pf-vertex-band-hi* 0.15)   ; ft -- radial, high-confidence membership
+(setq *pf-vertex-band-lo* 1.0)    ; ft -- radial, low-confidence outer bound
+
+;; Twin-vs-.cl misalignment, checked at PFSETUP.  The .cl checksum proves the
+;; FILE is stable; it cannot see a drawn plan-PL that diverges from the .cl.
+(setq *pf-misalign-flag*   0.15)  ; ft -- report a drawn-PL / .cl offset above this
+(setq *pf-misalign-refuse* 1.0)   ; ft -- treat as a wrong/foreign twin above this
+
+;; Spatial-grid pre-filter: prunes candidate LINES before any distance test.
+(setq *pf-grid-cell* 50.0)        ; ft -- uniform bucket edge
+
+;; GEOM record KIND: EXACT = parsed .cl vertices (stations authoritative);
+;; SAMPLED = Road-API station walk (water/curves; vertex stations not carried).
+(setq *pf-geom-exact*   0)
+(setq *pf-geom-sampled* 1)
+
 ;;; --------------------------------------------------------------------------
 ;;; Text & label geometry  (base scalars AT the reference H plot scale)
 ;;; --------------------------------------------------------------------------
@@ -109,8 +131,12 @@
 (setq *pfx-tick-layer* "PF-TEMP")       ; invert ticks + elev text; NEVER erased
 (setq *pfx-xing-text-layer* "PF-XING-TEXT") ; RETIRED -- station text now goes on
                                         ; PF-XING (recon selects LWPOLYLINE only); kept for compatibility
-(setq *pfx-zoom-pause* 1.5)             ; seconds to pause on each inserted block
-                                        ; (PFXLABEL verification pause -- boss ask)
+(setq *pf-zoom-pause* 1.5)              ; DURATION of the verification pause, seconds.
+                                        ; The ON/OFF switch is the runtime flag
+                                        ; *pf-zoom-active* (the palette's "Zoom To"
+                                        ; option); set this to 0 to disable the pause
+                                        ; regardless.  Shared by PFXLABEL/PFLABEL/
+                                        ; PFINVERT via the pf:zoom-* facility (lib 15).
 
 ;;; --------------------------------------------------------------------------
 ;;; Plan-geometry sampling  (crossing discovery)

@@ -18,7 +18,10 @@
 ;;;                    kept in _v3\ for reference only.
 ;;; ==========================================================================
 
-(setq *pftools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/.strlabel/V5/")
+;; Points at THIS folder (the palette suite, forked from ..\V5 with the label
+;; commands' engines extracted).  Set to wherever this folder is deployed --
+;; must match the actual install path (still hardcoded, the known open issue).
+(setq *pftools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/.strlabel/V5/Profile-Labeling-5-Palette/")
 
 (progn
   (load (strcat *pftools-dir* "pftools-cfg.lsp"))   ; constants      -- first
