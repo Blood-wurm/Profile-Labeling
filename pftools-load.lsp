@@ -1,15 +1,17 @@
 ;;; ==========================================================================
-;;; pftools-load.lsp  --  loads the PFTools V4 suite
+;;; pftools-load.lsp  --  loads the PFTools V5 suite (self-contained copy)
 ;;; --------------------------------------------------------------------------
 ;;; Loads by FULL path in dependency order.  Each file may only depend on
 ;;; files above it (the V4 guardrail):
 ;;;
 ;;;   cfg -> lib -> draw -> anchor -> settings -> setup -> label -> xlabel
-;;;   -> invert  (pfinvert reuses pflabel's walk + pfxlabel's registry
-;;;   resolution, so it loads last)
+;;;   -> invert -> report  (pfinvert reuses pflabel's walk + pfxlabel's
+;;;   registry resolution; pfreport reuses all three, so it loads after them
+;;;   and before the palette)
 ;;;
-;;; SET *pftools-dir* below to the folder holding these files.  Forward
-;;; slashes, trailing slash.
+;;; SET *pftools-dir* below to the pfsuite ROOT (each .lsp lives in its own
+;;; subfolder with a README.md beside it; the loader adds the subfolder
+;;; segment).  Forward slashes, trailing slash.
 ;;;
 ;;; RETIRED from the load (v3 files kept in _v3\ for reference):
 ;;;   pfdialog.lsp  -- split into pfsettings.lsp + per-command wiring
@@ -18,25 +20,33 @@
 ;;;                    kept in _v3\ for reference only.
 ;;; ==========================================================================
 
-(setq *pftools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/.strlabel/V4/")
+;; Points at THIS folder (the palette suite; folder renamed
+;; Profile-Labeling-5-Palette -> pfsuite, 2026-07-26).  Set to wherever this
+;; folder is deployed -- must match the actual install path (still hardcoded,
+;; the known open issue).
+(setq *pftools-dir* "C:/Users/Guest01/Data/LIBRARY/LISP/.strlabel/V5/pfsuite/")
 
 (progn
-  (load (strcat *pftools-dir* "pftools-cfg.lsp"))   ; constants      -- first
-  (load (strcat *pftools-dir* "pftools-lib.lsp"))   ; pure engine
-  (load (strcat *pftools-dir* "pfdraw.lsp"))        ; drawing boundary
-  (load (strcat *pftools-dir* "pfanchor.lsp"))      ; record + registry
-  (load (strcat *pftools-dir* "pfsettings.lsp"))    ; user state + NOD
-  (load (strcat *pftools-dir* "pfsetup.lsp"))       ; C:PFSETUP
-  (load (strcat *pftools-dir* "pflabel.lsp"))       ; C:PFLABEL
-  (load (strcat *pftools-dir* "pfxlabel.lsp"))      ; C:PFXLABEL
-  (load (strcat *pftools-dir* "pfinvert.lsp"))      ; C:PFINVERT
+  (load (strcat *pftools-dir* "pftools-cfg/pftools-cfg.lsp"))   ; constants      -- first
+  (load (strcat *pftools-dir* "pftools-lib/pftools-lib.lsp"))   ; pure engine
+  (load (strcat *pftools-dir* "pfdraw/pfdraw.lsp"))             ; drawing boundary
+  (load (strcat *pftools-dir* "pfanchor/pfanchor.lsp"))         ; record + registry
+  (load (strcat *pftools-dir* "pfsettings/pfsettings.lsp"))     ; user state + NOD
+  (load (strcat *pftools-dir* "pfsetup/pfsetup.lsp"))           ; C:PFSETUP
+  (load (strcat *pftools-dir* "pflabel/pflabel.lsp"))           ; C:PFLABEL
+  (load (strcat *pftools-dir* "pfxlabel/pfxlabel.lsp"))         ; C:PFXLABEL
+  (load (strcat *pftools-dir* "pfinvert/pfinvert.lsp"))         ; C:PFINVERT
+  (load (strcat *pftools-dir* "pfreport/pfreport.lsp"))         ; C:PFREPORT
+  (load (strcat *pftools-dir* "pfpalette/pfpalette.lsp"))       ; C:PFPALETTE  -- last
   (princ "\n----------------------------------------------")
-  (princ "\nPFTools V4 loaded.")
+  (princ "\nPFTools V5 loaded.")
   (princ "\n  Grid records:      PFSETUP (register/edit), PFREMOVE (teardown)")
   (princ "\n  Structure labels:  PFLABEL  (alias PFL)")
   (princ "\n  Crossings:         PFXLABEL (alias PFX)")
   (princ "\n  Inverts:           PFINVERT (alias PFI)")
+  (princ "\n  Hydraflow export:  PFREPORT (alias PFR)  -- .stm, system-scoped")
   (princ "\n  Settings:          PFLABELSET   (project root: native tmpdir$)")
+  (princ "\n  Palette:           PFPALETTE    (V5 read-only, milestone 2)")
   (princ "\n  Coming this cycle: PFCHECK")
   (princ "\n----------------------------------------------")
   (princ))

@@ -349,6 +349,40 @@ pfxl_run : dialog {
 }
 
 
+// ---- PFREPORT: the Hydraflow .stm export ----------------------------------
+// The ONE system-scoped dialog in the suite: the list is the REGISTRY, not
+// one target's structures, because a storm system spans lines.  Multi-select
+// is the point here (the other three dialogs use it for convenience).  Only
+// PLACED entries with a .cl and an _INV .pro are listed -- pfr:candidates
+// names every exclusion on the command line.
+pfrpt_run : dialog {
+  label = "PFREPORT - Hydraflow Export";
+  : text { key = "rp_title"; label = ""; width = 62; }
+  spacer;
+  : text { key = "rp_head"; label = "  Type       Line          Crown    Material"; width = 62; }
+  : list_box {
+    key             = "rp_list";
+    width           = 62;
+    height          = 12;
+    multiple_select = true;
+  }
+  : text { key = "rp_count"; label = ""; width = 62; }
+  : text { label = "Crown = a _TOP .pro is bound; without one, pipe sizes export as 0."; }
+  errtile;
+  : row {
+    fixed_width = true;
+    : button { key = "rp_sel"; label = "Export Selected"; mnemonic = "E"; width = 18; is_default = true; }
+    : button { key = "rp_all"; label = "Export All";      mnemonic = "A"; width = 18; }
+  }
+  : row {
+    fixed_width = true;
+    alignment   = "centered";
+    : button { key = "cancel"; label = "Cancel"; is_cancel = true; width = 11; }
+    : button { key = "help";   label = "Help";   width = 11; }
+  }
+}
+
+
 // ---- PFLABELSET: label text + text properties -----------------------------
 // Of the Prefix/Suffix fields: sta_pre / sta_suf / con_suf / gl_suf are
 // LIVE; con_pre / gl_pre are DEAD (*pf-rule-table* owns those prefixes) --
