@@ -288,8 +288,8 @@
         (if (= code 1) x-res nil)))))
 
 ;; (pfxl:resolve-target) -> anchor | nil
-;;   Session-last continues silently when still placed; else the registry
-;;   picker (which places an unplaced pick on the fly).
+;;   Session-last continues silently when still anchored; else the registry
+;;   picker (which anchors a registered pick on the fly).
 (defun pfxl:resolve-target ( / a)
   (cond
     ((and *pfxl-last*

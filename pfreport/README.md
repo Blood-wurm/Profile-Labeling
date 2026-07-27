@@ -58,7 +58,7 @@ the structures and the gaps between them are the exported lines.
 - **Target version 2003** — the firm's install; no compatibility risk.
 - **Membership is user-selected** from the registry. Matches current practice,
   avoids auto-detecting network boundaries, and inherits registry validation.
-  **Stubs cannot be picked** — an unplaced line has no grid, so it has no rim
+  **Stubs cannot be picked** — a registered line has no grid, so it has no rim
   elevations to read. `pfr:candidates` names every exclusion on the command
   line.
 - **Connectivity is X,Y coincidence** (`*pfr-node-tol*`, 2 ft), matched at each
@@ -157,6 +157,20 @@ emit (`pfr:record`, `pfr:write`).
   with a named warning, never as a number nobody typed.
 - Drop structures survive the round trip: adjacent pipes carry different
   elevations at a shared node, exactly as the `.pro` encodes it.
+
+## Shared gather (2026-07-27)
+
+`pfr:line-table` funnels through `pflabel:build-lines` — so PFREPORT inherits
+the corridor-pre-filter fix and `pf:cl-parse`'s exact vertices without
+changing a line. Note `pfr:line-table` **unions across utility types** where
+PFLABEL is single-type, so a mixed selection reads several line sets.
+
+`pfr:struct-id` recomputes exactly what PFLABEL computes —
+`pf:lines-at-point` + `pf:rank-on-line` over the index, then
+`pf:combine-id`. That is deliberate (the `.stm`'s Inlet ID and the sheet
+label must be the same string by construction), but it means PFREPORT is a
+first-class consumer of the persistent membership index designed in the root
+README §11, not an afterthought to it.
 
 ## Open issues local to this file
 

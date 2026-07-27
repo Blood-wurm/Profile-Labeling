@@ -20,13 +20,40 @@ C:PFREMOVE (teardown).
   maps to its .cl (+ auto-resolved .pro pair), NO placement. USER
   registration promotes stub → anchor and deletes the stub. Identity alone
   is enough to DISCOVER; placement is required only to DRAW.
-- **ANCHOR** — one PF-GRIDANCHOR block per PLACED profile, keyed LINE+UTIL.
+- **ANCHOR** — one PF-ANCHOR block per ANCHORED profile, keyed LINE+UTIL.
   Insertion point = grid lower-left (datum + lower-left = transform
-  origin). EXTENTS ARE RELATIVE: X-scale = width, Y-scale = height to the
-  top-right pick — never an absolute corner (a window-move carries both).
-  The stored top means "top at max station" ONLY; per-station top-Y comes
-  from the top-of-grid probe (`pf:top-at`), because grid tops STEP.
-  Attributes = LINE / UTIL / STA0 / DATUM / HPLOT / VPLOT.
+  origin). EXTENTS ARE RELATIVE: the WIDTH / HEIGHT attributes hold offsets
+  from the insertion point to the top-right pick — never an absolute corner
+  (a window-move carries both). The stored top means "top at max station"
+  ONLY; per-station top-Y comes from the top-of-grid probe (`pf:top-at`),
+  because grid tops STEP.
+  Attributes = LINE / UTIL / STA0 / DATUM / HPLOT / VPLOT / WIDTH / HEIGHT,
+  all INVISIBLE (`*pfa-att-flags*` = 1). This was `(70 . 8)` — PRESET, a
+  different bit — for a long time, which left all eight rendering under the
+  datum. `pfa:reanchor` heals the flag on anchors written before the fix.
+  ATTDISP ON still forces them visible; that is the debug escape.
+- **ANCHOR BLOCK** — hand-authored, a small fixed ICON snapped to the datum,
+  drawn at the size it should read on an H:50 sheet
+  (`*pfa-icon-ref-hplot*`). The insert scale is `hplot/50` applied
+  **uniformly** (X=Y=Z, `pfa:icon-scale`), which holds a constant plotted
+  size and keeps the icon undistorted. `pfa:ensure-anchor-block` tops up any
+  missing ATTDEFs on the authored definition (`pfa:sync-attdefs`, additive
+  and invisible only) and entmakes a small placeholder icon under the same
+  name only in a drawing with no PF-ANCHOR definition. Every anchor is sent
+  to the BACK of the draw order on write and on re-anchor
+  (`pfa:send-to-back`) — it is a backdrop marker and must never cover grid,
+  profile, or labels.
+- **PRE-ICON ANCHORS** — before the icon swap the block SPANNED the grid and
+  the extents were the insert's X/Y scale factors. Those anchors are
+  inserted as `PF-GRIDANCHOR`, which is why `*pfa-block-names*` (the ssget
+  filter) lists both names — otherwise they would go invisible to every
+  lookup. `pfa:extents` is the single reader: WIDTH/HEIGHT when present,
+  else the legacy scale factors behind the `xs > 2.0` sentinel. The
+  ABSENCE of a WIDTH attribute is the discriminator, since scale alone
+  cannot tell the two apart (at H:200 a current anchor's X-scale is 4.0).
+  `pfa:reanchor` writes back to whichever storage the anchor already uses —
+  stamping the icon scale onto a pre-icon anchor would shrink its recorded
+  grid to a few feet.
 - **LEDGER** — extension dictionary "PFXLEDGER" hard-owned by the anchor;
   schema 3 xrecords: `META` (.cl path + checksum + self-handle for copy
   detection), `FILES` (.pro/.tin bindings + checksums + material),
@@ -35,7 +62,12 @@ C:PFREMOVE (teardown).
   records).
 - **NOD "PFTOOLS"** — drawing-wide store: STUB_*, GEOM_* (cached .cl
   geometry, content-addressed by `pf:cl-id`), TWIN_* (drawn-centerline
-  handle per .cl).
+  handle per .cl). GEOM carries a `KIND` (`(70)`): **EXACT** = parsed `.cl`
+  vertices, `(10 x y sta)` z-slot holding the authoritative per-vertex
+  station; **SAMPLED** = Road-API station walk, z-slot 0.0. Both have
+  writers as of 2026-07-27 and a drawing can hold both kinds at once —
+  `pfa:geom-get` returns the stationed verts as its 5th element, which is
+  the only way to read stations back (`pf:cl-geom` hands callers 2D points).
 - **DERIVED** — labeled/outstanding is NEVER stored; re-read from the
   drawing on every touch (SECTION 5 recon).
 
@@ -43,11 +75,20 @@ C:PFREMOVE (teardown).
 
 Pure reads unless marked; **writers require a caller-held undo group**.
 Reads are modeless-safe (the palette contract): `pfa:nod-dict` /
-`pfa:ledger-dict` with `create` nil NEVER write.
+`pfa:ledger-dict` with `create` nil NEVER write. **Verified in CAD
+2026-07-27** — `PFPDBMOD` delta across a full palette session, clean drawing
+29→29 and populated 21→21 (PALETTE-TESTING §3).
 
 **Registry + resolution:**
 - `pfa:registry` → sorted `(type name state ename stub)` rows — THE
   registry: anchors + stubs, copy-excluding, one merged sorted walk.
+  **An EMPTY registry is legal and must stay silent.** `acad_strlsort`
+  rejects nil with a `Usage:` banner, so the sort is guarded on `out`
+  ([`pfanchor.lsp:593`](pfanchor.lsp#L593), fixed 2026-07-27). Before that,
+  every palette open on a drawing with no PFTOOLS data printed a spurious
+  command-line error — the function had never been run against zero rows,
+  because the palette was only ever opened on populated drawings. Non-empty
+  behaviour is unchanged.
 - `pfa:entry-cl r` → .cl path | nil — THE registry-row → .cl resolution
   (moved from pfxlabel 2026-07-26; consumers: pfxl:discover,
   pflabel:registry-pairs).
@@ -104,7 +145,7 @@ elevations preserved; key drift renames), `pfa:xing-put-elevs` **W**,
   palette-safety seam: opening the palette must not dirty a clean drawing.
 - The Esc flush runs INSIDE the still-open undo group (entmakex/dictadd are
   *error*-legal), so one U still peels the whole run.
-- CAVEATS: do NOT run ATTSYNC/BATTMAN on PF-GRIDANCHOR (attribute positions
+- CAVEATS: do NOT run ATTSYNC/BATTMAN on PF-ANCHOR (attribute positions
   are absolute). Negative stations are not supported by the crossing
   content key.
 

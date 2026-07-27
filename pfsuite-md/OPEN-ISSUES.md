@@ -68,7 +68,7 @@ numbers on a plan sheet are the worst outcome.
   *Likely fixed* by the pick-first refactor (target popup removed from `pf_run`;
   all compute moved before `new_dialog` via `pflabel:rd-compute`) — re-check in
   CAD before closing. *(field note 255)*
-
+- Error parade in cmd line
 ## PFXLABEL
 
 - Field findings 243, 244, 245, 247 are **resolved** by this pull
@@ -101,8 +101,15 @@ numbers on a plan sheet are the worst outcome.
 - ~~**[scope] Same-type membership** (PFLABEL + PFINVERT).~~ **FIXED
   2026-07-21** — one fix in the shared builders (`pflabel:registry-pairs` +
   `pflabel:run-dialog`) served both, keyed on `pf:type-of`. *(field note 2)*
-- **[ux] Anchor block style.** Formatting/appearance of the `PF-GRIDANCHOR`
-  block wants a pass. *(field note 253)*
+- ~~**[ux] Anchor block style.** Formatting/appearance of the `PF-GRIDANCHOR`
+  block wants a pass. *(field note 253)*~~ **FIXED 2026-07-27 (untested in
+  CAD).** `*pfa-block-name*` now points at the hand-authored `PF-ANCHOR`
+  block — a small icon snapped to the datum, uniformly scaled `hplot/50`, no
+  longer a frame spanning the grid. Extents moved off the scale factors into
+  new `WIDTH`/`HEIGHT` attributes (`pfa:extents` reads both storages;
+  `*pfa-block-names*` keeps pre-icon `PF-GRIDANCHOR` anchors resolvable).
+  Missing ATTDEFs are topped up on the authored block by `pfa:sync-attdefs`.
+  Anchors are sent to the back of the draw order on write and re-anchor.
 - ~~**[ux] `CMDECHO` never suppressed** (§13.2).~~ **FIXED 2026-07-21 (untested
   in CAD).** Shared `pf:echo-off`/`pf:echo-on` in the lib save the user's
   CMDECHO and zero it for the run; every command's prologue calls `echo-off`,
@@ -191,5 +198,65 @@ hand-entered or hardcoded values.
   verts`), the suite's one file read, with a `profile_z` cross-check guarding the
   station domain.
 
+## PFANCHOR
+- No warning when anchor was moved.
+  Moved anchor > PFSETUP > Refresh > PFLABEL > NO Warning
 ## PFPALETTE
-- Palette persists across drawings. Intentional? 
+
+Shakedown results and the full test matrix live in
+[`../pfsuite-odcl/PALETTE-TESTING.md`](../pfsuite-odcl/PALETTE-TESTING.md).
+Only unresolved items are listed here.
+
+- **Palette persists across drawings — NOT intentional, and the fix is
+  blocked.** (Answers the original question.) The palette is owned by the
+  OpenDCL ARX runtime, so it outlives any document and sits on the start
+  screen showing the last drawing's registry, which native AutoCAD palettes
+  do not do. `EnteringNoDocState` → close is the intended answer; field test
+  2026-07-27 found it **never fired**, and `DocActivated` threw
+  `no function definition: C:PFSUITE/PFSPALETTE#ONDOCACTIVATED`. Read
+  together: the event fires into a document where the suite was never loaded,
+  and AutoLISP namespaces are per-document. **The blocker is namespace, not
+  form state** — neither `dcl-Form-Hide` nor a `vlr-docmanager-reactor` fixes
+  a handler that does not exist in the document being activated into.
+  Candidate: per-document autoload (`acaddoc.lsp`). **Deferred by decision
+  2026-07-27** in favour of Phase 2. Also means stale data after a drawing
+  switch persists, and activating into an unloaded drawing throws a *visible
+  error* rather than failing quietly.
+- **Docked layout is barely tested.** Every resize test in the plan is a
+  *floating* test done by dragging edges; docked is the mode this palette is
+  designed for (`Dockable Sides` = Left + Right). A docked-only gray box over
+  the footer labels is recorded at PALETTE-TESTING §1.7; may already be
+  resolved by the label background change.
+- **`tvwLines` misaligned**, and leaves a gap above it that grows on stretch —
+  likely `Use Top From Bottom` = 1 where PALETTE-LAYOUT §3 specifies 0. **All
+  existing anchoring evidence was gathered against a stale in-memory project**
+  (see below), so §1.6 must be re-run after the fix regardless.
+- **`Min Width` ≥ 900 is load-bearing.** It closes the vanishing-buttons issue
+  *by construction* — the form cannot narrow enough to compute a negative x.
+  Lowering it re-opens that issue. Cost: a Left/Right-dockable vertical strip
+  with a hard 900px floor is a wide strip. Narrowing it means reflowing the
+  five fixed-width Registry button rows — a redesign, not scheduled.
+- **Duplicate `(Name)` check (test 1.5) still unrun.** `PFPDIAG` proves a name
+  *resolves*, not that it is *unique*; a duplicate leaves both resolving with
+  one unaddressable, and nothing detects it but reading the Studio tree.
+- Runtime files were **version-mismatched** (`OpenDCL.x64.25.arx` 9.3.0.1 vs
+  `ENU/Runtime.Res.dll` 9.1.5.2) — matched runtime since installed. Worth a
+  check whenever rendering behaves oddly.
+
+### Resolved 2026-07-27 — recorded because each cost real time
+
+- **Studio edits silently not reaching the runtime.** `dcl-Project-Load` does
+  nothing if the project is already loaded unless `ForceReload` is `T`, and
+  `*pfp-loaded*` is a session-long global. Fixed by `C:PFPRELOAD`. **Tell:** a
+  runtime-set caption survives a palette toggle. This invalidated several
+  measurements before it was spotted.
+- **Blank footer labels** (`lblProject` / `lblCounts`) — colour plus the stale
+  cache above. `Foreground Color` was already correct at -19; `-24` is
+  **Transparent**, not a theme value. `pfp:seed-labels` was correct throughout.
+- **`pfa:registry` printed a `Usage: (acad_strlsort …)` banner on any drawing
+  with an empty registry** — the function had never been run against zero
+  rows. Guarded at `pfanchor.lsp:593`.
+- **`(command)` from a modeless handler drew nothing, as designed**, and
+  `pfp:defer` lands in a real command context — `getpoint` prompts and
+  returns, one `U` peels the work, and the gate refuses against a live
+  command. The deferred-fire design is sound.

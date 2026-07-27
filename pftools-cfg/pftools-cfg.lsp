@@ -46,9 +46,11 @@
 (setq *pf-grid-cell* 50.0)        ; [INERT] ft -- uniform bucket edge
 
 ;; GEOM record KIND: EXACT = parsed .cl vertices (stations authoritative);
-;; SAMPLED = Road-API station walk (water/curves; vertex stations not carried).
-;; Only SAMPLED is ever written today -- EXACT waits on pf:cl-parse (stage 2).
-(setq *pf-geom-exact*   0)        ; [INERT] no writer until pf:cl-parse lands
+;; SAMPLED = Road-API station walk (vertex stations not carried, so the z slot
+;; stores 0.0).  NOT INERT -- both are live as of 2026-07-27: pf:cl-geom writes
+;; EXACT whenever pf:cl-parse reads the file, SAMPLED when the parse is refused
+;; and it falls back to the walk.  A drawing can hold both kinds at once.
+(setq *pf-geom-exact*   0)
 (setq *pf-geom-sampled* 1)
 
 ;;; --------------------------------------------------------------------------
@@ -151,6 +153,15 @@
 (setq *pfx-sample-step* 2.0)   ; ft -- .cl walk interval (arcs followed)
 (setq *pfx-refine-step* 0.1)   ; ft -- re-sample interval near a hit
 
+;; Corridor pre-filter distance for a SAMPLED .cl shape (pflabel:build-lines'
+;; last-resort verts).  A station walk lands ON the centerline, but the chords
+;; BETWEEN samples cut corners at deflections: with the PI up to one step from
+;; the nearest sample on each leg, the worst case (a hairpin) puts the true .cl
+;; half a step off the sampled chord.  So the sampled corridor is the exact
+;; corridor plus that bound -- wide enough never to drop a real structure at a
+;; bend, and still ~6x tighter than the no-filter path it replaces.
+(setq *pf-corridor-sampled* (+ *pf-corridor* (/ *pfx-sample-step* 2.0)))
+
 ;;; --------------------------------------------------------------------------
 ;;; PFINVERT  (invert labels at structures)
 ;;; --------------------------------------------------------------------------
@@ -180,13 +191,51 @@
 ;;; --------------------------------------------------------------------------
 ;;; Anchor & ledger  (pfanchor.lsp)
 ;;; --------------------------------------------------------------------------
-(setq *pfa-block-name*  "PF-GRIDANCHOR")
+;;; The anchor block is the hand-authored PF-ANCHOR (color 146): a small fixed
+;;; ICON snapped to the datum, NOT a frame spanning the grid.  Same string as
+;;; *pfa-layer* below; block and layer live in separate symbol tables, so the
+;;; collision is legal and intentional.  pfa:ensure-anchor-block entmakes a
+;;; placeholder icon under this name only in a drawing that has no PF-ANCHOR
+;;; definition, so the toolset never dies on a bare drawing.
+(setq *pfa-block-name*  "PF-ANCHOR")
+
+;;; Block names an anchor may be INSERTED as.  New anchors are always written
+;;; as *pfa-block-name*; PF-GRIDANCHOR is the pre-icon name, kept here so that
+;;; anchors in drawings registered before the swap still resolve instead of
+;;; going invisible to every lookup.  ssget's (2 . ...) filter takes this comma
+;;; list directly.  Those older anchors also store their extents differently --
+;;; see pfa:extents.
+(setq *pfa-block-names* "PF-ANCHOR,PF-GRIDANCHOR")
 (setq *pfa-layer*       "PF-ANCHOR")      ; created NO-PLOT, unlocked
 (setq *pfa-dict-name*   "PFXLEDGER")
 (setq *pfa-schema-ver*  3)                ; schema 3 = the V4 record (FILES/EXTENTS/STATUS/SCOPE/PASS_/X_); matches pfanchor + README
-(setq *pfa-att-tags*    '("LINE" "UTIL" "STA0" "DATUM" "HPLOT" "VPLOT"))
+;;; WIDTH/HEIGHT are the grid extents RELATIVE to the insertion point.  They
+;;; used to be carried by the insert's X/Y scale factors, back when the block
+;;; spanned the grid; the block is a fixed-size icon now and its scales carry
+;;; plot scale instead, so these two attributes are the only extent truth on a
+;;; current anchor.  An anchor with no WIDTH/HEIGHT attribute is pre-icon --
+;;; that absence IS the legacy discriminator (see pfa:extents).  Order matters:
+;;; pfa:write-anchor writes values positionally against this list.
+(setq *pfa-att-tags*    '("LINE" "UTIL" "STA0" "DATUM" "HPLOT" "VPLOT"
+                          "WIDTH" "HEIGHT"))
 (setq *pfa-att-height*  0.8)
 (setq *pfa-att-gap*     1.6)
+
+;;; ATTRIB (70) flags on the anchor's attributes.  1 = INVISIBLE: the anchor
+;;; carries eight fields of machine state and none of them belong on the sheet.
+;;; This was 8 (PRESET) for a long time, which is a different bit entirely and
+;;; left every value rendering under the datum.  Add 8 back only if a manual
+;;; INSERT of the block should skip prompting; the entmade path never prompts.
+;;; ATTDISP ON still forces them visible -- that is the intended debug escape.
+(setq *pfa-att-flags*   1)
+
+;;; H plot scale the anchor ICON was drawn at: at H:50 the block reads at the
+;;; size it should, so the insert scale is hplot/50, applied UNIFORMLY (X=Y=Z)
+;;; to keep the icon undistorted and a constant size on the plotted sheet.
+;;; NOT *pf-ref-hplot* (20.0) -- that is the reference for the text/label base
+;;; scalars, which were authored at a different scale.  Using it here would
+;;; draw the icon 2.5x too big.
+(setq *pfa-icon-ref-hplot* 50.0)
 (setq *pfa-xing-layer*  "PF-XING")        ; crossing station lines (recon scans this)
 (setq *pfa-recon-eps*   1.0e-4)           ; float round-trip tolerance
 (setq *pfa-key-tol*     2.0)              ; content-key station drift tolerance

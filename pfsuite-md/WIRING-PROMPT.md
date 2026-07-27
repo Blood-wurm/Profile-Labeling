@@ -43,7 +43,7 @@ SCOPE — milestone 2 only, plus the loader
 
   3. Populate tvwLines from (pfa:registry).
      Two levels: utility Type as parents, Line as children. Registry rows are
-     (type name state ename stub) with state 'PLACED or 'STUB. Use the settled
+     (type name state ename stub) with state 'ANCHORED or 'STUB. Use the settled
      vocabulary in the UI — "Anchored" / "Registered", not "placed" / "stub".
 
   4. tvwLines selection handler -> fill metaList and lvwLinkage for the

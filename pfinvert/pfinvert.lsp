@@ -436,10 +436,13 @@
 
 ;;; ==========================================================================
 ;;; SECTION 5b  --  PFINVERT run dialog  (its OWN dialog: pfi_run)
-;;;   Pick-first, compute-then-render, mirroring pflabel but standalone so
-;;;   invert-specific fields can grow here.  Pure compute helpers (pending /
-;;;   build-lines / gather-inlets / pass-xs / labeled-x-p) are shared from
-;;;   pflabel; the dialog wiring is local (pi_* tiles, id-* dynamic locals).
+;;;   Pick-first, compute-then-render.  The GATHER-COMPUTE is not local: it is
+;;;   pflabel:gather-compute, the one copy, because both commands ask the same
+;;;   question of the same data and only the pass name differed.  PFINVERT's
+;;;   profile work is downstream in the engine (pfi:invert-bracket /
+;;;   pf:pro-verts) -- no .pro is read on this path.
+;;;   What IS local is the dialog: pi_* tiles, id-* dynamic locals, and the
+;;;   fill/sel/all handlers, since tile names belong to pfi_run alone.
 ;;; ==========================================================================
 
 ;; RENDER ONLY -- id-* precomputed by pfi:rd-compute.
@@ -457,28 +460,31 @@
   (set_tile "pi_count"
             (strcat (itoa (length id-pend)) " structure(s) on '" id-primary
                     "'; " (itoa ndone) " already inverted."))
-  (set_tile "error" "")
+  ;; the drift echo's dialog half -- the error tile is already here and is the
+  ;; only thing the user is looking at while the modal is up
+  (set_tile "error"
+            (if id-orphans
+              (strcat (itoa (length id-orphans))
+                      " label(s) with no structure -- something moved.")
+              ""))
   (princ))
 
 ;; ALL HEAVY WORK, BEFORE new_dialog.  -> T when there is a list; nil on no line.
-(defun pfi:rd-compute ( / xf xs eps p)
-  (setq id-pend (if (pflabel:line-loaded-p id-primary id-lines)
-                  (pflabel:pending id-inlets id-lines id-primary)
-                  'NOLINE))
-  (cond
-    ((eq id-pend 'NOLINE) (setq id-pend '()) nil)
-    (T
-     (setq xf        (pfa:anchor->xform id-anchor)
-           xs        (pflabel:pass-xs id-anchor id-pass)
-           eps       (max *pfa-recon-eps*
-                          (* 1.5 (pf:text-height (pf:xf-hplot xf))))
-           id-status '())
-     (foreach p id-pend
-       (setq id-status
-             (append id-status
-                     (list (pflabel:labeled-x-p
-                             (pf:station->profile-x (car p) xf) xs eps)))))
-     T)))
+;;   Binds pflabel:gather-compute -- THE one gather-compute -- into this
+;;   dialog's locals.  This was a line-for-line copy of pflabel:rd-compute
+;;   until 2026-07-27, and the copy had already silently missed the drift echo;
+;;   that divergence is the same class as the registry-builder and same-type
+;;   membership bugs (OPEN-ISSUES).  Invert-specific compute, if it ever
+;;   arrives, composes on top of the shared call rather than forking it again.
+(defun pfi:rd-compute ( / g)
+  (setq g (pflabel:gather-compute id-anchor id-pass id-primary
+                                  id-lines id-inlets))
+  (if (null g)
+    (progn (setq id-pend '() id-status '() id-orphans '()) nil)
+    (progn (setq id-pend    (car g)
+                 id-status  (cadr g)
+                 id-orphans (caddr g))
+           T)))
 
 (defun pfi:rd-sel ( / s idxs out i)
   (setq s (get_tile "pi_list"))
@@ -506,7 +512,8 @@
 ;; (pfi:run-dialog title passname anchor) -> result alist | nil
 (defun pfi:run-dialog (title passname anchor
                        / id-anchor id-primary id-pass id-lines id-inlets
-                         id-pend id-status id-res dcl_id xf cl pairs result)
+                         id-pend id-status id-orphans id-res dcl_id xf cl
+                         pairs result)
   (setq id-anchor anchor id-pass passname id-res nil
         xf        (pfa:anchor->xform anchor))
   (cond
@@ -605,7 +612,7 @@
   (setq *pfinvert-undo-open* nil)
   (pf:load-apis)
   ;; pick-first (PFXLABEL parity): choose/place the target, THEN list only its
-  ;; structures.  choose-or-place places an unplaced pick on the fly.
+  ;; structures.  choose-or-place anchors a registered pick on the fly.
   (setq anchor (pfs:choose-or-place))
   (if (null anchor)
     (prompt "\nPFINVERT cancelled -- no target.")

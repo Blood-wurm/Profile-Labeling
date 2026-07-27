@@ -5,8 +5,10 @@
 ;;;
 ;;;     (load (strcat *pftools-dir* "pfpalette/pfp-proof.lsp"))
 ;;;
-;;; DELETE THIS FILE once Phase 1 passes.  Section 1 is the only part that
-;;; survives -- it gets promoted into pfpalette.lsp as the real defer channel.
+;;; STATUS 2026-07-27: Phase 1 PASSED.  Section 1 has been promoted into
+;;; pfpalette.lsp (SECTION 2) and removed from here.  What is left is
+;;; Section 2/3 (the exercise, keep until Phase 2 replaces it with real verbs)
+;;; and Section 4 (lifecycle, OPEN -- see the status note there).
 ;;;
 ;;; WHAT IT PROVES
 ;;;   A modeless OpenDCL handler cannot call (command), (entsel) or (getpoint)
@@ -38,37 +40,13 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 1  --  The defer channel  (THE PART THAT SURVIVES)
+;;; SECTION 1  --  The defer channel  --  PROMOTED, NO LONGER HERE
 ;;; ==========================================================================
-;;; Promote this section into pfpalette.lsp once the proof passes.  Every
-;;; palette verb -- the Registry dispatcher, btnRun on the Commands tab --
-;;; goes through pfp:defer and nothing else.
-
-;; (pfp:cmd-idle-p) -> T | nil
-;;   The gate root README 5 requires before ANY palette-initiated write.
-;;   CMDACTIVE alone is not enough: a dialog or a grip edit can leave
-;;   CMDNAMES populated with CMDACTIVE at 0.
-(defun pfp:cmd-idle-p ()
-  (and (= 0 (getvar "CMDACTIVE"))
-       (= "" (getvar "CMDNAMES"))))
-
-;; (pfp:defer cmdline) -> T | nil
-;;   Queue a command from a modeless handler.  SendCommand returns
-;;   immediately -- the command runs after the handler unwinds, in a real
-;;   command context.  The trailing newline is what executes it; without it
-;;   the text sits on the command line unexecuted.
-;;   Refuses (and says so) when the command line is busy, rather than
-;;   stacking input behind whatever is already running.
-(defun pfp:defer (cmdline / doc)
-  (cond
-    ((not (pfp:cmd-idle-p))
-     (prompt (strcat "\nPFPALETTE: command line busy (" (getvar "CMDNAMES")
-                     ") -- finish it and try again."))
-     nil)
-    (T
-     (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-     (vla-SendCommand doc (strcat cmdline "\n"))
-     T)))
+;;; pfp:cmd-idle-p and pfp:defer PASSED (2026-07-27 field test, PALETTE-TESTING
+;;; 4.1-4.9) and now live in pfpalette.lsp SECTION 2, which loads as part of the
+;;; suite before this file.  Deliberately not duplicated here: two copies of the
+;;; gate would let the proof pass against a definition the palette does not use.
+;;; This file now EXERCISES the shipped channel rather than carrying its own.
 
 
 ;;; ==========================================================================
@@ -160,16 +138,27 @@
 ;;; Tick "DocActivated" and "EnteringNoDocState" on pfsPalette (form level,
 ;;; not a control) while you are in Studio for btnHelp.
 ;;;
-;;; THE OPEN QUESTION these answer:
-;;;   EnteringNoDocState closing the palette is the start-screen fix.  But a
-;;;   CLOSED form may not receive events at all -- if so, nothing can reopen
-;;;   it when a drawing comes back, and the palette stays dead until someone
-;;;   types PFPALETTE.  That is worse than the stale-data behaviour we have
-;;;   now.  Test L3 below is the whole point of this section.
+;;; STATUS 2026-07-27: STILL OPEN, AND THE FAILURE IS NOT THE ONE PREDICTED.
+;;;   The open question was whether a CLOSED form receives events.  The field
+;;;   test never got to ask it, because of something more basic:
 ;;;
-;;;   If L3 fails, the fallbacks are (a) dcl-Form-Hide instead of Close --
-;;;   unattested in the samples, so it needs its own check -- or (b) a
-;;;   vlr-docmanager-reactor, which lives outside the form and always fires.
+;;;   L2 (5.3) FAILED -- all drawings closed, the palette stayed on the start
+;;;     screen.  OnEnteringNoDocState did not fire; nothing printed.
+;;;   L3 (5.4) errored -- "no function definition:
+;;;     C:PFSUITE/PFSPALETTE#ONDOCACTIVATED".
+;;;
+;;;   Read together those say the event DID fire on the incoming document and
+;;;   the HANDLER was not there to receive it.  AutoLISP namespaces are
+;;;   per-document, so these defuns exist only where pftools-load.lsp ran.
+;;;   That also makes 5.2 worse than documented: activating into an unloaded
+;;;   drawing is not silent, it throws a visible error.
+;;;
+;;;   So the blocker is namespace, not form state -- and neither dcl-Form-Hide
+;;;   nor a vlr-docmanager-reactor fixes a handler that does not exist in the
+;;;   document being activated into.  The candidate fix is per-document
+;;;   autoload (acaddoc.lsp).  DEFERRED by decision 2026-07-27: Phase 2 (the
+;;;   ticket channel) goes first now that the gate has passed.  Until then
+;;;   these two handlers are exercise-only -- do not ship them as the fix.
 
 ;; DocActivated -> the drawing-switch refresh signal (root README 4a).
 ;;   pfp:refresh is already vl-catch-all-apply wrapped, so a hostile drawing

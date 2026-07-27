@@ -34,6 +34,17 @@ None — this file defines no functions, only `*pf-*` / `*pfx-*` / `*pfi-*` /
 - `*pfa-*` — anchor block, ledger dictionary, schema version, tolerances.
 - `*pfset-std-subfolders*` / `*pfset-std-search-depth*` — firm-standard
   project subfolder routing.
+- `*pf-corridor*` / `*pf-corridor-sampled*` — the membership pre-filter
+  distances. The second is derived (`*pf-corridor*` + half a sample step)
+  and applies to a line whose shape is the `.cl`'s own SAMPLED walk rather
+  than an exact drawn twin: a station walk lands on the centerline, but the
+  chords between samples cut corners at deflections, so the true `.cl` can
+  sit up to half a step off. **Lowering these re-opens the error parade;**
+  a line with no shape at all turns the pre-filter off entirely.
+- `*pf-geom-exact*` / `*pf-geom-sampled*` — GEOM record KIND. **Both are
+  live as of 2026-07-27** (previously EXACT had no writer): `pf:cl-geom`
+  writes EXACT whenever `pf:cl-parse` reads the file and SAMPLED when the
+  parse is refused. A drawing can hold both kinds at once.
 
 ## Invariants
 
@@ -47,3 +58,11 @@ None — this file defines no functions, only `*pf-*` / `*pfx-*` / `*pfi-*` /
   but read NOWHERE — scaffold for the segment-membership fix. Do not tune
   them chasing a missing structure; see the PFLABEL CRITICAL entry in
   [../OPEN-ISSUES.md](../OPEN-ISSUES.md). Delete the banner when wired.
+  **The geom KIND pair is no longer part of that block** — it has a writer
+  now. `*pf-grid-cell*` is still inert, and is the intended home for the
+  bounding-box / spatial pre-filter that would sit in front of
+  `pf:pt-poly-dist`.
+- **No provenance on tolerances.** A GEOM record does not store the
+  `*pfx-sample-step*` it was walked at, so tuning that constant does not
+  invalidate existing SAMPLED records. Same latent gap would apply to any
+  future membership cache built under `*pf-offset-tol*` / `*pf-corridor*`.

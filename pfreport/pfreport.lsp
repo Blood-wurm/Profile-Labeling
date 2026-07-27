@@ -728,7 +728,7 @@
 ;;; SECTION 11  --  Candidates + the run dialog  (pfrpt_run)
 ;;; ==========================================================================
 ;;; SYSTEM-scoped: the list is the REGISTRY, not one target's structures.
-;;; Only PLACED entries with both a .cl and an _INV .pro are offered -- a stub
+;;; Only ANCHORED entries with both a .cl and an _INV .pro are offered -- a stub
 ;;; has no grid, so it has no rim elevations to read, and the locked decision
 ;;; is that stubs cannot be picked.  Everything excluded is NAMED on the
 ;;; command line, so a missing line is never a silent one.
@@ -738,9 +738,9 @@
   (setq out '())
   (foreach r (pfa:registry)
     (cond
-      ((not (eq (caddr r) 'PLACED))
+      ((not (eq (caddr r) 'ANCHORED))
        (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
-                       "' is registered but unplaced -- a stub has no grid, so "
+                       "' is registered but not anchored -- a stub has no grid, so "
                        "no rim elevations.  Place it with PFSETUP.")))
       ((null (setq cl (pfa:entry-cl r)))
        (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
@@ -920,7 +920,7 @@
   (pf:load-apis)
   (setq rows (pfr:candidates))
   (if (null rows)
-    (prompt (strcat "\nNo profile is ready to export.  PFREPORT needs a PLACED "
+    (prompt (strcat "\nNo profile is ready to export.  PFREPORT needs an ANCHORED "
                     "registry entry with both a .cl and an _INV .pro bound -- "
                     "run PFSETUP."))
     (progn

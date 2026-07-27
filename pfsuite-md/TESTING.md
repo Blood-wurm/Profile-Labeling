@@ -80,10 +80,21 @@ surprises):
       if the fix is worth it.
 - [ ] 1.5 The **Refresh button** re-scans: idempotent — nothing re-named,
       no duplicates.
+- [ ] 1.5a **Late .pro binding:** register a line whose `_INV`/`_TOP` .pro
+      does not exist yet (AUTO reports `-- no .pro pair`). Place one such
+      grid, leave another as a stub. Drop both .pro files into the profile
+      folder, hit **Refresh**. Expected: `Bound <TY> '<NM>' (anchored) + INV
+      <file> + TOP <file>` and the same for `(registered)`, the tail count
+      reads `N late .pro binding(s) added`, both show bound in the registry.
+      Refresh again → 0 bindings added (idempotent).
+- [ ] 1.5b **Refresh never overwrites:** on an anchored grid, use Edit to bind
+      an `_INV` .pro whose name does NOT match the convention. Refresh.
+      Expected: that binding is untouched, no report line for it; only the
+      empty `_TOP` slot fills. Confirm the TIN pair and material survive.
 - [x] 1.6 **Registry manager behaves:** list shows every profile with
-      [PLACED]/[unplaced]; Place on a placed row / Edit on a stub / no
-      selection → errtile message, dialog stays open; double-click places
-      a stub and edits an anchor; empty registry greys Place/Place
+      [ANCHORED]/[registered]; Anchor on an anchored row / Edit on a stub / no
+      selection → errtile message, dialog stays open; double-click anchors
+      a stub and edits an anchor; empty registry greys Anchor/Anchor
       All/Edit.
 
 ## 2. PFSETUP placement
@@ -108,7 +119,7 @@ surprises):
       is). Top-right left/below lower-left → refused.
 - [ ] 2.4 Datum field: prefilled with the session-last value on the second
       grid; edit prefills the stored datum.
-- [x] 2.5 Placed anchor: block visible on `PF-ANCHOR` (no-plot), attributes
+- [x] 2.5 Anchored profile: block visible on `PF-ANCHOR` (no-plot), attributes
       LINE/UTIL/STA0/DATUM/HPLOT/VPLOT populated and plausible.
 - [ ] 2.6 **One `U` removes exactly one grid's placement** (not the batch,
       not the AUTO stubs).
@@ -125,7 +136,7 @@ surprises):
       matches the plan (every structure on the primary line, sorted by
       station); Label Selected with nothing selected → errtile; Settings...
       opens PFLABELSET nested and changes apply to the same run; picking an
-      UNPLACED profile places it first (two corner picks) then lists it.
+      unanchored profile anchors it first (two corner picks) then lists it.
       **Ghost-dropdown check:** the list paints cleanly on open (the
       compute-before-`new_dialog` fix) — no flicker/glitch.
 - [ ] 3.1 Select the junction structure in the list → station rows primary
@@ -137,7 +148,7 @@ surprises):
       different-type line's structure/block — membership is now scoped to the
       primary's type. A same-type junction (two STORM lines) MUST still get the
       combined ID; a SANITARY line the STORM merely crosses MUST NOT appear.
-- [ ] 3.2 **Stub contribution:** with a secondary line UNPLACED (stub
+- [ ] 3.2 **Stub contribution:** with a secondary line unanchored (stub
       only), the junction ID still includes it.
 - [x] 3.3 Stepped-top grid: labels sit on the top **at each station**, not
       the nominal top. A station past the grid edge (no MJR hit) skips with

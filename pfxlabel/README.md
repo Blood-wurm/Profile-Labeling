@@ -14,7 +14,7 @@ Dialog: `pfxl_run`.
 - **TARGET-ONLY draw.** A run labels ONLY the target grid; the crossing
   pipe is drawn from the SOURCE profile's authored .pro (never a probe of
   any drawn grid). A source contributes as a pure file reference — its
-  .pro must be BOUND, not its grid PLACED. Reciprocal annotation = run
+  .pro must be BOUND, not its grid ANCHORED. Reciprocal annotation = run
   PFXLABEL with that profile as the target.
 - **Discovery:** the target .cl intersected against every OTHER registered
   profile's .cl (anchors AND stubs, via `pfa:entry-cl`). Per source pair a

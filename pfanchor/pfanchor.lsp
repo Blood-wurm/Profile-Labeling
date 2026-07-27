@@ -50,28 +50,148 @@
 ;;; SECTION 2  --  Anchor block  (definition, write, find, read, update)
 ;;; ==========================================================================
 
-;; (pfa:ensure-anchor-block) -> nil   (defines PF-GRIDANCHOR once per dwg)
-;;   UNIT L: spine (0,0)->(0,1) + base (0,0)->(1,0).  The insert's X-scale
-;;   is the grid WIDTH and Y-scale the height to the top-right pick, so the
-;;   spine overlays the left border and the base overlays the datum line.
-;;   No top line in the definition -- tops STEP, a scaled flat top would lie.
-(defun pfa:ensure-anchor-block ( / y)
-  (if (null (tblsearch "BLOCK" *pfa-block-name*))
+;; (pfa:send-to-back e) -> nil   (anchor draws BEHIND everything else)
+;;   The anchor is a backdrop marker: it must never sit on top of the grid,
+;;   the profile, or a label.  DRAWORDER is the only route to sort-ents from
+;;   plain LISP, so this shells out with echo suppressed.  Draw order is
+;;   cosmetic, never structural -- a failure here is swallowed, and the anchor
+;;   it was called on is still a valid, readable anchor.
+;;   command-s, NOT command: `command` is a special form, so vl-catch-all-apply
+;;   rejects it outright ("bad order function: COMMAND") and the error escapes
+;;   the very catch meant to contain it.  Same applicable form pf:zoom-onerror
+;;   already uses for its guarded ZOOM.
+(defun pfa:send-to-back (e / echo)
+  (if (and e (entget e))
     (progn
-      (entmake (list '(0 . "BLOCK") (cons 2 *pfa-block-name*)
-                     '(70 . 2) '(10 0.0 0.0 0.0)))
-      (entmake '((0 . "LINE") (8 . "0") (10 0.0 0.0 0.0) (11 0.0 1.0 0.0)))
-      (entmake '((0 . "LINE") (8 . "0") (10 0.0 0.0 0.0) (11 1.0 0.0 0.0)))
-      (setq y -1.0)
-      (foreach tag *pfa-att-tags*
-        (entmake (list '(0 . "ATTDEF") '(8 . "0")
-                       (list 10 2.0 y 0.0)
-                       (cons 40 *pfa-att-height*)
-                       '(1 . "") (cons 3 tag) (cons 2 tag)
-                       '(70 . 8)))
-        (setq y (- y 1.5)))
-      (entmake '((0 . "ENDBLK") (8 . "0")))
-      (prompt (strcat "\nDefined block '" *pfa-block-name* "'.")))))
+      (setq echo (getvar "CMDECHO"))
+      (setvar "CMDECHO" 0)
+      (vl-catch-all-apply 'command-s
+        (list "_.DRAWORDER" (ssadd e) "" "_Back"))
+      (setvar "CMDECHO" echo)))
+  (princ))
+
+;; (pfa:icon-scale hplot) -> real   UNIFORM insert scale for the anchor icon
+;;   The block is a fixed-size icon snapped to the datum, drawn at the size it
+;;   should read on an H:*pfa-icon-ref-hplot* sheet.  Model size must track the
+;;   plot scale to hold a constant size on paper, so the factor is a plain
+;;   ratio and is applied to X, Y AND Z -- an icon must never distort, which is
+;;   also why the extents no longer ride on the scale factors (see pfa:extents).
+(defun pfa:icon-scale (hplot)
+  (if (and hplot (> hplot 0.0))
+    (/ hplot *pfa-icon-ref-hplot*)
+    1.0))
+
+;; (pfa:attdef-tags name) -> list of upper-case ATTDEF tags in a block DEFINITION
+(defun pfa:attdef-tags (name / e ed out)
+  (setq out '())
+  (if (setq e (tblobjname "BLOCK" name))
+    (progn
+      (setq e (entnext e))
+      (while (and e (setq ed (entget e)) (/= (cdr (assoc 0 ed)) "ENDBLK"))
+        (if (= (cdr (assoc 0 ed)) "ATTDEF")
+          (setq out (cons (strcase (cdr (assoc 2 ed))) out)))
+        (setq e (entnext e)))))
+  out)
+
+;; (pfa:sync-attdefs) -> count added
+;;   The anchor block is hand-authored, so its definition may not carry the
+;;   ATTDEFs the ledger depends on.  pfa:write-anchor entmakes the ATTRIBs onto
+;;   the insert regardless (the (66 . 1) route), so anchors read correctly
+;;   either way -- but a definition with no matching ATTDEFs is one ATTSYNC or
+;;   block-editor round-trip away from losing every one of them, and those
+;;   attributes ARE the anchor's geometric state.  ADDITIVE ONLY: adds just the
+;;   missing tags, invisible, and touches no existing geometry.  AddAttribute
+;;   does not back-propagate to placed inserts, and ours already carry their own
+;;   ATTRIBs, so nothing on screen changes.
+;;   Every ActiveX call is catch-wrapped -- a drawing that will not hand over
+;;   its block collection still gets a working anchor, just an un-synced block.
+(defun pfa:sync-attdefs ( / have blks blk n y mode)
+  (setq n 0 mode 1)                     ; 1 = acAttributeModeInvisible
+  (if (tblsearch "BLOCK" *pfa-block-name*)
+    (progn
+      (setq have (pfa:attdef-tags *pfa-block-name*)
+            blks (vl-catch-all-apply
+                   '(lambda ()
+                      (vla-get-blocks
+                        (vla-get-activedocument (vlax-get-acad-object))))
+                   '()))
+      (if (not (vl-catch-all-error-p blks))
+        (progn
+          (setq blk (vl-catch-all-apply 'vla-item (list blks *pfa-block-name*)))
+          (if (not (vl-catch-all-error-p blk))
+            (progn
+              (setq y (- (* *pfa-att-height* *pfa-att-gap*)))
+              (foreach tag *pfa-att-tags*
+                (if (not (member (strcase tag) have))
+                  (if (not (vl-catch-all-error-p
+                             (vl-catch-all-apply
+                               'vla-addattribute
+                               (list blk *pfa-att-height* mode tag
+                                     (vlax-3d-point 0.0 y 0.0) tag ""))))
+                    (setq n (1+ n))))
+                (setq y (- y (* *pfa-att-height* *pfa-att-gap*))))
+              (if (> n 0)
+                (prompt (strcat "\nAdded " (itoa n) " missing attribute "
+                                "definition(s) to block '"
+                                *pfa-block-name* "'.")))))))))
+  n)
+
+;; (pfa:ensure-anchor-block) -> nil   (anchor block is usable after this)
+;;   The hand-authored PF-ANCHOR always wins: when the drawing already carries
+;;   a definition this only tops up its ATTDEFs and leaves the artwork alone.
+;;   What follows is the FALLBACK, entmade only in a drawing that has never
+;;   seen one -- a PLACEHOLDER datum pointer (apex on the insertion point,
+;;   roughly text-height at H:50), not a stand-in for the real icon.  It is
+;;   deliberately small: the block no longer spans the grid, so nothing here
+;;   is scaled to the extents.
+(defun pfa:ensure-anchor-block ( / y)
+  (cond
+    ((tblsearch "BLOCK" *pfa-block-name*)
+     (pfa:sync-attdefs))
+    (T
+     (entmake (list '(0 . "BLOCK") (cons 2 *pfa-block-name*)
+                    '(70 . 2) '(10 0.0 0.0 0.0)))
+     (entmake '((0 . "LINE") (8 . "0") (10  0.0 0.0 0.0) (11 -2.0 3.0 0.0)))
+     (entmake '((0 . "LINE") (8 . "0") (10 -2.0 3.0 0.0) (11  2.0 3.0 0.0)))
+     (entmake '((0 . "LINE") (8 . "0") (10  2.0 3.0 0.0) (11  0.0 0.0 0.0)))
+     (entmake '((0 . "LINE") (8 . "0") (10 -3.0 0.0 0.0) (11  3.0 0.0 0.0)))
+     (setq y (- (* *pfa-att-height* *pfa-att-gap*)))
+     (foreach tag *pfa-att-tags*
+       (entmake (list '(0 . "ATTDEF") '(8 . "0")
+                      (list 10 0.0 y 0.0)
+                      (cons 40 *pfa-att-height*)
+                      '(1 . "") (cons 3 tag) (cons 2 tag)
+                      '(70 . 9)))          ; 1 invisible + 8 preset
+       (setq y (- y (* *pfa-att-height* *pfa-att-gap*))))
+     (entmake '((0 . "ENDBLK") (8 . "0")))
+     (prompt (strcat "\nDefined placeholder block '" *pfa-block-name* "'."))))
+  (princ))
+
+;; (pfa:extents anchor) -> (width height)   either element may be nil
+;;   Extents are stored RELATIVE to the insertion point (grid lower-left), so a
+;;   window-move of grid + anchor carries both -- that is the design, and it is
+;;   why pfa:corner-check cannot see such a move.
+;;   CURRENT anchors keep them in the WIDTH/HEIGHT attributes.  They used to be
+;;   the insert's X/Y scale factors, back when the block SPANNED the grid; the
+;;   block is a fixed-size icon now and its scales carry plot scale, so reading
+;;   extents off them would be nonsense (at H:200 the X-scale is 4.0).
+;;   The scale-factor read survives ONLY as the legacy path, and the ABSENCE of
+;;   the WIDTH/HEIGHT attributes is exactly what identifies a pre-icon anchor --
+;;   scale alone cannot tell the two apart.  The old xs > 2.0 sentinel (no real
+;;   grid is 2 ft wide) still guards the legacy width, which legacy anchors
+;;   only carried when the top-right had been picked.
+(defun pfa:extents (anchor / at w h ed xs ys)
+  (setq at (pfa:read-attribs anchor)
+        w  (distof (pfa:att "WIDTH"  at) 2)
+        h  (distof (pfa:att "HEIGHT" at) 2))
+  (if (and h (> h 0.0))
+    (list (if (and w (> w 0.0)) w) h)
+    (progn
+      (setq ed (entget anchor)
+            xs (cdr (assoc 41 ed))
+            ys (cdr (assoc 42 ed)))
+      (list (if (and xs (> xs 2.0)) xs)
+            (if (and ys (> ys 0.0)) ys)))))
 
 ;; (pfa:read-attribs anchor) -> alist ("TAG" . "value")
 (defun pfa:read-attribs (anchor / e ed out)
@@ -84,7 +204,7 @@
 
 ;; (pfa:find-anchor line util) -> anchor ename | nil
 (defun pfa:find-anchor (line util / ss i e at res)
-  (setq ss (ssget "_X" (list '(0 . "INSERT") (cons 2 *pfa-block-name*)
+  (setq ss (ssget "_X" (list '(0 . "INSERT") (cons 2 *pfa-block-names*)
                              '(410 . "Model")))     ; model space only
         i  0
         res nil)
@@ -100,7 +220,7 @@
 
 ;; (pfa:all-anchors) -> list of anchor enames
 (defun pfa:all-anchors ( / ss i out)
-  (setq ss (ssget "_X" (list '(0 . "INSERT") (cons 2 *pfa-block-name*)
+  (setq ss (ssget "_X" (list '(0 . "INSERT") (cons 2 *pfa-block-names*)
                              '(410 . "Model")))     ; model space only
         i 0 out '())
   (if ss
@@ -112,30 +232,32 @@
 ;;   Core geometry from geometry + attributes; record keys (clfile, pro-*,
 ;;   tin-*, name, type) merged in from the ledger when present.
 ;;   'topy is NOMINAL -- top at max station.  Per-station top comes from
-;;   pf:top-at, never from here.  'rightx derives from the X-scale (the
-;;   relative top-right); absent on a legacy anchor (X-scale 1.0).
+;;   pf:top-at, never from here.  Extents come from pfa:extents (WIDTH/HEIGHT
+;;   attributes, legacy scale factors as fallback); 'rightx stays absent when
+;;   no width was ever recorded.
 ;;   nil when the core numbers are unreadable.
-(defun pfa:anchor->xform (anchor / ed ins xs ys at sta0 datum hp vp xf meta
-                          files)
+(defun pfa:anchor->xform (anchor / ed ins ext wid hgt at sta0 datum hp vp xf
+                          meta files)
   (setq ed  (entget anchor)
         ins (cdr (assoc 10 ed))
-        xs  (cdr (assoc 41 ed))
-        ys  (cdr (assoc 42 ed))
+        ext (pfa:extents anchor)
+        wid (car ext)
+        hgt (cadr ext)
         at  (pfa:read-attribs anchor)
         sta0  (distof (pfa:att "STA0"  at) 2)
         datum (distof (pfa:att "DATUM" at) 2)
         hp    (distof (pfa:att "HPLOT" at) 2)
         vp    (distof (pfa:att "VPLOT" at) 2))
-  (if (and ins ys sta0 datum hp vp
-           (> hp 0.0) (> vp 0.0) (> ys 0.0))
+  (if (and ins hgt sta0 datum hp vp
+           (> hp 0.0) (> vp 0.0) (> hgt 0.0))
     (progn
       (setq xf (pf:make-xform (car ins) sta0
-                              (+ (cadr ins) ys) (cadr ins)
+                              (+ (cadr ins) hgt) (cadr ins)
                               datum (/ hp vp) hp vp))
       (setq xf (pf:xf-put 'name (pfa:att "LINE" at) xf)
             xf (pf:xf-put 'type (pfa:att "UTIL" at) xf))
-      (if (and xs (> xs 2.0))                    ; legacy anchors carry 1.0
-        (setq xf (pf:xf-put 'rightx (+ (car ins) xs) xf)))
+      (if wid
+        (setq xf (pf:xf-put 'rightx (+ (car ins) wid) xf)))
       (setq meta (pfa:meta-get anchor))
       (if (and meta (assoc 1 meta) (/= (cdr (assoc 1 meta)) ""))
         (setq xf (pf:xf-put 'clfile (cdr (assoc 1 meta)) xf)))
@@ -155,26 +277,31 @@
       xf)))
 
 ;; (pfa:write-anchor line util xform tfile) -> anchor ename
-;;   xform must carry 'rightx (the top-right pick X) -- extents are stored
-;;   RELATIVE: X-scale = width, Y-scale = height.  Caller must hold an open
-;;   undo group.
-(defun pfa:write-anchor (line util xform tfile / ins wid hgt vals y i anchor)
+;;   xform should carry 'rightx (the top-right pick X); without it the WIDTH
+;;   attribute is left blank and pfa:extents reports no width.  Extents are
+;;   stored RELATIVE, in the WIDTH/HEIGHT attributes -- the insert's scale
+;;   factors carry the ICON's plot scale and nothing else.  Caller must hold an
+;;   open undo group.
+(defun pfa:write-anchor (line util xform tfile / ins wid hgt isc vals y i
+                         anchor)
   (pfd:ensure-layer *pfa-layer* T)
   (pfa:ensure-anchor-block)
   (setq ins (list (pf:xf-leftx xform) (pf:xf-basey xform) 0.0)
         wid (if (pf:xf-get 'rightx xform)
-              (- (pf:xf-get 'rightx xform) (pf:xf-leftx xform))
-              1.0)
-        hgt (- (pf:grid-top-y xform) (pf:xf-basey xform)))
+              (- (pf:xf-get 'rightx xform) (pf:xf-leftx xform)))
+        hgt (- (pf:grid-top-y xform) (pf:xf-basey xform))
+        isc (pfa:icon-scale (pf:xf-hplot xform)))
   (entmake (list '(0 . "INSERT") (cons 8 *pfa-layer*)
                  (cons 2 *pfa-block-name*) (cons 10 ins)
-                 (cons 41 wid) (cons 42 hgt) '(43 . 1.0)
+                 (cons 41 isc) (cons 42 isc) (cons 43 isc)
                  '(50 . 0.0) '(66 . 1)))
   (setq vals (list (strcase line) (strcase util)
                    (rtos (pf:xf-sta0 xform) 2 6)
                    (rtos (pf:xf-datum xform) 2 6)
                    (rtos (pf:xf-hplot xform) 2 6)
-                   (rtos (/ (pf:xf-hplot xform) (pf:xf-vscale xform)) 2 6))
+                   (rtos (/ (pf:xf-hplot xform) (pf:xf-vscale xform)) 2 6)
+                   (if wid (rtos wid 2 6) "")
+                   (rtos hgt 2 6))
         y    (- (cadr ins) (* *pfa-att-height* *pfa-att-gap*))
         i    0)
   (foreach tag *pfa-att-tags*
@@ -183,34 +310,52 @@
                    (cons 40 *pfa-att-height*)
                    (cons 1 (nth i vals))
                    (cons 2 tag)
-                   '(70 . 8)))
+                   (cons 70 *pfa-att-flags*)))
     (setq y (- y (* *pfa-att-height* *pfa-att-gap*))
           i (1+ i)))
   (entmake (list '(0 . "SEQEND") (cons 8 *pfa-layer*)))
   (setq anchor (entlast))
   (pfa:meta-put anchor tfile "")
   (pfa:stamp-self anchor)                 ; copy-detection baseline
+  (pfa:send-to-back anchor)
   (prompt (strcat "\nRegistered grid anchor: " (strcase util)
                   " '" (strcase line) "'."))
   anchor)
 
 ;; (pfa:reanchor anchor xform) -> anchor   (update in place; ledger survives)
-(defun pfa:reanchor (anchor xform / ed ins wid hgt vals e sed tag i y)
-  (setq ins (list (pf:xf-leftx xform) (pf:xf-basey xform) 0.0)
+;;   Extents go back to whichever storage THIS anchor already uses.  An anchor
+;;   carrying a WIDTH attribute is a current one: extents to the attributes,
+;;   scale factors to the icon scale.  One without is pre-icon, and its extents
+;;   ARE its scale factors -- writing the icon scale over them would silently
+;;   shrink its grid to a few feet, so that anchor keeps the old storage and
+;;   the old block.  Attributes are only ever UPDATED here, never added: the
+;;   ledger hangs off this insert, so it must survive in place.
+(defun pfa:reanchor (anchor xform / ed at legacy ins wid hgt isc vals e sed
+                     tag i y)
+  (setq at     (pfa:read-attribs anchor)
+        legacy (null (distof (pfa:att "WIDTH" at) 2))
+        ins (list (pf:xf-leftx xform) (pf:xf-basey xform) 0.0)
         wid (if (pf:xf-get 'rightx xform)
               (- (pf:xf-get 'rightx xform) (pf:xf-leftx xform))
-              (cdr (assoc 41 (entget anchor))))
+              (car (pfa:extents anchor)))
         hgt (- (pf:grid-top-y xform) (pf:xf-basey xform))
+        isc (pfa:icon-scale (pf:xf-hplot xform))
         ed  (entget anchor)
-        ed  (subst (cons 10 ins) (assoc 10 ed) ed)
-        ed  (subst (cons 41 wid) (assoc 41 ed) ed)
-        ed  (subst (cons 42 hgt) (assoc 42 ed) ed))
+        ed  (subst (cons 10 ins) (assoc 10 ed) ed))
+  (if legacy
+    (setq ed (subst (cons 41 (if wid wid (cdr (assoc 41 ed)))) (assoc 41 ed) ed)
+          ed (subst (cons 42 hgt) (assoc 42 ed) ed))
+    (setq ed (subst (cons 41 isc) (assoc 41 ed) ed)
+          ed (subst (cons 42 isc) (assoc 42 ed) ed)
+          ed (subst (cons 43 isc) (assoc 43 ed) ed)))
   (entmod ed)
   (setq vals (list nil nil                        ; LINE/UTIL untouched
                    (rtos (pf:xf-sta0 xform) 2 6)
                    (rtos (pf:xf-datum xform) 2 6)
                    (rtos (pf:xf-hplot xform) 2 6)
-                   (rtos (/ (pf:xf-hplot xform) (pf:xf-vscale xform)) 2 6))
+                   (rtos (/ (pf:xf-hplot xform) (pf:xf-vscale xform)) 2 6)
+                   (if wid (rtos wid 2 6) "")
+                   (rtos hgt 2 6))
         y    (- (cadr ins) (* *pfa-att-height* *pfa-att-gap*))
         e    (entnext anchor))
   (while (and e (setq sed (entget e)) (= (cdr (assoc 0 sed)) "ATTRIB"))
@@ -222,10 +367,13 @@
           (setq sed (subst (cons 1 (nth i vals)) (assoc 1 sed) sed)))
         (setq sed (subst (cons 10 (list (car ins) y 0.0))
                          (assoc 10 sed) sed))
+        ;; heals anchors written while (70) was PRESET, not INVISIBLE
+        (setq sed (subst (cons 70 *pfa-att-flags*) (assoc 70 sed) sed))
         (entmod sed)))
     (setq y (- y (* *pfa-att-height* *pfa-att-gap*))
           e (entnext e)))
   (entupd anchor)
+  (pfa:send-to-back anchor)     ; heals anchors written before back-ordering
   (prompt "\nGrid anchor updated in place (ledger preserved).")
   anchor)
 
@@ -255,28 +403,29 @@
 ;;     - grid moved WITHOUT its anchor (no grid LINE at the insertion)
 ;;     - grid stretched/re-drawn (probed top at the right edge no longer
 ;;       matches the registered top-right height)
-(defun pfa:corner-check (anchor / ed ins xs ys hp out x top)
+(defun pfa:corner-check (anchor / ed ins ext wid hgt hp out x top)
   (setq ed  (entget anchor)
         ins (cdr (assoc 10 ed))
-        xs  (cdr (assoc 41 ed))
-        ys  (cdr (assoc 42 ed))
+        ext (pfa:extents anchor)
+        wid (car ext)
+        hgt (cadr ext)
         hp  (distof (pfa:att "HPLOT" (pfa:read-attribs anchor)) 2)
         out '())
   (if (null hp) (setq hp *pf-ref-hplot*))
   (if (not (pfa:probe-corner ins))
     (setq out (cons "no grid LINE at the anchor corner (grid moved without its anchor?)"
                     out)))
-  (if (and xs (> xs 2.0) ys)
+  (if (and wid hgt)
     (progn
-      (setq x   (- (+ (car ins) xs) 0.1)         ; just inside the right edge
+      (setq x   (- (+ (car ins) wid) 0.1)        ; just inside the right edge
             top (pf:top-at x (cadr ins)
-                           (+ (cadr ins) ys
+                           (+ (cadr ins) hgt
                               (* *pfg-top-margin* (pf:scale-factor hp)))
                            (pf:top-lines)))
       (cond
         ((null top)
          (setq out (cons "no PF-GRID-MJR top found at the right edge" out)))
-        ((> (abs (- top (+ (cadr ins) ys))) *pfa-top-tol*)
+        ((> (abs (- top (+ (cadr ins) hgt))) *pfa-top-tol*)
          (setq out (cons "top at max station differs from registration (grid stretched or re-drawn?)"
                          out))))))
   (reverse out))
@@ -569,7 +718,7 @@
   (pfa:xrec-put (pfa:nod-dict T) (pfa:geom-key clfile) data))   ; WRITE
 
 ;; (pfa:registry) -> merged sorted list of (type name state ename stub)
-;;   state 'PLACED (ename set, stub nil) | 'STUB (ename nil, stub data).
+;;   state 'ANCHORED (ename set, stub nil) | 'STUB (ename nil, stub data).
 ;;   THE registry: anchors + stubs, sorted by "TYPE NAME".
 (defun pfa:registry ( / out e at s keys k cell)
   (setq out '())
@@ -579,7 +728,7 @@
         (setq at (pfa:read-attribs e))
         (setq out (cons (list (strcase (pfa:att "UTIL" at))
                               (strcase (pfa:att "LINE" at))
-                              'PLACED e nil)
+                              'ANCHORED e nil)
                         out)))))
   (foreach s (pfa:stub-list)
     ;; a stub shadowed by an anchor (shouldn't happen) yields to the anchor
@@ -590,8 +739,16 @@
       (setq out (cons (list (strcase (car s)) (strcase (cadr s))
                             'STUB nil s)
                       out))))
-  (setq keys (acad_strlsort
-               (mapcar '(lambda (r) (strcat (car r) " " (cadr r))) out)))
+  ;; EMPTY REGISTRY IS LEGAL and must stay silent.  acad_strlsort rejects nil
+  ;; with a "Usage: (acad_strlsort <list of strings>)" banner on the command
+  ;; line, so a clean drawing -- no anchors, no stubs -- printed a spurious
+  ;; error every time the palette opened (found by PALETTE-TESTING 3, which is
+  ;; the first test ever run against a drawing that had never seen PFTOOLS).
+  ;; Guarded, not reordered: behaviour for a non-empty registry is unchanged.
+  (setq keys (if out
+               (acad_strlsort
+                 (mapcar '(lambda (r) (strcat (car r) " " (cadr r))) out))
+               '()))
   (mapcar
     '(lambda (k)
        (setq cell (vl-member-if
@@ -606,7 +763,7 @@
 ;;   pure registry knowledge) so pflabel can call it without violating the
 ;;   depend-only-upward guardrail.  Pure read.
 (defun pfa:entry-cl (r / cl)
-  (setq cl (if (eq (caddr r) 'PLACED)
+  (setq cl (if (eq (caddr r) 'ANCHORED)
              (cdr (assoc 1 (pfa:meta-get (nth 3 r))))
              (nth 2 (nth 4 r))))
   (if (and cl (/= cl "")) cl))
@@ -877,7 +1034,7 @@
   (strcat (pfa:att "UTIL" at) " '" (pfa:att "LINE" at) "'"))
 
 ;; (pfa:pick-anchor msg) -> anchor ename | nil   (nil = Enter / cancel)
-;;   entsel loop that only accepts a PF-GRIDANCHOR insert.
+;;   entsel loop that only accepts an insert named in *pfa-block-names*.
 (defun pfa:pick-anchor (msg / sel e ed done res)
   (setq done nil res nil)
   (while (not done)
@@ -887,9 +1044,11 @@
       (T
        (setq e (car sel) ed (entget e))
        (if (and (= (cdr (assoc 0 ed)) "INSERT")
-                (= (strcase (cdr (assoc 2 ed))) (strcase *pfa-block-name*)))
+                (member (strcase (cdr (assoc 2 ed)))
+                        (pf:split (strcase *pfa-block-names*) ",")))
          (setq res e done T)
-         (prompt "\n  Not a PF-GRIDANCHOR -- pick the anchor block, or Enter.")))))
+         (prompt (strcat "\n  Not a " *pfa-block-name*
+                         " -- pick the anchor block, or Enter."))))))
   res)
 
 ;; (pfa:choose-anchor) -> anchor ename | nil
@@ -900,7 +1059,8 @@
   (setq anchors (pfa:all-anchors))
   (cond
     ((null anchors)
-     (prompt "\nNo PF-GRIDANCHOR anchors in this drawing -- run PFSETUP.")
+     (prompt (strcat "\nNo " *pfa-block-name*
+                     " anchors in this drawing -- run PFSETUP."))
      nil)
     ((= (length anchors) 1)
      (prompt (strcat "\nUsing the only registered profile: "

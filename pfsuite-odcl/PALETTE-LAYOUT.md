@@ -44,6 +44,46 @@ Handlers are named by path:
 (defun c:pfsuite/pfsPalette/tvwLines#OnSelChanged (Label Key)  ...)
 ```
 
+### A wrong `(Name)` fails silently — check it, don't trust it
+
+An OpenDCL control symbol that the loaded project never defined evaluates to
+**nil**: AutoLISP returns nil for an unbound symbol instead of erroring. Every
+`dcl-Control-*` call on nil then does nothing and reports nothing. A renamed or
+mistyped control therefore produces **no error, no message, and no behaviour** —
+the hardest failure mode in this whole design to spot, and the one that cost the
+2026-07-27 run its two footer labels (PALETTE-TESTING 2.3/2.4).
+
+**`C:PFPDIAG`** (`../pfpalette/pfpalette.lsp` §6) resolves every name in the
+roster below and lists the misses. Run it after any Studio rename, and before
+wiring anything new — the `.odcl` is binary and can't be diffed, so this command
+is the only review the names get.
+
+### Control symbols exist only while the form is open
+
+**Field-tested 2026-07-27: `PFPDIAG` closed → 0 of 29; open → 29 of 29.**
+
+`dcl-Form-Close` **destroys the child controls**, and every control symbol
+reverts to nil. The **form** symbol survives — that is why `C:PFPALETTE` can
+call `dcl-Form-IsActive` on a closed palette — but nothing beneath it does.
+
+This is not a curiosity; it is load-bearing in three places:
+
+- **It is why columns don't stack** (PALETTE-TESTING 2.10). The worry was that
+  `AddColumns` being additive would give 4 and 6 columns after three toggles.
+  It gives 2 and 2 because Close destroys the controls and `OnInitialize`
+  rebuilds them from nothing. **The `*pfp-columns-done*` flag the test proposed
+  as the fix is not needed** — and would in fact be wrong, since it would
+  suppress the rebuild the second open requires.
+- **Any control write while closed is a silent no-op.** Not an error — nil in,
+  nothing out. `pfp:caption` guards this for captions; anything new that touches
+  a control must assume the form may be gone.
+- **It shapes §7's lifecycle problem.** A `pfp:refresh` driven from
+  `DocActivated` after `EnteringNoDocState` closed the form would quietly do
+  nothing at all, because every control it writes to is nil.
+
+`PFPDIAG` now refuses to run against a closed palette rather than reporting all
+29 MISSING, which is the exact wrong answer.
+
 The project file lives at `pfsuite-odcl/pfsuite.odcl`; `pfp:odcl-path` in
 `pfpalette.lsp` carries the folder segment. It and `pfset:dcl-file` are the only
 two path builders in the suite — both derive from `*pftools-dir*`, which is set
@@ -68,8 +108,8 @@ Derived from `tarLines`: Left 10 + Width 876 + Right From Right 10 = 896; Top 40
 | Property | Value | |
 |---|---|---|
 | Width × Height | `900 × 670` | design size |
-| Min Width | `570` | **defect — see below** |
-| Min Height | `700` | **defect — see below** |
+| Min Width | ~~`570`~~ → ≥ `900` | fixed (confirmed by 1.6a); now load-bearing — see below |
+| Min Height | ~~`700`~~ → ≤ `670` | **unconfirmed** — 1.1 was never signed off; read the actual value in Studio |
 | Max Width / Max Height | `0` / `0` | no ceiling |
 | Allow Resizing | True | |
 | Dockable Sides | `0 - Left + Right` | never docks top/bottom — this palette lives as a vertical strip, so height varies constantly and width rarely |
@@ -97,6 +137,18 @@ The two values also look transposed. **Fix: `Min Width` ≥ 900, `Min Height`
 > casualties right-anchored, and nothing about the flags looks different until
 > the form is narrow enough for the difference to bite. Confirm or rule out
 > before spending more time on §8.
+>
+> **2026-07-27 — §8 closed BY CONSTRUCTION.** With `Min Width` ≥ 900 the form
+> cannot narrow at all, so nothing can compute a negative x and the resize test
+> passes trivially (PALETTE-TESTING 1.6a). Consistent with the theory; not a
+> test of it. **The 900px floor is now load-bearing — lowering it re-opens §8.**
+>
+> **The cost:** `Dockable Sides` is Left + Right because this palette is meant
+> to be a vertical strip, and a strip with a hard 900px floor is a wide one.
+> The floor is forced by the five fixed-width Registry button rows (§3 — no
+> layout flow, so a fixed row can't redistribute). A genuinely narrow palette
+> needs those rows reflowed: icon buttons, two stacked rows, or a toolbar.
+> That is a redesign, deliberately not scheduled.
 
 ---
 
@@ -130,7 +182,7 @@ Vertical is identical with `Use Top From Bottom` / `Use Bottom From Bottom`.
 
 | Control | H | V | |
 |---|---|---|---|
-| `tvwLines` | 0/0 | 0/1 | fixed width, full height |
+| `tvwLines` | 0/0 | 0/1 | fixed width, full height — **shipped state disagrees, see below** |
 | `metaList` | 0/1 | 0/0 | width tracks, height fixed at top |
 | `lvwLinkage` | 0/1 | 0/1 | the stretcher |
 | `btnPickCL` … `btnPickEXIST` | 0/0 | 1/1 | bottom-pinned row |
@@ -147,6 +199,24 @@ Vertical is identical with `Use Top From Bottom` / `Use Bottom From Bottom`.
 | `frmOptions` + `optRun` | 0/0 | 1/1 | bottom-left |
 | `chkbxZoom` | 0/0 | 1/1 | bottom |
 | `btnClear` `btnRun` | 1/1 | 1/1 | bottom-right |
+
+### `tvwLines` — open finding, 2026-07-27
+
+Two symptoms from the field test, one likely cause:
+
+- **1.1** — `tvwLines` is not aligned with the controls beside it.
+- **1.6c** — growing the palette taller leaves **a gap above `tvwLines`** that
+  widens as it stretches.
+
+A top edge that drifts downward as the form grows is what `Use Top From Bottom`
+= 1 does: the top is being measured from the bottom edge. That makes the shipped
+pair `1/1` (fixed height, pinned bottom) where this table specifies **`0/1`**
+(top fixed, bottom tracks — full height). Check `Use Top From Bottom` on
+`tvwLines` first; it should be **0**.
+
+Worth confirming rather than assuming — `Top` itself may simply be set below
+the panel top, which produces a constant gap instead of a growing one. **A gap
+that grows on stretch is the anchor; a gap that stays put is the rect.**
 
 ### Three rules behind those tables
 
@@ -176,8 +246,8 @@ why `Min Width` must be ≥ 900.
 | Control | Type | Purpose | Wired |
 |---|---|---|---|
 | `tabMain` | TabStrip | Container for the three tab surfaces. | n/a |
-| `lblProject` | Label | Project root. Captioned by `pfp:seed-labels`. | ✅ |
-| `lblCounts` | Label | Registry tallies. Captioned by `pfp:seed-labels`. | ✅ |
+| `lblProject` | Label | Project root. Captioned by `pfp:seed-labels`. | ⚠️ wired, **blank at runtime** |
+| `lblCounts` | Label | Registry tallies. Captioned by `pfp:seed-labels`. | ⚠️ wired, **blank at runtime** |
 | `btnRefresh` | Button | Calls `pfp:refresh` — **direct call, no defer** (pure read). | ❌ |
 | `btnHelp` | Button | TBD. | ❌ |
 
@@ -346,18 +416,30 @@ AutoCAD palettes do **not** do. `EnteringNoDocState` is the native answer.
 Closing alone leaves it shut when a drawing reopens, which still isn't native
 behavior. The intended fix — set `*pfp-was-open*` on the `EnteringNoDocState`
 close and have `DocActivated` re-show if the flag is set — **rests on an
-unverified assumption: that a closed form still receives events.** If it
-doesn't, nothing can reopen the palette and it stays dead until someone types
-`PFPALETTE`, which is worse than today's stale-data behavior. Test L3 in
-`../pfpalette/pfp-proof.lsp` settles it. Fallbacks if it fails: `dcl-Form-Hide`
-instead of `Close` (unattested in the samples — needs its own check), or a
-`vlr-docmanager-reactor`, which lives outside the form and always fires.
+unverified assumption: that a closed form still receives events.**
+
+> **2026-07-27 — tested, and the assumption was never reached.** L2 failed (the
+> palette persisted on the start screen, `EnteringNoDocState` printed nothing)
+> and L3 threw `no function definition:
+> C:PFSUITE/PFSPALETTE#ONDOCACTIVATED`. Together those say the event **did**
+> fire on the incoming document and the **handler wasn't there to receive it**.
+>
+> **The blocker is namespace, not form state** — which rules out both fallbacks
+> this section used to list. Neither `dcl-Form-Hide` nor a
+> `vlr-docmanager-reactor` fixes a handler that doesn't exist in the document
+> being activated into. Only per-document autoload does.
+>
+> **Deferred by decision**; Phase 2 goes first now that the gate has passed.
+> Start-screen persistence stands as a known rough edge. Details:
+> [`PALETTE-TESTING.md`](PALETTE-TESTING.md) §5.
 
 **The handler only exists where the suite is loaded.** AutoLISP namespaces are
 per-document, so in a drawing that never ran `pftools-load.lsp` the
-`OnDocActivated` function is undefined and nothing fires at all — the palette
-keeps showing the previous drawing's data. A `boundp` guard inside the handler
-doesn't help with this; only auto-loading the suite per document does.
+`OnDocActivated` function is undefined. **This is not silent** — the field test
+showed OpenDCL fires the event anyway and the missing `defun` surfaces as an
+error, so the cost is a visible error dialog, not merely stale data. A `boundp`
+guard inside the handler can't help: the handler itself is what's missing. Only
+auto-loading the suite per document (`acaddoc.lsp`) fixes it.
 
 **Guard `DocActivated` with `(boundp '*pftools-dir*)`.** `*pftools-dir*` is a
 plain `setq` in the document namespace, so it exists only in drawings where
@@ -376,6 +458,54 @@ reactor filtered to `PF*` · `btnRefresh`
 
 ## 8. Colors
 
+> ## 2026-07-27 — RESOLVED FROM THE VENDOR DOCS, AND IT WAS A BUG
+>
+> The blank footer labels (PALETTE-TESTING 2.3/2.4) were a **colour** fault all
+> along, and this section's "decision pending" is what left the door open.
+>
+> **1. `-24` is not a theme colour. It is `Transparent`.** The negative range is
+> a documented system-colour enumeration:
+>
+> | | | | | | |
+> |---|---|---|---|---|---|
+> | -1 scroll bar | -5 menu | -9 **window text** | -13 app workspace | -17 button shadow | -21 button highlight |
+> | -2 desktop | -6 window | -10 caption text | -14 highlight | -18 grayed text | -22 ACAD model bg |
+> | -3 active caption | -7 window frame | -11 active border | -15 highlighted text | -19 **button text** | -23 ACAD layout bg |
+> | -4 inactive caption | -8 menu text | -12 inactive border | -16 **button face** | -20 inactive caption | -24 **transparent** |
+>
+> **2. A Label has nothing that can override its `Foreground Color`.** The
+> [Label control
+> reference](https://www.opendcl.com/HelpFiles/ENU/Reference/Control/Label.htm)
+> lists: `Background Color`, `Foreground Color`, `Border Style`,
+> `Justification`, `Font` / `Font Bold` / `Font Italic` / `Font Size` /
+> `Font Strikeout` / `Font Underline`, `Visible`, `Enabled`, geometry,
+> tooltips. **No `Use Visual Style`** — confirmed absent in Studio on both
+> labels — and no `Transparent` flag. So `Foreground Color` is authoritative,
+> and a `Foreground Color` of **-24 is transparent text**: invisible docked,
+> floating, at any size, under any theme. -24 is easy to set on the wrong
+> property believing it means "default", and the form legitimately carries it
+> as a *background*. `Font Size` 0 gives the same visible result by a different
+> route.
+>
+> The gray box is the same enumeration from the other side — a
+> transparent-*background* control mis-composites when docked and paints as an
+> opaque rectangle.
+>
+> **The fix, on `lblProject` and `lblCounts`:** `Foreground Color` = **-19**
+> (button text, so it still tracks the host theme) and a real `Font Size`. If
+> the gray box survives, `Background Color` = **-16** (button face) rather than
+> transparent.
+>
+> **This retires Tier 3's blocker.** A runtime colour API exists *and* a full
+> system-colour enumeration exists, so tracking `COLORTHEME` at runtime is now
+> a choice rather than an impossibility. Tier 1 "set nothing and inherit"
+> remains the simplest, but note it is not the current state: something has
+> already been set on these labels, and that is the bug.
+>
+> **An earlier revision of this note prescribed `Use Visual Style` = False**,
+> taken from a forum thread about the 8.0.0.13 label-foreground regression
+> without checking that Labels expose the property. They do not.
+
 **Decision pending.** "Native" for a docked palette means matching the host, and
 the host theme moves: `COLORTHEME` (0 dark / 1 light) is user-switchable at any
 time, so a hardcoded scheme is wrong the moment someone flips it.
@@ -389,6 +519,24 @@ time, so a hardcoded scheme is wrong the moment someone flips it.
 No color functions appear in the `Opendcl_Reference` samples, which attest only
 `dcl_Control_SetCaption` / `SetEnabled` / `SetText` / `SetValue`. If no runtime
 color API exists, colors are design-time only and Tier 3 is impossible.
+
+> **2026-07-27 — a runtime color API EXISTS. Tier 3 is possible.**
+> `PFPPROBE` called `dcl-Control-SetForeColor` against a live control and it
+> returned without error, as did `dcl-Control-SetVisible` and
+> `dcl-Control-SetText`. The samples simply never exercised them; absence from
+> `Opendcl_Reference` was never evidence of absence from the API.
+>
+> This removes the blocker on Tier 3 — read `(getvar "COLORTHEME")` and set
+> colors at runtime, so the palette tracks the host when the user flips theme.
+> It does **not** decide the question: Tier 1 (inherit everything) is still the
+> only option that is consistent across tab strips, buttons, frames and radios,
+> which are Windows-themed no matter what the form says. What changed is that
+> Tier 3 is now a *choice* rather than an impossibility.
+>
+> Found incidentally while chasing the blank footer labels, which is worth
+> noting on its own: the probe commands in `../pfpalette/pfpalette.lsp` §6 are
+> the cheapest way to settle any "does this API exist" question in this file.
+> Verify before recording another constraint as unattested.
 
 Tier 1 is also the only option consistent across *all* controls — the tab strip,
 buttons, frames and radios are Windows-themed regardless.
@@ -412,18 +560,24 @@ regression gate** — all three commands from the command line producing identic
 output (REFACTOR-PLAN). Skipping it means every engine bug surfaces as "the
 palette broke it."
 
-**Phase 1 — prove the deferred fire.** A throwaway button calling
-`vla-SendCommand` on the active document to run a trivial drawing command.
-Verify: real command context, undo group intact, palette survives the round trip,
-`CMDACTIVE` gating behaves. **Everything after this is blocked on it** — it's the
-one piece that can't be reasoned out from the samples.
+**Phase 1 — prove the deferred fire. ✅ PASSED 2026-07-27.** A throwaway button
+calling `vla-SendCommand` on the active document to run a trivial drawing
+command. All four checks held: real command context (`getpoint` prompted *and*
+returned — the strongest signal available), undo group intact (one `U` peeled
+it), palette survived the round trip (Help greyed and came back), and
+`CMDACTIVE` gating refused against a live `PLINE`.
+
+`pfp:cmd-idle-p` and `pfp:defer` now live in `../pfpalette/pfpalette.lsp`
+**SECTION 2** and are the only channel any verb may use. They were *removed*
+from `pfp-proof.lsp` rather than copied — two definitions of the gate would let
+the proof pass against code the palette doesn't run.
 
 **Phase 2 — the ticket channel.** Thin `C:PFLABELRUN` / `C:PFINVERTRUN` /
 `C:PFXLABELRUN` reading a global ticket and calling `pfX:run` under
 `pf:run-command`. Plus the `*pf-preset-target*` graft into `pfs:choose-or-place`
 — consumed and cleared at the top, so the deferred command never opens `pf_pick`.
 That global was never implemented (`Low_Priority_issues.md:4`) and
-`pfs:choose-or-place` **may write** (an unplaced pick places on the fly), so a
+`pfs:choose-or-place` **may write** (a registered pick anchors on the fly), so a
 palette-initiated path must not be able to trigger a placement.
 
 **Phase 3 — Registry verbs.**
@@ -489,11 +643,11 @@ found after Phase 2 gets blamed on the palette.
 
 ## 11. Divergences from `pfpalette.lsp`
 
-**(a) `metaList` may overflow.** `pfp:meta-rows` emits **9** rows for an anchored
-line and 4 for a registered one. At ~24px per row that's ~216px. Check the
-panel's Height in Studio — if it's under that, `metaList` scrolls on every
-anchored line. Either accept the scroll or grow the panel and push `lvwLinkage`
-down.
+**(a) `metaList` may overflow — RESOLVED, no action.** `pfp:meta-rows` emits
+**9** rows for an anchored line and 4 for a registered one, estimated at ~216px
+against a 168px panel. The field test (PALETTE-TESTING 2.11) found all 9 rows
+visible with **no scrollbar and room to spare** — the ~24px row estimate was too
+tall. Nothing to grow, nothing to accept.
 
 **(b) Pick buttons 4 and 5 are crossed** — §5.
 

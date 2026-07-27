@@ -15,6 +15,13 @@ point the label commands use.
   convention, auto-binds the _INV/_TOP .pro pair, writes NOD stubs, files
   GEOM + TWIN once. No matching .cl, ambiguous match, or a .cl with no
   grid name = REPORTED AND SKIPPED, never guessed.
+- **Late .pro binding (Refresh)** — the same scan re-checks lines it
+  already knows, in both stores: a registered stub (`pfa:stub-put`) and an
+  anchored profile's FILES record (`pfa:files-put`, checksum computed on the
+  fly, TIN pair + material preserved). Covers the normal case where the
+  `.cl` lands first and the _INV/_TOP pair is cut later. **Fill-empty
+  only** — an occupied slot is never overwritten or re-pointed, so
+  Refresh cannot undo a deliberate binding; that stays Edit's job.
 - **USER (placement)** — promotes stub → anchor, per grid: dialog
   (identity override, scales, file bindings, DATUM typed) → pick
   LOWER-LEFT → pick TOP-RIGHT (EXTENTS ONLY — no scale is measured from
@@ -27,8 +34,8 @@ point the label commands use.
 ## Public API
 
 - `pfs:choose-or-place` → anchor | nil — THE registry pick for the label
-  commands (pf_pick dialog): a PLACED profile returns its anchor; choosing
-  an unplaced one IS consent to place it on the fly. **May write** (a
+  commands (pf_pick dialog): an ANCHORED profile returns its anchor; choosing
+  a registered one IS consent to anchor it on the fly. **May write** (a
   placement runs in its own undo group via `*pfs-undo-open*`).
 - `C:PFSETUP` — runs under `pf:run-command` (flush nil); body `pfs:cmd`.
 
@@ -50,6 +57,15 @@ internal to this command's flow. Writers (`pfs:auto`, `pfs:place-one`,
 
 ## Open issues local to this file
 
+- **No GEOM re-file path (2026-07-27).** `pfs:auto` short-circuits any line
+  that is already placed or already named, so `(pf:cl-geom m T)` is never
+  reached for an existing registry entry. GEOM is filed **once**, at first
+  registration or at placement — which means a drawing registered before
+  `pf:cl-parse` landed keeps its SAMPLED records (and its Road-API-walked
+  vertices) until a `.cl` changes on disk or a new anchor is placed.
+  Re-running PFSETUP does **not** upgrade them. A `PFRECACHE`-style command
+  that walks the registry and re-files inside one undo group is designed but
+  not built — see root README §11.
 - "Place All" fires an unskippable dialog parade; wants a pausable flow —
   [../OPEN-ISSUES.md](../OPEN-ISSUES.md) PFSETUP.
 - Setup dialogs should be larger — [../OPEN-ISSUES.md](../OPEN-ISSUES.md).

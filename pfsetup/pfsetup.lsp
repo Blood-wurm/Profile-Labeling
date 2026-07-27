@@ -337,20 +337,95 @@
       (setq found (strcat dir f))))
   found)
 
+;; (pfs:nz s) -> s | nil     ("" and nil both read as UNBOUND)
+;;   The records store an absent binding as "", not nil (see pfa:files-put /
+;;   pfa:stub-put).  Every rebind decision below turns on "is this slot
+;;   empty", so both spellings have to collapse to one before testing.
+(defun pfs:nz (s) (if (and s (/= s "")) s))
+
+;;; ---- late .pro binding (Refresh re-checks an already-registered line) ----
+;;; A grid is routinely registered BEFORE its profiles exist -- the .cl lands
+;;; first and the _INV/_TOP pair is cut later.  Without this, that pair stays
+;;; invisible forever: AUTO's idempotence used to mean "already known = skip
+;;; entirely", so Refresh re-scanned only for NEW names.
+;;;
+;;; The rule is FILL-EMPTY-ONLY, in both stores: a slot that is already bound
+;;; is never overwritten and never re-pointed, even if a different file now
+;;; matches the naming convention.  Refresh therefore cannot silently undo a
+;;; deliberate binding made in the setup/Edit dialog -- rebinding an occupied
+;;; slot stays that dialog's job.  Filling an empty one is exactly what first
+;;; registration would have done, so it guesses nothing new.
+
+;; (pfs:rebind-stub ty nm stub proDir) -> 1 if a slot was filled, else 0
+(defun pfs:rebind-stub (ty nm stub proDir / inv top ninv ntop)
+  (setq inv  (pfs:nz (cdr (assoc 4 stub)))
+        top  (pfs:nz (cdr (assoc 5 stub)))
+        ninv nil ntop nil)
+  (if (and proDir (null inv)) (setq ninv (pfs:pro-lookup proDir ty nm "INV")))
+  (if (and proDir (null top)) (setq ntop (pfs:pro-lookup proDir ty nm "TOP")))
+  (cond
+    ((or ninv ntop)
+     (pfa:stub-put ty nm (cdr (assoc 1 stub))
+                   (if inv inv ninv) (if top top ntop))
+     (pfs:report-fill ty nm ninv ntop "registered")
+     1)
+    (T 0)))
+
+;; (pfs:rebind-anchor ty nm anchor proDir) -> 1 if a slot was filled, else 0
+;;   Read-modify-write: FILES also carries the TIN pair, the material and the
+;;   per-.pro checksums, so the untouched codes are read back and re-written
+;;   verbatim.  A newly bound .pro gets its checksum computed now, which is
+;;   what the PFINVERT drift check reads later.
+(defun pfs:rebind-anchor (ty nm anchor proDir / files inv top ninv ntop)
+  (setq files (pfa:files-get anchor)
+        inv   (pfs:nz (cdr (assoc 1 files)))
+        top   (pfs:nz (cdr (assoc 2 files)))
+        ninv  nil ntop nil)
+  (if (and proDir (null inv)) (setq ninv (pfs:pro-lookup proDir ty nm "INV")))
+  (if (and proDir (null top)) (setq ntop (pfs:pro-lookup proDir ty nm "TOP")))
+  (cond
+    ((or ninv ntop)
+     (pfa:files-put anchor
+                    (if inv inv ninv)
+                    (if inv (pfs:nz (cdr (assoc 300 files)))
+                            (pf:checksum-file ninv))
+                    (if top top ntop)
+                    (if top (pfs:nz (cdr (assoc 301 files)))
+                            (pf:checksum-file ntop))
+                    (pfs:nz (cdr (assoc 3 files)))
+                    (pfs:nz (cdr (assoc 4 files)))
+                    (pfs:nz (cdr (assoc 5 files))))
+     (pfs:report-fill ty nm ninv ntop "anchored")
+     1)
+    (T 0)))
+
+;; (pfs:report-fill ty nm ninv ntop state) -> nil   (loud, like every AUTO line)
+;;   Reports only the slots this pass FILLED.  A role that is absent here was
+;;   either already bound or still has no file -- either way this pass did not
+;;   touch it, so it is not named.
+(defun pfs:report-fill (ty nm ninv ntop state)
+  (prompt (strcat "\n  Bound " ty " '" nm "' (" state ")"
+                  (if ninv (strcat " + INV " (pfs:file-display ninv)) "")
+                  (if ntop (strcat " + TOP " (pfs:file-display ntop)) ""))))
+
 ;; (pfs:auto) -> nil
 ;;   Names every profile the sheet declares; loud-skips both directions.
-;;   Idempotent -- placed profiles and existing stubs pass through.
+;;   Idempotent -- a anchored profile or an existing stub is never re-named,
+;;   but both are re-checked for .pro files that appeared since (fill-empty
+;;   only; see the rebind helpers above).
 ;;   ONE undo group wraps the whole scan's writes (stubs + GEOM + TWIN
 ;;   records): a U after AUTO peels the entire registration, and an Esc
 ;;   mid-scan is closed by pf:run-error via the *pfs-undo-open* flag.
-(defun pfs:auto ( / names pair ty nm m inv top new f base pos clDir proDir)
+(defun pfs:auto ( / names pair ty nm m inv top new fill a st f base pos
+                    clDir proDir)
   (prompt "\nAUTO registration: naming profiles sheet-wide...")
 
   ;; Fetch standard directories independently
   (setq clDir  (pfset:get-company-dir "cl")
         proDir (pfset:get-company-dir "pro")
         names  (pfs:scan-sheet-names)
-        new    0)
+        new    0
+        fill   0)
 
   (if (null clDir)
     (prompt "\n  Cannot auto-register: Centerline directory not found.")
@@ -361,8 +436,12 @@
         (foreach pair names
           (setq ty (car pair) nm (cdr pair))
           (cond
-            ((pfa:find-anchor nm ty))            ; placed -- nothing to do
-            ((pfa:stub-get ty nm))               ; already named
+            ;; anchored / already named -- never re-named, but a .pro pair that
+            ;; landed after registration is picked up into the empty slots
+            ((setq a (pfa:find-anchor nm ty))
+             (setq fill (+ fill (pfs:rebind-anchor ty nm a proDir))))
+            ((setq st (pfa:stub-get ty nm))
+             (setq fill (+ fill (pfs:rebind-stub ty nm st proDir))))
             (T
              ;; Route centerline lookup to clDir
              (setq m (pfs:cl-lookup clDir ty nm))
@@ -402,7 +481,11 @@
                        (null (pfa:stub-get ty nm)))
                 (prompt (strcat "\n  NOTE: " f
                                 " has no grid name on the sheet."))))))
-        (prompt (strcat "\n  " (itoa new) " profile(s) named.")))))
+        (prompt (strcat "\n  " (itoa new) " profile(s) named, "
+                        (itoa fill) " late .pro binding(s) added."))
+        (if (and (null proDir) (> (length names) 0))
+          (prompt (strcat "\n  NOTE: no Profile directory configured -- "
+                          ".pro binding was not attempted."))))))
   (princ))
 
 
@@ -482,7 +565,7 @@
            cl (cdr (assoc 'cl res)))
      (cond
        ((pfa:find-anchor nm ty)
-        (prompt (strcat "\n" ty " '" nm "' is already PLACED -- use Edit."))
+        (prompt (strcat "\n" ty " '" nm "' is already ANCHORED -- use Edit."))
         nil)
        ((null (setq rng (pf:cl-range cl)))
         (prompt (strcat "\nREFUSED -- could not read a station range from "
@@ -499,14 +582,14 @@
               anchor (pfa:write-anchor nm ty xf cl))
         (pfa:meta-put anchor cl (pf:checksum-file cl))
         ;; file the .cl shape now (no-op if AUTO already did) so a directly
-        ;; placed profile is cached too -- label commands never re-trace it
+        ;; anchored profile is cached too -- label commands never re-trace it
         (pf:cl-geom cl T)                          ; in-group: filing allowed
         (pfa:twin-put cl (pf:cl-twin-handle cl *pf-corridor*)) ; file the drawn twin
         (setq notes (pfs:bind-files anchor res))
         (pfa:status-put anchor 0 notes)
         (if stub (pfa:stub-del (car stub) (cadr stub)))
         (pf:undo-end '*pfs-undo-open*)
-        (prompt (strcat "\n  Placed.  Sta " (pf:fmt-station (car rng))
+        (prompt (strcat "\n  Anchored.  Sta " (pf:fmt-station (car rng))
                         " to " (pf:fmt-station (cadr rng))
                         ", datum " (rtos datum 2 2)
                         ".  (One U reverses this grid.)"))
@@ -565,7 +648,7 @@
   init)
 
 ;; (pfs:edit-one anchor) -> nil
-(defun pfs:edit-one (anchor / init res at old-cl rm pts ed ins xs ys datum
+(defun pfs:edit-one (anchor / init res at old-cl rm pts ed ins ext xs ys datum
                       xf notes r)
   (prompt (strcat "\nEditing " (pfa:anchor-title anchor) "."))
   (foreach r (pfa:corner-check anchor)
@@ -596,7 +679,7 @@
            (prompt (strcat "\nREFUSED -- the new .cl has a DIFFERENT "
                            "station range: that is a rebuild, not a swap.  "
                            "PFREMOVE " (pfa:anchor-title anchor)
-                           ", then place it fresh.")))
+                           ", then anchor it fresh.")))
           (T
            (if (eq rm 'UNKNOWN)
              (if (and old-cl (/= old-cl "")
@@ -610,9 +693,10 @@
              (progn
                (setq ed  (entget anchor)
                      ins (cdr (assoc 10 ed))
-                     xs  (cdr (assoc 41 ed))
-                     ys  (cdr (assoc 42 ed)))
-               (if (and xs (> xs 2.0))
+                     ext (pfa:extents anchor)   ; attributes, or legacy scales
+                     xs  (car ext)
+                     ys  (cadr ext))
+               (if (and xs ys)
                  (setq pts (list (list (car ins) (cadr ins))
                                  (list (+ (car ins) xs)
                                        (+ (cadr ins) ys))))
@@ -643,11 +727,11 @@
 (defun pfs:reg-item (r)
   (strcat (pfset:pad (car r) 12)
           (pfset:pad (strcat "'" (cadr r) "'") 28)
-          (if (eq (caddr r) 'PLACED) "[PLACED]" "[unplaced]")))
+          (if (eq (caddr r) 'ANCHORED) "[ANCHORED]" "[registered]")))
 
 ;; (pfs:choose-or-place) -> anchor | nil
-;;   Registry pick for the label commands (pf_pick dialog): a PLACED profile
-;;   returns its anchor; choosing an unplaced one IS consent to place it --
+;;   Registry pick for the label commands (pf_pick dialog): an ANCHORED profile
+;;   returns its anchor; choosing a registered one IS consent to anchor it --
 ;;   no confirm (single-target path; All-mode batch skipping lives in the
 ;;   callers).
 (defun pfs:choose-or-place ( / reg pick r)
@@ -663,7 +747,7 @@
        ((null pick) nil)
        (T
         (setq r (nth pick reg))
-        (if (eq (caddr r) 'PLACED)
+        (if (eq (caddr r) 'ANCHORED)
           (nth 3 r)
           (pfs:place-one (nth 4 r))))))))
 
@@ -684,29 +768,29 @@
   (setq i (pfs:rd-sel))
   (cond
     ((null i) (set_tile "error" "Select a profile first."))
-    ((eq (caddr (nth i r-reg)) 'PLACED)
-     (set_tile "error" "Already placed -- use Edit."))
+    ((eq (caddr (nth i r-reg)) 'ANCHORED)
+     (set_tile "error" "Already anchored -- use Edit."))
     (T (setq r-idx i) (done_dialog 2))))
 
 (defun pfs:rd-edit ( / i)
   (setq i (pfs:rd-sel))
   (cond
     ((null i) (set_tile "error" "Select a profile first."))
-    ((not (eq (caddr (nth i r-reg)) 'PLACED))
-     (set_tile "error" "Not placed yet -- use Place."))
+    ((not (eq (caddr (nth i r-reg)) 'ANCHORED))
+     (set_tile "error" "Not ANCHORED yet -- use Anchor."))
     (T (setq r-idx i) (done_dialog 4))))
 
 (defun pfs:rd-all ()
   (if (vl-member-if '(lambda (r) (eq (caddr r) 'STUB)) r-reg)
     (done_dialog 3)
-    (set_tile "error" "Nothing unplaced.")))
+    (set_tile "error" "Nothing left to anchor.")))
 
-;; Double-click is the smart verb: place an unplaced row, edit a placed one.
+;; Double-click is the smart verb: anchor a registered row, edit an anchored one.
 (defun pfs:rd-dbl ( / i)
   (if (setq i (pfs:rd-sel))
     (progn
       (setq r-idx i)
-      (done_dialog (if (eq (caddr (nth i r-reg)) 'PLACED) 4 2)))))
+      (done_dialog (if (eq (caddr (nth i r-reg)) 'ANCHORED) 4 2)))))
 
 ;; (pfs:registry-dialog r-reg) -> (verb . idx) | nil (Close)
 ;;   verbs: 'place 'place-all 'edit 'new 'refresh; idx 0-based (or nil).
@@ -735,12 +819,15 @@
         (action_tile "accept"    "(done_dialog 0)")
         (action_tile "help"
           (strcat "(pfset:help \"The registry is every profile this drawing "
-                  "knows: AUTO-named stubs and placed anchors.\\n\\n"
-                  "Place    anchor an unplaced profile's grid (dialog, two "
-                  "corner picks).\\nPlace All  every unplaced profile in "
-                  "turn.\\nEdit     rebind files / scales / datum on a "
-                  "placed grid.\\nNew      a profile the sheet scan "
-                  "missed.\\nRefresh  re-scan the sheet's PF-NAME text.\")"))
+                  "knows: AUTO-named stubs and anchored profiles.\\n\\n"
+                  "Anchor      anchor a registered profile's grid (dialog, two "
+                  "corner picks).\\nAnchor All  every registered profile in "
+                  "turn.\\nEdit        rebind files / scales / datum on an "
+                  "anchored grid.\\nNew         a profile the sheet scan "
+                  "missed.\\nRefresh     re-scan the sheet's PF-NAME text, and "
+                  "re-check every registered line for .pro files that "
+                  "appeared since (empty slots only -- an existing binding "
+                  "is never overwritten).\")"))
         (setq code (start_dialog))
         (unload_dialog dcl_id)
         (cond

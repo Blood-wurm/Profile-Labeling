@@ -176,6 +176,232 @@
   (if (setq rng (pf:cl-range clfile))
     (pf:cl-sample-range clfile (car rng) (cadr rng) *pfx-sample-step*)))
 
+;;; ---- The .cl FILE parser  (exact vertices, authored stations) -------------
+;;; Format probe CLOSED 2026-07-27 against Carlson_References/*.cl.  A .cl is
+;;; CSV, one row per alignment point, terminated by "0,0,L,0,0":
+;;;
+;;;   0, station, L,  northing, easting     tangent PI
+;;;   0, station, PC, northing, easting     start of arc
+;;;   0, delta,   R,  northing, easting     the arc's RADIUS POINT (centre)
+;;;   0, station, PT, northing, easting     end of arc
+;;;
+;;; FOUR THINGS THAT BITE, every one of them SILENT if missed:
+;;;   1. column 2 on an R row is the DELTA, not a station -- read it
+;;;      positionally and negative "stations" splice into the list.
+;;;   2. that delta is packed DD.MMSSsss, NOT decimal degrees:
+;;;      -21.575746298 is -21d57'57.46" = -21.96596 deg.
+;;;   3. columns 4/5 on an R row are the arc CENTRE, not a vertex.  Push it
+;;;      into the shape and the polyline grows a leg running hundreds of feet
+;;;      off the alignment (985 ft, on the sample set's flattest curve).
+;;;   4. the file is NORTHING,EASTING; the drawing is X=easting, Y=northing.
+;;;      A swapped parse reflects the alignment about y=x: correct lengths,
+;;;      correct radii, correct stations, ~971,000 ft from where it belongs,
+;;;      and nothing errors -- every structure just reads as "not on any named
+;;;      centerline".  Confirmed by ID on the live drawing (Storm_BA start
+;;;      X = 1804451.14 = column 5) and re-checked per file by pf:cl-parse-ok-p.
+;;;
+;;; Stations are measured ALONG THE ARC, so a curve's station delta IS its arc
+;;; length -- which, with the centre, fixes the sweep without having to trust
+;;; the delta at all.  The delta's SIGN gives turn direction (negative = right,
+;;; in drawing space); its magnitude is used only as a cross-check.
+;;;
+;;; ARCS ARE DENSIFIED at *pfx-sample-step*, not carried as curves: the GEOM
+;;; store holds points.  Densified points sit exactly ON the arc with exactly
+;;; interpolated stations -- only the chords BETWEEN them cut the corner, by
+;;; R(1-cos(sweep/2n)), which is ~0.005 ft on the tightest curve in the sample
+;;; set (R=104) against a 0.2 ft corridor.  Carrying true bulges is the better
+;;; long answer and does not require this parser to be rewritten.
+
+;; (pf:dms->deg packed) -> signed decimal degrees.  DD.MMSSsss -> DD.dddddd
+(defun pf:dms->deg (v / sgn d r m s)
+  (setq sgn (if (< v 0) -1.0 1.0)
+        v   (abs v)
+        d   (fix v)
+        r   (* (- v d) 100.0)                  ; MM.SSsss
+        m   (fix r)
+        s   (* (- r m) 100.0))
+  (* sgn (+ d (/ m 60.0) (/ s 3600.0))))
+
+;; (pf:cl-arc-points cx cy pc pt delta) -> intermediate (x y sta), PC/PT EXCLUDED
+;;   pc/pt are (x y sta).  Sweep magnitude comes from the STATIONING
+;;   (arclen / R) because that is what the label maths must agree with; the
+;;   file's delta supplies only the direction, and its magnitude is checked
+;;   against the stationing rather than trusted over it.
+(defun pf:cl-arc-points (cx cy pc pt delta / r rt arclen a0 sweep n i tt out)
+  (setq r      (distance (list cx cy) (pf:pt2 pc))
+        rt     (distance (list cx cy) (pf:pt2 pt))
+        arclen (- (caddr pt) (caddr pc)))
+  (cond
+    ((or (<= r 1e-6) (<= arclen 1e-6)) nil)
+    (T
+     (if (> (abs (- r rt)) 0.01)
+       (prompt (strcat "\n  Warning: .cl arc at sta " (pf:fmt-station (caddr pc))
+                       " -- centre is " (rtos r 2 3) " from PC but "
+                       (rtos rt 2 3) " from PT; arc suspect.")))
+     (setq a0    (atan (- (cadr pc) cy) (- (car pc) cx))
+           sweep (/ arclen r))                        ; radians, magnitude
+     (if (< delta 0) (setq sweep (- sweep)))          ; negative delta = right
+     ;; cross-check the file's own delta against what the stationing implies
+     (if (> (abs (- (abs (pf:dms->deg delta))
+                    (/ (* (abs sweep) 180.0) pi))) 0.05)
+       (prompt (strcat "\n  Warning: .cl arc at sta " (pf:fmt-station (caddr pc))
+                       " -- delta reads " (rtos (abs (pf:dms->deg delta)) 2 4)
+                       " deg but stationing implies "
+                       (rtos (/ (* (abs sweep) 180.0) pi) 2 4)
+                       " deg; stationing used.")))
+     (setq n (fix (+ (/ arclen *pfx-sample-step*) 0.9999)))
+     (if (< n 1) (setq n 1))
+     (setq out '() i 1)
+     (while (< i n)
+       (setq tt  (/ (float i) (float n))
+             out (cons (list (+ cx (* r (cos (+ a0 (* sweep tt)))))
+                             (+ cy (* r (sin (+ a0 (* sweep tt)))))
+                             (+ (caddr pc) (* arclen tt)))
+                       out)
+             i   (1+ i)))
+     (reverse out))))
+
+;; (pf:cl-parse-ok-p clfile verts) -> T | nil
+;;   The pf:pro-verts precedent (line 92: cross-check the parse against the
+;;   trusted authored reader) applied to the .cl.  Two Road-API calls, on a
+;;   GEOM miss only -- against the ~570-2200 the walk it replaces would cost.
+;;     - station domain: parsed first/last station vs cl_sta_range
+;;     - coordinate order: parsed first vertex vs cl_location_at_sta there
+;;   A mismatch REFUSES the parse (caller falls back to the walk) rather than
+;;   silently correcting it.  The swapped case is called out by name because
+;;   that is the one failure that otherwise looks like missing data.
+(defun pf:cl-parse-ok-p (clfile verts / rng v0 vn r p)
+  (setq v0 (car verts) vn (last verts))
+  (cond
+    ((null (setq rng (pf:cl-range clfile)))
+     (prompt (strcat "\n  Note: no station range from the Road API for "
+                     (vl-filename-base clfile)
+                     " -- parse accepted unverified."))
+     T)
+    ((> (abs (- (caddr v0) (car rng))) 0.01)
+     (prompt (strcat "\n  Warning: parsed .cl start sta "
+                     (pf:fmt-station (caddr v0)) " but the API reports "
+                     (pf:fmt-station (car rng)) " -- parse REFUSED."))
+     nil)
+    ((> (abs (- (caddr vn) (cadr rng))) 0.01)
+     (prompt (strcat "\n  Warning: parsed .cl end sta "
+                     (pf:fmt-station (caddr vn)) " but the API reports "
+                     (pf:fmt-station (cadr rng)) " -- parse REFUSED."))
+     nil)
+    (T
+     (setq r (vl-catch-all-apply *pf-road-fn*
+               (list "cl_location_at_sta" clfile (caddr v0))))
+     (cond
+       ((or (vl-catch-all-error-p r) (not (listp r)) (not (listp (car r))))
+        (prompt (strcat "\n  Note: could not locate the start station of "
+                        (vl-filename-base clfile)
+                        " for a coordinate check -- station domain matched, "
+                        "parse accepted."))
+        T)
+       (T
+        (setq p (pf:pt2 (car r)))
+        (cond
+          ((<= (distance p (pf:pt2 v0)) *pf-corridor*) T)
+          ((<= (distance p (list (cadr v0) (car v0))) *pf-corridor*)
+           (prompt (strcat "\n  Warning: " (vl-filename-base clfile)
+                           " parses SWAPPED -- its columns are easting,northing,"
+                           " not northing,easting.  Parse REFUSED (the shape"
+                           " would be mirrored about y=x)."))
+           nil)
+          (T
+           (prompt (strcat "\n  Warning: parsed .cl start point is "
+                           (rtos (distance p (pf:pt2 v0)) 2 2)
+                           " ft from where the API puts it ("
+                           (vl-filename-base clfile) ") -- parse REFUSED."))
+           nil)))))))
+
+;; (pf:cl-parse clfile) -> ((x y sta) ...) | nil
+;;   Drawing coordinates, strictly ascending station, arcs densified.  nil
+;;   means this file is not parseable under the documented grammar and the
+;;   CALLER must fall back to the Road-API walk.  NEVER GUESSES: one unknown
+;;   row code refuses the whole file, because the failure mode of guessing
+;;   (a curve read as a chord) is silent and wrong rather than loud.
+(defun pf:cl-parse (clfile / f line parts v flag c4 c5 out pc ptv cen delta
+                             done bad prev keep)
+  (setq out '() pc nil cen nil delta nil done nil bad nil)
+  (if (null (setq f (open clfile "r")))
+    (setq bad "could not be opened")
+    (progn
+      (while (and (not done) (not bad) (setq line (read-line f)))
+        (setq parts (pf:split line ","))
+        (if (>= (length parts) 5)
+          (progn
+            (setq v    (atof (pf:trim (nth 1 parts)))
+                  flag (strcase (pf:trim (nth 2 parts)))
+                  c4   (atof (pf:trim (nth 3 parts)))
+                  c5   (atof (pf:trim (nth 4 parts))))
+            (cond
+              ;; "0,0,L,0,0" -- end of alignment, not a vertex at the origin
+              ((and (equal v 0.0 1e-9) (equal c4 0.0 1e-9) (equal c5 0.0 1e-9))
+               (setq done T))
+              ;; X = easting = col 5, Y = northing = col 4  (see note 4 above)
+              ((= flag "L")
+               (setq out (cons (list c5 c4 v) out)
+                     pc nil cen nil delta nil))
+              ((= flag "PC")
+               (setq pc  (list c5 c4 v)
+                     out (cons pc out)
+                     cen nil delta nil))
+              ((= flag "R")
+               (if (null pc)
+                 (setq bad "an R (radius point) row with no preceding PC")
+                 (setq cen (list c5 c4) delta v)))
+              ((= flag "PT")
+               (if (not (and pc cen delta))
+                 (setq bad "a PT row without its PC/R pair")
+                 (progn
+                   (setq ptv (list c5 c4 v))
+                   (foreach p (pf:cl-arc-points (car cen) (cadr cen)
+                                                pc ptv delta)
+                     (setq out (cons p out)))
+                   (setq out (cons ptv out) pc nil cen nil delta nil))))
+              (T (setq bad (strcat "unknown row code '" flag "'")))))))
+      (close f)))
+  (setq out (reverse out))
+  ;; Station must ASCEND -- every consumer assumes it.  But not every repeat is
+  ;; a fault: a COMPOUND curve emits the first arc's PT and the second's PC at
+  ;; the same point and the same station, and a duplicate vertex must be
+  ;; DROPPED, not used to refuse the file.  Only two things are real faults --
+  ;; a station that goes backwards, and a station that repeats while the point
+  ;; MOVES (which would break station->X for everything between).  The two get
+  ;; separate messages because they mean different things about the .cl.
+  (if (and (not bad) (cdr out))
+    (progn
+      (setq keep (list (car out)) prev (car out))
+      (foreach p (cdr out)
+        (cond
+          (bad)
+          ((> (caddr p) (caddr prev))
+           (setq keep (cons p keep) prev p))
+          ((and (equal (caddr p) (caddr prev) 1e-6)
+                (<= (distance (pf:pt2 p) (pf:pt2 prev)) 1e-4)))   ; duplicate -- drop
+          ((equal (caddr p) (caddr prev) 1e-6)
+           (setq bad (strcat "station " (pf:fmt-station (caddr p))
+                             " REPEATS while the point moves "
+                             (rtos (distance (pf:pt2 p) (pf:pt2 prev)) 2 2)
+                             " ft")))
+          (T
+           (setq bad (strcat "station DECREASES to " (pf:fmt-station (caddr p))
+                             " after " (pf:fmt-station (caddr prev)))))))
+      (setq out (reverse keep))))
+  (cond
+    (bad
+     (prompt (strcat "\n  Note: " (vl-filename-base clfile) ".cl -- " bad
+                     "; falling back to the station walk."))
+     nil)
+    ((< (length out) 2)
+     (prompt (strcat "\n  Note: " (vl-filename-base clfile)
+                     ".cl parsed fewer than 2 vertices; falling back to the "
+                     "station walk."))
+     nil)
+    ((null (pf:cl-parse-ok-p clfile out)) nil)
+    (T out)))
+
 ;; (pf:cl-verts clfile) -> list of (x y) | nil
 ;;   .cl sampling; endpoint chord as a flagged fallback (curves may be missed).
 (defun pf:cl-verts (clfile / pts ends)
@@ -203,23 +429,38 @@
 ;;   modeless palette handler) MUST pass nil -- a cache miss there costs one
 ;;   re-sample, never a drawing write.  Registration (PFSETUP) and discovery
 ;;   (PFXLABEL, inside its command undo group) pass T and own the filing.
-(defun pf:cl-geom (clfile write-p / cur cached rng vts)
+(defun pf:cl-geom (clfile write-p / cur cached rng vts kind)
   (setq cur (pf:checksum-file clfile))
   (cond
     ((null cur) nil)                              ; .cl unreadable
     ((and (setq cached (pfa:geom-get clfile))
           (= (car cached) cur))
      (cons (cadr cached) (caddr cached)))         ; HIT -- no Road-API call
-    (T                                            ; MISS -- sample; file only when allowed
-     (setq rng (pf:cl-range clfile)
-           vts (pf:cl-verts clfile))
+    (T                                            ; MISS -- read; file only when allowed
+     ;; EXACT FIRST (stage 2, landed 2026-07-27): pf:cl-parse reads the .cl
+     ;; file and returns stationed vertices for the cost of a file read.  The
+     ;; range comes off the parse itself -- its endpoints were verified against
+     ;; cl_sta_range inside pf:cl-parse-ok-p, so re-asking the API is waste.
+     ;; A refused parse falls all the way back to the old station walk, so no
+     ;; alignment this parser cannot read can regress.
+     (setq vts (pf:cl-parse clfile))
+     (if vts
+       (setq rng  (list (caddr (car vts)) (caddr (last vts)))
+             kind *pf-geom-exact*)
+       (setq rng  (pf:cl-range clfile)
+             vts  (pf:cl-verts clfile)
+             kind *pf-geom-sampled*))             ; walked verts carry no station
      (cond
-       ;; SAMPLED until pf:cl-parse lands (stage 2 flips storm/sanitary to EXACT
-       ;; with authoritative per-vertex stations); walked verts carry no station.
        ((and rng vts)
-        (if write-p (pfa:geom-put clfile cur rng vts *pf-geom-sampled*))
-        (cons rng vts))
-       (rng (cons rng vts))                       ; range only; don't file a miss
+        (if write-p (pfa:geom-put clfile cur rng vts kind))
+        ;; FILE the stationed triples (that is the whole point of EXACT), but
+        ;; RETURN plain (x y) -- the HIT branch returns pfa:collect-10, so both
+        ;; branches must agree.  This is not cosmetic: pf:poly-x feeds verts to
+        ;; `inters`, which reads a third element as Z and finds no intersection
+        ;; between segments hundreds of "feet" apart in a station-valued Z.
+        ;; Callers wanting stations read (nth 4 (pfa:geom-get ...)).
+        (cons rng (mapcar 'pf:pt2 vts)))
+       (rng (cons rng (if vts (mapcar 'pf:pt2 vts))))  ; range only; don't file
        (T nil)))))
 
 
@@ -255,9 +496,46 @@
                          (list (caar verts) (cadar verts))))
         (T 1e30)))
 
-;; (pf:in-corridor-p pt verts) -> T | nil
-(defun pf:in-corridor-p (pt verts)
-  (<= (pf:pt-poly-dist (list (car pt) (cadr pt)) verts) *pf-corridor*))
+;; (pf:in-corridor-p pt verts tol) -> T | nil
+;;   tol nil => *pf-corridor* (an EXACT shape: drawn-twin PIs).  A shape that
+;;   only approximates the .cl passes its own wider corridor -- see
+;;   *pf-corridor-sampled*.
+(defun pf:in-corridor-p (pt verts tol)
+  (<= (pf:pt-poly-dist (list (car pt) (cadr pt)) verts)
+      (if tol tol *pf-corridor*)))
+
+;; (pf:verts-bbox verts) -> (minx miny maxx maxy) | nil
+;;   Computed ONCE when the line table is built; the walk it saves is paid per
+;;   structure per line.
+(defun pf:verts-bbox (verts / minx miny maxx maxy v x y)
+  (if verts
+    (progn
+      (setq minx 1e30 miny 1e30 maxx -1e30 maxy -1e30)
+      (foreach v verts
+        (setq x (car v) y (cadr v))
+        (if (< x minx) (setq minx x))
+        (if (> x maxx) (setq maxx x))
+        (if (< y miny) (setq miny y))
+        (if (> y maxy) (setq maxy y)))
+      (list minx miny maxx maxy))))
+
+;; (pf:in-bbox-p pt box tol) -> T | nil    O(1) REJECTION GUARD
+;;   Sound with ZERO false negatives, and the proof does not mention the
+;;   line's shape: if q is the nearest point on the polyline to pt and
+;;   dist(pt,q) <= tol, then q is inside the box, and |pt.x - q.x| <= tol
+;;   (same for y), so pt is inside the box grown by tol.  Contrapositive:
+;;   anything this rejects was genuinely further than tol from the line.
+;;   Deflections change how much it SAVES (a hooked line has a loose box),
+;;   never what it DECIDES -- a false positive costs exactly the
+;;   pf:pt-poly-dist walk that would have run anyway.
+;;   The box is built from the SAME vertex list pf:pt-poly-dist walks, so the
+;;   two can never disagree (densified arcs included).
+(defun pf:in-bbox-p (pt box tol)
+  (and box
+       (>= (car pt)  (- (car box)   tol))
+       (<= (car pt)  (+ (caddr box) tol))
+       (>= (cadr pt) (- (cadr box)  tol))
+       (<= (cadr pt) (+ (cadddr box) tol))))
 
 
 ;;; ==========================================================================
@@ -265,13 +543,30 @@
 ;;; ==========================================================================
 
 ;; (pf:lines-at-point pt2d cl-table) -> list of unique (name station)
-;;   cl-table entries: (clfile name start end verts)
-(defun pf:lines-at-point (pt2d cl-table / hits res sta off nm verts lo hi seen)
+;;   cl-table entries: (clfile name start end verts [corridor-tol] [bbox])
+;;   Slots 6 and 7 are OPTIONAL -- absent (a 5-element entry from
+;;   pf:attach-corridor) means the exact *pf-corridor* and no bbox guard.
+;;
+;;   THE PRE-FILTER IS THE ERROR-PARADE GUARD.  Every point that gets past it
+;;   costs a cl_location_at_pt, and a miss makes EWORKS print "unable to locate
+;;   point along centerline" straight to the command line -- below LISP, where
+;;   pf:cl-locate-safe's vl-catch-all-apply cannot suppress it.  Keep verts on
+;;   every entry: nil verts here means every structure in the drawing is tested
+;;   against this line, and the parade is that product.
+(defun pf:lines-at-point (pt2d cl-table / hits res sta off nm verts lo hi seen
+                                          tol)
   (setq hits '() seen '())
   (foreach e cl-table
-    (setq nm (cadr e) verts (nth 4 e))
+    (setq nm    (cadr e)
+          verts (nth 4 e)
+          tol   (if (nth 5 e) (nth 5 e) *pf-corridor*))
     (if (and (not (member nm seen))
-             (or (null verts) (pf:in-corridor-p pt2d verts))
+             ;; O(1) box rejection BEFORE the O(verts) walk.  Most lines on a
+             ;; job are nowhere near a given structure, and this is what stops
+             ;; every one of them being walked end to end to find that out.
+             (or (null verts)
+                 (and (or (null (nth 6 e)) (pf:in-bbox-p pt2d (nth 6 e) tol))
+                      (pf:in-corridor-p pt2d verts tol)))
              (setq res (pf:cl-locate-safe (car e) pt2d)))
       (progn
         (setq sta (car res) off (abs (cadr res))
@@ -367,6 +662,13 @@
 (defun pf:y->elev (y xform)
   (+ (pf:xf-datum xform)
      (/ (- y (pf:xf-basey xform)) (pf:xf-vscale xform))))
+
+;; (pf:profile-x->station x xform) -> real   (inverse of station->profile-x)
+;;   Reads a DRAWN entity's X back as the station it was drawn at.  That is what
+;;   lets an orphaned label name its station instead of an ordinate.
+(defun pf:profile-x->station (x xform)
+  (+ (pf:xf-sta0 xform)
+     (/ (- x (pf:xf-leftx xform)) (pf:xf-hscale xform))))
 
 (defun pf:grid-top-y (xform) (pf:xf-topy xform))
 
@@ -965,11 +1267,43 @@
 ;;; SECTION 14  --  Content checksum + misc
 ;;; ==========================================================================
 
-;; (pf:checksum-file file) -> "a-b-n" | nil
-;;   Adler-style rolling checksum over the file's text content, line-ending
-;;   independent (read-line normalizes CRLF).  ~free on the few-KB .cl/.pro
-;;   files; certain, not probabilistic.  nil when the file can't be opened.
-(defun pf:checksum-file (file / f line a b n c)
+;; Adler-style rolling checksum over the file's text content, line-ending
+;; independent (read-line normalizes CRLF); certain, not probabilistic.
+;;
+;; ---- The memo in front of it ---------------------------------------------
+;; "~free on the few-KB .cl/.pro files" was true per call and wrong per RUN:
+;; pf:checksum-read walks every byte in interpreted LISP.  PFLABEL's gather
+;; checksums EVERY registry .cl on every run -- 47 full file reads on a real
+;; job -- purely to conclude that nothing changed.  The stat probe below is
+;; O(1) and answers the same question.
+;;
+;; CAVEAT: a file edited in place preserving BOTH mtime and size reads from
+;; the memo.  Session-scoped (cleared by a reload), and the content walk is
+;; still what fills it, so GEOM's self-validation is unchanged in kind.
+(setq *pf-cksum-cache* '())        ; (path systime size checksum)*
+
+;; (pf:checksum-file file) -> "a-b-n" | nil    memoised on (path, mtime, size)
+(defun pf:checksum-file (file / st sz cell ck)
+  (cond
+    ((or (null file) (= file "")) nil)
+    ((null (setq st (vl-file-systime file))) nil)      ; missing/unreadable
+    (T
+     (setq sz (vl-file-size file))
+     (if (and (setq cell (assoc file *pf-cksum-cache*))
+              (equal (cadr cell) st)
+              (equal (caddr cell) sz))
+       (cadddr cell)                                   ; HIT -- no file read
+       (progn
+         (setq ck (pf:checksum-read file))
+         (if ck
+           (setq *pf-cksum-cache*
+                 (cons (list file st sz ck)
+                       (vl-remove-if '(lambda (c) (= (car c) file))
+                                     *pf-cksum-cache*))))
+         ck)))))
+
+;; (pf:checksum-read file) -> "a-b-n" | nil   the content walk itself
+(defun pf:checksum-read (file / f line a b n c)
   (setq a 1 b 0 n 0)
   (if (and file (/= file "") (setq f (open file "r")))
     (progn

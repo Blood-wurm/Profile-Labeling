@@ -10,10 +10,11 @@ pfxlabel, pfinvert.
 ## What it owns
 
 The dependency root (with pfdraw): pure math, transforms, string helpers,
-name parsing, .cl sampling, membership, ranking, label composition,
-READ-ONLY drawing queries (ssget/entget/textbox), the Carlson API wrappers
-(Road API for stationing from .cl FILES, DTM API for surface elevation),
-the command-echo save/restore, and the zoom-to verification parade.
+name parsing, **.cl file parsing** and .cl sampling, membership, ranking,
+label composition, READ-ONLY drawing queries (ssget/entget/textbox), the
+Carlson API wrappers (Road API for stationing from .cl FILES, DTM API for
+surface elevation), the command-echo save/restore, and the zoom-to
+verification parade.
 
 ## Public API
 
@@ -25,26 +26,69 @@ Functions other files call (writers marked; everything else is a pure read).
   call can never clobber the user's saved value. Called by `pf:run-command`
   / `pf:run-error` (pfanchor).
 - `pf:cl-range clfile` → `(s0 s1)` | nil.
-- `pf:cl-locate-safe clfile pt` → `(sta offset projpt)` | nil — silences
-  Carlson console spam; radial fallback at termini only.
+- `pf:cl-locate-safe clfile pt` → `(sta offset projpt)` | nil — radial
+  fallback at termini only. **It does NOT silence Carlson's console output**
+  (an older comment claimed it did): a failed `cl_location_at_pt` prints
+  `Error: unable to locate point along centerline` from C++, below LISP,
+  where `vl-catch-all-apply` cannot reach it. The only defence is not making
+  the call — see the corridor pre-filter in `pf:lines-at-point`.
 - `pf:pro-z pro sta` / `pf:pro-verts pro` — authored profile reads
   (pro-verts parses the .pro file, the suite's ONE file read; cached).
 - `pf:pipe-at inv-pro top-pro sta` → `(inv-elev . nominal-size)` | nil.
 - `pf:cl-geom clfile write-p` → `(range . verts)` | nil — THE cached .cl
   seam. **write-p is the read/write contract:** gather paths pass nil (a
-  cache miss re-samples, never files); only PFSETUP registration and
+  cache miss re-reads, never files); only PFSETUP registration and
   PFXLABEL discovery (inside command undo groups) pass T. **WRITER when
-  write-p is T.**
+  write-p is T.** On a miss it tries `pf:cl-parse` FIRST and files
+  `*pf-geom-exact*`; only a refused parse falls back to the Road-API walk
+  and `*pf-geom-sampled*`. It **returns 2-element `(x y)` verts in both
+  cases** — the stationed triples go to the store, not to callers, because
+  `pf:poly-x` feeds verts to `inters`, which reads a third element as Z.
+  Read stations back with `(nth 4 (pfa:geom-get clfile))`.
+
+**The .cl file parser (§1, landed 2026-07-27):**
+- `pf:cl-parse clfile` → `((x y sta) ...)` | nil — reads the `.cl` directly:
+  drawing coordinates, ascending station, arcs densified at
+  `*pfx-sample-step*`. nil means the file is not parseable under the
+  documented grammar and the caller must fall back to the walk. Replaces
+  ~570–2200 Road-API calls per line with one file read.
+- `pf:cl-parse-ok-p clfile verts` → T | nil — verifies a parse against the
+  trusted authored reader before anything downstream trusts it (station
+  domain vs `cl_sta_range`, coordinate order vs `cl_location_at_sta`). Same
+  discipline as `pf:pro-verts`' station cross-check. Names the SWAPPED case
+  explicitly, since a mirrored parse is otherwise silent.
+- `pf:cl-arc-points cx cy pc pt delta` → intermediate `(x y sta)`, PC/PT
+  excluded. Sweep comes from the STATIONING (`arclen / R`), not the file's
+  delta; the delta gives only direction, and its magnitude is cross-checked
+  and warned about rather than trusted.
+- `pf:dms->deg packed` → signed decimal degrees. `.cl` deltas are packed
+  `DD.MMSSsss`, **not** decimal degrees.
+
+Format notes live in the section header above `pf:cl-parse` — the four
+silent traps (delta-not-station, packed DMS, centre-not-vertex, and
+northing/easting vs X/Y) are documented there and confirmed against
+`Carlson_References/*.cl`.
 
 **Geometry + membership (§2–3):** `pf:pt-seg-dist`, `pf:pt-poly-dist`,
-`pf:in-corridor-p`, `pf:lines-at-point pt2d cl-table` (the membership test —
-corridor pre-filter then `cl_location_at_pt`), `pf:sort-line-infos-alpha`,
-`pf:rank-on-line`, `pf:idx-add`.
+`pf:in-corridor-p pt verts tol` (**tol nil ⇒ `*pf-corridor*`**; a shape that
+only approximates the .cl passes its own wider corridor),
+`pf:lines-at-point pt2d cl-table` (the membership test — corridor pre-filter
+then `cl_location_at_pt`), `pf:sort-line-infos-alpha`, `pf:rank-on-line`,
+`pf:idx-add`.
+
+`cl-table` entries are `(clfile name lo hi verts [corridor-tol])`. The 6th
+slot is OPTIONAL — absent means the exact `*pf-corridor*`. **The pre-filter
+is the error-parade guard:** every point that gets past it costs a
+`cl_location_at_pt`, and a miss prints to the command line from below LISP.
+An entry with nil verts turns the filter OFF for that line and tests every
+structure in the drawing against it.
 
 **The xform alist (§4):** `pf:make-xform`, `pf:xf-get` / `pf:xf-put`, the
 `pf:xf-*` accessors (the ONLY sanctioned way to read one), `pf:xf-sf`,
 `pf:scale-factor`, `pf:text-height`, `pf:station->profile-x`,
-`pf:elev->profile-y`, `pf:grid-top-y`.
+`pf:elev->profile-y`, `pf:grid-top-y`, and the two inverses `pf:y->elev` /
+`pf:profile-x->station` (reads a DRAWN entity's X back as the station it was
+drawn at — what lets an orphaned label name its station).
 
 **Strings, naming, layers (§5–7):** `pf:join`, `pf:split`, `pf:trim`,
 `pf:subst-token`, `pf:index-of`, `pf:cl-id` (canonical file identity — the
@@ -81,6 +125,11 @@ ops only — never an entity write.
 - This file may NEVER know what an anchor is, read a record, or reference a
   dialog. Nothing here writes the drawing (the §15 ZOOM/DELAY calls are
   view ops; `pf:cl-geom` files only through the pfa: seam when write-p).
+- `pf:cl-parse` **never guesses**: one unknown row code refuses the whole
+  file. The failure mode of guessing (a curve silently read as a chord) is
+  wrong-and-quiet; refusing costs only a fallback to the walk.
+- Anything returning verts to a CALLER returns 2-element points. Stationed
+  triples exist only between the parser and the GEOM store.
 - The top-of-grid probe takes the HIGHEST hit (grids have stepped tops);
   never conflate with the dead invert probe.
 - `pf:echo-off`/`on` are save-once: only an empty save slot is written.

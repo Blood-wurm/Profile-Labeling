@@ -27,7 +27,11 @@ EVERYTHING AT PIPE ELEVATION. At each structure on the primary line:
 
 Layer rule, pass ledger, undo: identical to PFLABEL (pass "INVERT";
 CLAYER → "INVERT-CLAYER", fire-and-forget). Own run dialog `pfi_run`
-(pi_* tiles), standalone so invert-specific fields can grow.
+(pi_* tiles) — but only the DIALOG is local. The gather-compute is
+`pflabel:gather-compute`, the one copy: `pfi:rd-compute` was a line-for-line
+duplicate of `pflabel:rd-compute` until 2026-07-27, and the duplicate had
+already silently missed the drift echo. **No `.pro` is read on the gather
+path** — the profile work is all downstream in the engine.
 
 ## Public API
 
@@ -57,6 +61,14 @@ bracket), `pfi:lateral-info`, `pfi:endpoint-hits`, `pfi:inv-row`,
 - `write-pass` validates the _INV .pro checksum AFTER labeling → STATUS.
 - Line table comes from the ONE builder (`pflabel:registry-pairs`), so
   PFINVERT and PFLABEL cannot disagree about a junction's line set.
+- The gather-compute is likewise ONE copy (`pflabel:gather-compute`), so the
+  two cannot disagree about which structures are on a line or which already
+  carry a pass. Invert-specific compute, if it ever arrives, composes on top
+  of the shared call rather than forking it again — this divergence has
+  already cost the suite three times (registry builder, same-type
+  membership, drift echo).
+- `pfi:rd-fill` shows the drift count in the `error` tile; the full DRIFT
+  block prints from the shared gather.
 
 ## Open issues local to this file
 
