@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Binary — never touch these
+*.arx binary
+*.dll binary
+*.odcl binary
+*.dwg binary
+*.pdf binary
+*.png binary
+*.bmp binary
