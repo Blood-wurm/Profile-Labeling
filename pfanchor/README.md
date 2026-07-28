@@ -12,8 +12,8 @@ pfpalette (+ pftools-lib's `pf:cl-geom` reads the GEOM store back through
 
 The V4 model: the anchor IS the grid record; crossings are one field among
 many. PFSETUP creates the record; every other command reads/updates it.
-Also home to the shared command wrapper (`pf:run-command`, audit #9) and
-C:PFREMOVE (teardown).
+Also home to the shared command wrapper (`pf:run-command`, audit #9),
+C:PFREMOVE (teardown), and C:PFINDEX + the membership index (§4b).
 
 - **STUB** — AUTO registration writes identity-only stubs to the DRAWING
   dictionary (NOD "PFTOOLS", keys `STUB_<TYPE>_<NAME>`): profile exists,
@@ -54,12 +54,32 @@ C:PFREMOVE (teardown).
   `pfa:reanchor` writes back to whichever storage the anchor already uses —
   stamping the icon scale onto a pre-icon anchor would shrink its recorded
   grid to a few feet.
-- **LEDGER** — extension dictionary "PFXLEDGER" hard-owned by the anchor;
-  schema 3 xrecords: `META` (.cl path + checksum + self-handle for copy
-  detection), `FILES` (.pro/.tin bindings + checksums + material),
-  `STATUS`, `SCOPE`, `PASS_*` (the erase-by-handle ledger; CLAYER passes
-  record timestamp + layer but NO handles), `X_*` (content-keyed crossing
-  records).
+- **LEDGER** — extension dictionary **"PFLEDGER"**, hard-owned by whichever
+  entity carries it. `pfa:ledger-dict` is owner-agnostic and always was —
+  nothing in it ever looked at the anchor.
+  - *on an ANCHOR*, schema 3 xrecords: `META` (.cl path + checksum +
+    self-handle for copy detection), `FILES` (.pro/.tin bindings +
+    checksums + material), `STATUS_<PASS>`, `SCOPE`, `PASS_*` (the
+    erase-by-handle ledger; CLAYER passes record timestamp + layer but NO
+    handles), `X_*` (content-keyed crossing records).
+  - *on a STRUCTURE block*, one xrecord: `MEMB` (§4b).
+
+  **Renamed from `PFXLEDGER` 2026-07-27.** The old name was the fossil of
+  the one tool that happened to need a record first: four of the six key
+  families on an anchor have nothing to do with crossings, and structures
+  are now a second owner. `*pfa-dict-legacy*` is still READ, and
+  `pfa:ledger-dict` **renames the entry on the first write**, so the
+  fallback drains instead of being carried forever. A read must never
+  rename — the palette reads with `create` nil and may never touch the
+  database, so the rename is gated on `create`.
+- **MEMB (§4b)** — the membership index: `(10 x y)` insertion point as
+  indexed, `(302)` roster stamp, then `(300 name)(40 station)` pairs in
+  `pf:lines-at-point` order. See §4b's header for why the stamp covers the
+  whole roster rather than one line at a time (short version: a record lists
+  HITS, so nothing in it can say which lines were tested and missed).
+  `STATUS_<PASS>` — one verdict per tool, split from the single shared
+  `STATUS` on the same date. Three commands used to write one record about
+  three different files, so whichever ran last erased the others.
 - **NOD "PFTOOLS"** — drawing-wide store: STUB_*, GEOM_* (cached .cl
   geometry, content-addressed by `pf:cl-id`), TWIN_* (drawn-centerline
   handle per .cl). GEOM carries a `KIND` (`(70)`): **EXACT** = parsed `.cl`
@@ -99,12 +119,46 @@ Reads are modeless-safe (the palette contract): `pfa:nod-dict` /
 
 **Record writes (PFSETUP's side):** `pfa:write-anchor` **W**,
 `pfa:reanchor` **W**, `pfa:meta-put` **W**, `pfa:files-put` **W**,
-`pfa:status-put` **W**, `pfa:scope-put` **W**, `pfa:stub-put` **W**,
-`pfa:stub-del` **W**, `pfa:twin-put` **W**, `pfa:geom-put` **W**.
+`pfa:status-put` **W**, `pfa:status-reset` **W**, `pfa:scope-put` **W**,
+`pfa:stub-put` **W**, `pfa:stub-del` **W**, `pfa:twin-put` **W**,
+`pfa:geom-put` **W**.
 
-**Record reads:** `pfa:meta-get`, `pfa:files-get`, `pfa:status-get`,
-`pfa:status-label`, `pfa:scope-get`, `pfa:stub-get`, `pfa:stub-list`,
-`pfa:twin-get`, `pfa:twin-cksum`, `pfa:geom-get`, `pfa:nod-dict create`.
+**Record reads:** `pfa:meta-get`, `pfa:files-get`, `pfa:status-get pass`,
+`pfa:status-label`, `pfa:status-check`, `pfa:status-roll`,
+`pfa:status-rank`, `pfa:status-key`, `pfa:scope-get`, `pfa:stub-get`,
+`pfa:stub-list`, `pfa:twin-get`, `pfa:twin-cksum`, `pfa:geom-get`,
+`pfa:nod-dict create`.
+
+**STATUS is four records, not one.** `STATUS_LABEL` covers the `.cl`,
+`STATUS_INVERT` the `_INV .pro`, `STATUS_XING` the target `.cl` (per-source
+checksums stay in `SCOPE`, which is not copied). The fourth — the overall
+roll-up — is `pfa:status-roll`, **worked out on read and never stored**,
+because nothing would update a saved summary when one of the three beneath
+it moved. Worst state wins, so one failing input cannot read green.
+`pfa:status-get` falls back to the pre-split `STATUS` record so an anchor
+written before 2026-07-27 still reports something.
+**What is stored is the input's checksum at pass time**; done-out-of-total
+counts are NOT — a saved count reads 12-of-12 forever after someone erases
+a label, so the live gather owns that number.
+
+**Membership index (§4b):** `pfa:build-lines pairs` → line table (moved from
+pflabel; publishes `*pfa-roster*`), `pfa:gather-inlets` → rule-matching
+model-space INSERTs (also moved), `pfa:line-stamp` / `pfa:roster-stamp` /
+`pfa:roster-set`, `pfa:memb-put` **W**, `pfa:memb-get` → `(T . hits)` | nil,
+`pfa:memb-sync` **W** (the engine top-up; no-op when current,
+catch-wrapped), `pfa:lines-at ent pt lines` — **THE READ SEAM**, and
+`pfa:index-lines` / `pfa:index-build` **W** / `pfa:index-scan` /
+`pfa:index-verify` behind `C:PFINDEX`.
+
+`pfa:memb-get` returns a **cons**, not a bare list: a structure genuinely on
+no line has an empty hit list, and nil and `'()` are the same object in
+AutoLISP — returning the list bare would make "no record" and "on nothing"
+indistinguishable, so every off-line structure would re-derive forever.
+
+The whole index obeys `*pf-index-on*`. With it nil, `pfa:memb-get` always
+reports a miss and every caller falls back to `pf:lines-at-point` exactly as
+before the index existed. **That is the field rollback** — records already
+in the drawing are left alone and resume being used when it goes back on.
 
 **Copy detection:** `pfa:copy-p` (self-handle stamp vs live handle),
 `pfa:purge-copy` **W** (erase the block only — NEVER walk cloned handles).
@@ -134,6 +188,18 @@ elevations preserved; key drift renames), `pfa:xing-put-elevs` **W**,
 
 **Teardown (§7):** `pfa:teardown-counts`, `pfa:teardown` **W**;
 `C:PFREMOVE` (copy-safe purge offered for copies).
+
+**`C:PFINDEX` (§8)** — `[Build/Verify/Report] <Report>`.
+- **Build** **W** rewrites every structure's record. Nothing in normal use
+  walks every structure — the engine top-up only refreshes what it labeled —
+  so a never-indexed drawing, or one where a line was just added, needs
+  this. The cold build is *allowed* to be slow.
+- **Verify** computes membership BOTH ways and names the disagreements.
+  Every other acceptance test for the index is "same labels, faster", and
+  nothing else compares the two answers; this is the only thing that turns a
+  quiet wrong answer into a visible one. Empty output is the evidence.
+- **Report** (default) — current / stale / not-indexed counts plus the live
+  roster stamp. Pure read.
 
 ## Invariants
 

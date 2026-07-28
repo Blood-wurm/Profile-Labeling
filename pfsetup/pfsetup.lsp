@@ -580,13 +580,17 @@
         (pf:undo-begin '*pfs-undo-open*)
         (setq xf     (pfs:build-xform res ll tr datum)
               anchor (pfa:write-anchor nm ty xf cl))
-        (pfa:meta-put anchor cl (pf:checksum-file cl))
+        ;; checksum! not checksum: this value is WRITTEN, and every later
+        ;; staleness verdict is measured against it, so it must not inherit the
+        ;; (path, mtime, size) shortcut whose wrong answer would be persisted.
+        (pfa:meta-put anchor cl (pf:checksum-strict cl))
         ;; file the .cl shape now (no-op if AUTO already did) so a directly
         ;; anchored profile is cached too -- label commands never re-trace it
         (pf:cl-geom cl T)                          ; in-group: filing allowed
         (pfa:twin-put cl (pf:cl-twin-handle cl *pf-corridor*)) ; file the drawn twin
         (setq notes (pfs:bind-files anchor res))
-        (pfa:status-put anchor 0 notes)
+        ;; a brand-new anchor has run no pass at all: all three UNCHECKED
+        (pfa:status-reset anchor '("LABEL" "INVERT" "XING") notes)
         (if stub (pfa:stub-del (car stub) (cadr stub)))
         (pf:undo-end '*pfs-undo-open*)
         (prompt (strcat "\n  Anchored.  Sta " (pf:fmt-station (car rng))
@@ -595,6 +599,27 @@
                         ".  (One U reverses this grid.)"))
         (foreach r notes (prompt (strcat "\n  NOTE: " r)))
         anchor)))))
+
+;; (pfs:touched-passes anchor old-cl res) -> list of pass names to reset
+;;   Which of the four STATUS records this edit actually invalidated.  The .cl
+;;   feeds PFLABEL (stations) and PFXLABEL (crossing target stations); the _INV
+;;   .pro feeds PFINVERT.  Re-binding one must not blank the other's verdict --
+;;   that is the whole reason the single shared record was split.
+;;   A pass whose input did not move keeps its state, its timestamp and its
+;;   findings untouched.
+(defun pfs:touched-passes (anchor old-cl res / out new-cl old-inv new-inv files r)
+  (setq out '() new-cl (cdr (assoc 'cl res)))
+  (if (or (null old-cl) (= old-cl "")
+          (/= (pf:cl-id old-cl) (pf:cl-id new-cl)))
+    (setq out '("LABEL" "XING")))
+  (setq files   (pfa:files-get anchor)
+        old-inv (if (and files (assoc 1 files)) (cdr (assoc 1 files)) ""))
+  (foreach r (cdr (assoc 'pro res))
+    (if (= (cdr (pf:parse-pro-name r)) "INV") (setq new-inv r)))
+  (if (or (null new-inv) (= old-inv "")
+          (/= (pf:cl-id old-inv) (pf:cl-id new-inv)))
+    (setq out (cons "INVERT" out)))
+  out)
 
 ;; (pfs:range-match cl-old cl-new) -> T | nil | 'UNKNOWN
 (defun pfs:range-match (cl-old cl-new / r1 r2)
@@ -649,7 +674,7 @@
 
 ;; (pfs:edit-one anchor) -> nil
 (defun pfs:edit-one (anchor / init res at old-cl rm pts ed ins ext xs ys datum
-                      xf notes r)
+                      xf notes touched r)
   (prompt (strcat "\nEditing " (pfa:anchor-title anchor) "."))
   (foreach r (pfa:corner-check anchor)
     (prompt (strcat "\n  DRIFT: " r)))
@@ -711,9 +736,17 @@
               (setq xf (pfs:build-xform res (car pts) (cadr pts) datum))
               (pfa:reanchor anchor xf)
               (pfa:meta-put anchor (cdr (assoc 'cl res))
-                            (pf:checksum-file (cdr (assoc 'cl res))))
-              (setq notes (pfs:bind-files anchor res))
-              (pfa:status-put anchor 0 notes)     ; edits invalidate checks
+                            (pf:checksum-strict (cdr (assoc 'cl res))))
+              ;; THE RESET FOLLOWS THE FILE, not the edit.  An edit used to
+              ;; blank one shared record, throwing away checks it had not
+              ;; invalidated: re-binding the _INV .pro says nothing about the
+              ;; .cl, so it must not clear what PFLABEL knew.  pfs:touched-passes
+              ;; names only the passes whose own input actually moved.
+              ;; ORDER IS LOAD-BEARING: it compares against the OLD FILES
+              ;; record, so it must run BEFORE pfs:bind-files overwrites it.
+              (setq touched (pfs:touched-passes anchor old-cl res)
+                    notes   (pfs:bind-files anchor res))
+              (pfa:status-reset anchor touched notes)
               (pf:undo-end '*pfs-undo-open*)
               (prompt "\n  Updated in place (ledger preserved; status UNCHECKED).")
               (foreach r notes (prompt (strcat "\n  NOTE: " r))))))))))))

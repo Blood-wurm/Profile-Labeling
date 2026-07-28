@@ -19,6 +19,31 @@
 (setq *pf-rank-ascending* T)  ; T => rank 1 at the LOWEST station
 
 ;;; --------------------------------------------------------------------------
+;;; Membership INDEX  (the saved structure->lines answer; pfanchor SECTION 4b)
+;;; --------------------------------------------------------------------------
+;;; THE OFF SWITCH.  nil makes pfa:memb-get always report a miss, so every
+;;; caller falls back to pf:lines-at-point exactly as it did before the index
+;;; existed.  This is the field rollback: if a saved answer is ever wrong, turn
+;;; it off here rather than patching the reader.  Records already in the drawing
+;;; are left alone and resume being used when it goes back on.
+(setq *pf-index-on* T)
+
+;; Bumping this invalidates EVERY saved record, drawing-wide.  It is the only
+;; cover for the tolerances above: *pf-offset-tol* and *pf-range-eps* are
+;; applied INSIDE pf:lines-at-point, after the corridor test, so no per-line
+;; stamp can see them move.  Change one of those, bump this in the same edit.
+(setq *pf-index-schema* 1)
+
+;; A structure that moved less than this did not move.  Compared against the
+;; insertion point stored in the record; anything larger re-derives membership.
+(setq *pfa-memb-move-tol* 0.001)  ; ft
+
+;; Coordinate scale for pf:verts-hash.  4 decimal places of a foot is far below
+;; any real plan movement and far above float noise.  Applied as a REMAINDER,
+;; never a plain multiply -- state-plane northings times 10000 overflow (fix).
+(setq *pf-hash-scale* 10000.0)
+
+;;; --------------------------------------------------------------------------
 ;;; INERT SCAFFOLD -- set here, read NOWHERE in the suite (audit 2026-07-26).
 ;;; These belong to the planned point-to-SEGMENT membership fix for the
 ;;; "structures silently dropped" bug (OPEN-ISSUES / PFLABEL).  Membership
@@ -207,7 +232,19 @@
 ;;; see pfa:extents.
 (setq *pfa-block-names* "PF-ANCHOR,PF-GRIDANCHOR")
 (setq *pfa-layer*       "PF-ANCHOR")      ; created NO-PLOT, unlocked
-(setq *pfa-dict-name*   "PFXLEDGER")
+;;; THE LEDGER dictionary, hung off an entity's extension dictionary.  Owner is
+;;; whatever entity carries it: an ANCHOR holds META/FILES/STATUS_*/SCOPE/PASS_*
+;;; /X_*, a STRUCTURE holds MEMB.  pfa:ledger-dict is owner-agnostic and always
+;;; was -- nothing in it ever looked at the anchor.
+;;;
+;;; The old name is the fossil of the one tool that happened to need a record
+;;; first.  Four of the six key families on an anchor have nothing to do with
+;;; crossings, and structures are a second owner, so it was renamed 2026-07-27.
+;;; *pfa-dict-legacy* is READ for drawings registered before that, and
+;;; pfa:ledger-dict RENAMES the entry the first time something writes -- so the
+;;; fallback empties out on its own instead of living forever.
+(setq *pfa-dict-name*   "PFLEDGER")
+(setq *pfa-dict-legacy* "PFXLEDGER")
 (setq *pfa-schema-ver*  3)                ; schema 3 = the V4 record (FILES/EXTENTS/STATUS/SCOPE/PASS_/X_); matches pfanchor + README
 ;;; WIDTH/HEIGHT are the grid extents RELATIVE to the insertion point.  They
 ;;; used to be carried by the insert's X/Y scale factors, back when the block

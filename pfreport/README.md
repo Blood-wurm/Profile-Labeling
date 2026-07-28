@@ -160,7 +160,7 @@ emit (`pfr:record`, `pfr:write`).
 
 ## Shared gather (2026-07-27)
 
-`pfr:line-table` funnels through `pflabel:build-lines` — so PFREPORT inherits
+`pfr:line-table` funnels through `pfa:build-lines` — so PFREPORT inherits
 the corridor-pre-filter fix and `pf:cl-parse`'s exact vertices without
 changing a line. Note `pfr:line-table` **unions across utility types** where
 PFLABEL is single-type, so a mixed selection reads several line sets.

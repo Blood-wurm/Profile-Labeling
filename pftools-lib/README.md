@@ -110,8 +110,29 @@ naming convention), `pf:sym-layer` / `pf:text-layer`, `pf:std-label`,
 `pf:top-lines` (ONE scan per pass) + `pf:top-at` (the top-of-grid probe:
 highest PF-GRID-MJR hit — MAX, never min).
 
-**Checksum + misc (§14):** `pf:checksum-file` (content checksum, line-ending
-independent), `pf:handle`, `pf:timestamp`.
+**Checksum + hashing (§14):** `pf:checksum-file` (content checksum,
+line-ending independent, memoised on `(path, mtime, size)`),
+`pf:checksum-strict`, `pf:hash-string`, `pf:hash-num`, `pf:verts-hash`,
+`pf:handle`, `pf:timestamp`.
+
+**Two checksum functions, and the difference matters.** `pf:checksum-file`
+trusts `(path, mtime, size)`; its own header records the caveat that a file
+edited in place preserving both reads stale out of the memo. That is a fair
+trade for a CHECK, whose wrong answer dies with the session.
+`pf:checksum-strict` always does the content walk and then refreshes the
+memo, and it is what the **write** paths call — `pfa:line-stamp` with
+`write-p` T, `pfs:place-one`, `pfs:edit-one` — because a wrong checksum
+written into a record outlives every reload.
+
+**`pf:verts-hash` replaced bbox + vertex count as the shape fingerprint.**
+Drag one interior PI of a drawn centerline parallel to its bounding box and
+neither the box nor the count moves, so the shape reads unchanged while the
+corridor it defines has shifted — and a structure can fall outside it with
+nothing to say so. That is the edit a drafter actually makes.
+`pf:hash-num` takes the REMAINDER before `fix`, deliberately: a state-plane
+northing times `*pf-hash-scale*` is ~1.8e10, past what `fix` can return, so
+the obvious `(fix (* v scale))` overflows on exactly the drawings this firm
+works on.
 
 **Zoom parade (§15):** `pf:zoom-resolve default` (consumes the one-shot
 `*pf-zoom-to*` override, call ONCE per engine run inside the ctx guard),

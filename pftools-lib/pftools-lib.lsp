@@ -1317,6 +1317,71 @@
       (close f)
       (strcat (itoa a) "-" (itoa b) "-" (itoa n)))))
 
+;; (pf:checksum-strict file) -> "a-b-n" | nil    MEMO-BYPASSING checksum.
+;;   pf:checksum-file trusts (path, mtime, size) and its own header records the
+;;   caveat: a file edited in place preserving BOTH reads stale out of the memo.
+;;   That is an acceptable trade for a CHECK, whose wrong answer dies with the
+;;   session.  It is NOT acceptable for a value about to be WRITTEN into a
+;;   record, where the wrong answer is persisted and outlives every reload.
+;;   So the index's write path calls this: always the content walk, then the
+;;   memo is refreshed so later cheap reads agree with what was stored.
+(defun pf:checksum-strict (file / st sz ck)
+  (cond
+    ((or (null file) (= file "")) nil)
+    ((null (setq st (vl-file-systime file))) nil)      ; missing/unreadable
+    (T
+     (setq sz (vl-file-size file)
+           ck (pf:checksum-read file))
+     (if ck
+       (setq *pf-cksum-cache*
+             (cons (list file st sz ck)
+                   (vl-remove-if '(lambda (c) (= (car c) file))
+                                 *pf-cksum-cache*))))
+     ck)))
+
+;; (pf:hash-string s) -> "a-b-n" | nil    Adler-32 pair + length over a string.
+;;   Same arithmetic as pf:checksum-read, fed characters instead of file lines,
+;;   so a stamp built here reads like every other checksum in the suite.
+(defun pf:hash-string (s / a b n c)
+  (if s
+    (progn
+      (setq a 1 b 0 n 0)
+      (foreach c (vl-string->list s)
+        (setq a (rem (+ a c) 65521)
+              b (rem (+ b a) 65521)
+              n (1+ n)))
+      (strcat (itoa a) "-" (itoa b) "-" (itoa n)))))
+
+;; (pf:hash-num v) -> integer in [0, 65520]    one coordinate, foldable.
+;;   REM BEFORE FIX, deliberately.  A state-plane northing is ~1.8e6; times
+;;   *pf-hash-scale* that is 1.8e10, which is past what (fix) can return, so
+;;   the obvious (fix (* v scale)) overflows on exactly the drawings this firm
+;;   works on.  Taking the remainder while the value is still a real keeps it
+;;   in range, and abs makes a southing hash like a northing.
+(defun pf:hash-num (v)
+  (fix (abs (rem (* v *pf-hash-scale*) 65521.0))))
+
+;; (pf:verts-hash verts) -> "a-b-n" | nil    ORDER-SENSITIVE shape hash.
+;;   WHY THIS EXISTS: the membership pre-filter's fingerprint used to be the
+;;   bounding box plus the vertex COUNT (pflabel:lines-sig).  Drag one interior
+;;   PI of a drawn centerline parallel to the box and neither value moves -- so
+;;   the shape reads unchanged while the corridor it defines has shifted, and a
+;;   structure can fall outside it with nothing to say so.  That is the exact
+;;   edit a drafter makes.  This walks the points.
+;;   Cheap in context: O(verts) once per line per run, against a pre-filter that
+;;   already walks every vertex once per structure per line.
+(defun pf:verts-hash (verts / a b n v)
+  (if verts
+    (progn
+      (setq a 1 b 0 n 0)
+      (foreach v verts
+        (setq a (rem (+ a (pf:hash-num (car v)))  65521)
+              b (rem (+ b a) 65521)
+              a (rem (+ a (pf:hash-num (cadr v))) 65521)
+              b (rem (+ b a) 65521)
+              n (1+ n)))
+      (strcat (itoa a) "-" (itoa b) "-" (itoa n)))))
+
 ;; (pf:handle e) -> handle string of an entity
 (defun pf:handle (e) (cdr (assoc 5 (entget e))))
 

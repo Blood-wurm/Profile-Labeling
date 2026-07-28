@@ -34,15 +34,13 @@ any undo group, one day from a modeless handler):
   builder: thin filter over `pfa:registry` (one merged, copy-excluding,
   sorted walk), resolved via `pfa:entry-cl`, self dropped by `pf:cl-id`,
   same-type only. Consumers: both setups, both run dialogs.
-- `pflabel:build-lines pairs` → line table
-  `(clfile name lo hi verts corridor-tol)*` — write-free: `pf:cl-geom`
-  read-only, a re-matched twin is used but never filed. **Verts fall back
-  three deep:** drawn twin → re-matched twin → the `.cl`'s own shape from
-  `(cdr geom)` at `*pf-corridor-sampled*`. Shipping nil verts turned the
-  membership pre-filter OFF for that line, which is what produced the
-  `unable to locate point along centerline` parade — registered-only lines
-  never have a twin, and they are exactly what `registry-pairs` adds.
-- `pflabel:gather-inlets` → rule-matching INSERTs (model space only).
+- **The line-table builder and the inlet gather moved out**, 2026-07-27 —
+  they are now `pfa:build-lines` / `pfa:gather-inlets` in pfanchor §4b. Both
+  were always registry and selection knowledge rather than label knowledge,
+  and the membership-index writer at position 4 cannot reach up to this file
+  at 7. No alias left behind; same precedent as `pfa:entry-cl`. Their
+  contracts (three-deep vert fallback, write-free gather, model-space-only
+  selection) moved with them unchanged — see `pfanchor/README.md`.
 - `pflabel:pending inlets lines primary` → sorted `(sta ename blkname)*`.
 - `pflabel:gather-compute anchor passname primary lines inlets` →
   `(pend status orphans)` | nil — **THE one gather-compute, shared with
@@ -120,10 +118,13 @@ and replaces, so a re-run is the exact fix.
   exact vertices with authoritative per-vertex stations. Membership still
   gates on `cl_location_at_pt`, so the bug stands until `pf:pt-poly-dist`
   membership replaces it — the parser removed the blocker, not the bug.
-- **Per-run cost.** The gather still rebuilds the line table and re-derives
-  membership every run. `index-stations` and `process-structure` remain two
-  full inlet × line passes (`label-all`'s third was removed). A bounding-box
-  guard in front of `pf:pt-poly-dist` and a persistent index are designed
-  but not built — see the root README.
+- **Per-run cost — largely addressed 2026-07-27.** The gather still rebuilds
+  the line table every run (cheap, O(lines), and it keeps the twin verts
+  LIVE). Membership itself no longer re-derives: `index-stations`, `pending`
+  and `process-structure` all read the saved index through `pfa:lines-at`,
+  and `process-structure` tops the record up inside the undo group. What is
+  left is the cold case — the first run on a drawing that has never been
+  indexed still pays in full, by design. `C:PFINDEX Build` removes it;
+  `C:PFINDEX Verify` is what proves the saved answers match fresh ones.
 - Ghost dropdown on open — likely fixed by pick-first; verify in CAD
   ([../OPEN-ISSUES.md](../OPEN-ISSUES.md)).

@@ -1,0 +1,259 @@
+"Hydraflow Storm Sewers 2003"
+"Metric Units? ",#FALSE#
+"Total No. Lines = ",5
+"Starting HGL = ",0
+"Return Period Index = ",2
+"Min Cover = ",4
+"Design Vel = ",2.5
+"Min Slope = ",0
+"Min Pipe Size = ",12
+"Max Pipe Size = ",96
+"Omit 21-inch pipes = ",#TRUE#
+"Omit 27-inch pipes = ",#TRUE#
+"Omit 33-inch pipes = ",#FALSE#
+"Design Alignment = ",0
+"N-Value of Inlets = ",.016
+"Grate Design Depth = ",.3
+"Composite C1 = ",.2
+"Composite C2 = ",.5
+"Composite C3 = ",.9
+"Min. Starting Depth = ","Normal"
+"Accumulate Known Qs = ",#TRUE#
+"Use Inlet Captured Flows in System = ",#FALSE#
+"Auto Compute Junct. Loss Coeff. = ",#TRUE#
+"Supress Pipe Travel Time = ",#FALSE#
+"Minimum Tc used to calc Intensity",5
+"Check for Inlet Control? = ",#FALSE#
+"Using HDS-5 Method? = ",#FALSE#
+"LINE DATA ============================="
+"Line No. = ",1
+"Line ID = ",""
+"Downstream Line No. = ",0
+"X,Y Coord Dn = ",1804860,831939.1
+"X,Y Coord Up = ",1804883,831994.6
+"Deflection Angle = ",-67.71079
+"Bearing = ",-67.71079
+"Known Q = ",0
+"Sub Drainage Area 1 = ",0
+"Sub Drainage Area 2 = ",0
+"Sub Drainage Area 3 = ",0
+"Drainage Area = ",0
+"Runoff Coeff. = ",0
+"Inlet Time = ",0
+"Line Length = ",59.98177
+"Invert Elev Dn = ",0
+"Line Slope = ",0
+"Invert Elev Up = ",0
+"Rise = ",0
+"Span = ",0
+"N-Value = ",.013
+"Line Type = ","Cir"
+"Junction Loss Coeff = ",.15
+"Ground / Rim Elev Dn = ",0
+"Ground / Rim Elev Up = ",0
+"Junction Type = ",0
+"Downstream Inlet No. = ",0
+"Inlet Length = ",0
+"Inlet throat height = ",0
+"Grate Opening Area = ",0
+"Grate Width = ",0
+"Grate Length = ",0
+"Known Capacity = ",0
+"Gutter Width = ",0
+"Gutter Slope = ",0
+"Inlet Cross Slope Sw = ",0
+"Inlet Cross Slope Sx = ",0
+"Inlet Sag = ",0
+"Inlet ID = ",""
+"Local Inlet Depression = ",0
+"Gutter N-Value = ",0
+"---------------------------------------"
+"Line No. = ",2
+"Line ID = ",""
+"Downstream Line No. = ",1
+"X,Y Coord Dn = ",1804883,831994.6
+"X,Y Coord Up = ",1804891,832015.1
+"Deflection Angle = ",-.3674316
+"Bearing = ",-68.07822
+"Known Q = ",0
+"Sub Drainage Area 1 = ",0
+"Sub Drainage Area 2 = ",0
+"Sub Drainage Area 3 = ",0
+"Drainage Area = ",0
+"Runoff Coeff. = ",0
+"Inlet Time = ",0
+"Line Length = ",22.09779
+"Invert Elev Dn = ",0
+"Line Slope = ",0
+"Invert Elev Up = ",0
+"Rise = ",0
+"Span = ",0
+"N-Value = ",.013
+"Line Type = ","Cir"
+"Junction Loss Coeff = ",.85
+"Ground / Rim Elev Dn = ",0
+"Ground / Rim Elev Up = ",0
+"Junction Type = ",0
+"Downstream Inlet No. = ",1
+"Inlet Length = ",0
+"Inlet throat height = ",0
+"Grate Opening Area = ",0
+"Grate Width = ",0
+"Grate Length = ",0
+"Known Capacity = ",0
+"Gutter Width = ",0
+"Gutter Slope = ",0
+"Inlet Cross Slope Sw = ",0
+"Inlet Cross Slope Sx = ",0
+"Inlet Sag = ",0
+"Inlet ID = ",""
+"Local Inlet Depression = ",0
+"Gutter N-Value = ",0
+"---------------------------------------"
+"Line No. = ",3
+"Line ID = ",""
+"Downstream Line No. = ",2
+"X,Y Coord Dn = ",1804891,832015.1
+"X,Y Coord Up = ",1804955,832171.7
+"Deflection Angle = ",.3041
+"Bearing = ",-67.77412
+"Known Q = ",0
+"Sub Drainage Area 1 = ",0
+"Sub Drainage Area 2 = ",0
+"Sub Drainage Area 3 = ",0
+"Drainage Area = ",0
+"Runoff Coeff. = ",0
+"Inlet Time = ",0
+"Line Length = ",169.1963
+"Invert Elev Dn = ",0
+"Line Slope = ",0
+"Invert Elev Up = ",0
+"Rise = ",0
+"Span = ",0
+"N-Value = ",.013
+"Line Type = ","Cir"
+"Junction Loss Coeff = ",1
+"Ground / Rim Elev Dn = ",0
+"Ground / Rim Elev Up = ",0
+"Junction Type = ",0
+"Downstream Inlet No. = ",2
+"Inlet Length = ",0
+"Inlet throat height = ",0
+"Grate Opening Area = ",0
+"Grate Width = ",0
+"Grate Length = ",0
+"Known Capacity = ",0
+"Gutter Width = ",0
+"Gutter Slope = ",0
+"Inlet Cross Slope Sw = ",0
+"Inlet Cross Slope Sx = ",0
+"Inlet Sag = ",0
+"Inlet ID = ",""
+"Local Inlet Depression = ",0
+"Gutter N-Value = ",0
+"---------------------------------------"
+"Line No. = ",4
+"Line ID = ",""
+"Downstream Line No. = ",2
+"X,Y Coord Dn = ",1804891,832015.1
+"X,Y Coord Up = ",1804795,832099.6
+"Deflection Angle = ",-70.65704
+"Bearing = ",-138.7353
+"Known Q = ",0
+"Sub Drainage Area 1 = ",0
+"Sub Drainage Area 2 = ",0
+"Sub Drainage Area 3 = ",0
+"Drainage Area = ",0
+"Runoff Coeff. = ",0
+"Inlet Time = ",0
+"Line Length = ",128.2145
+"Invert Elev Dn = ",0
+"Line Slope = ",0
+"Invert Elev Up = ",0
+"Rise = ",0
+"Span = ",0
+"N-Value = ",.013
+"Line Type = ","Cir"
+"Junction Loss Coeff = ",1
+"Ground / Rim Elev Dn = ",0
+"Ground / Rim Elev Up = ",0
+"Junction Type = ",0
+"Downstream Inlet No. = ",2
+"Inlet Length = ",0
+"Inlet throat height = ",0
+"Grate Opening Area = ",0
+"Grate Width = ",0
+"Grate Length = ",0
+"Known Capacity = ",0
+"Gutter Width = ",0
+"Gutter Slope = ",0
+"Inlet Cross Slope Sw = ",0
+"Inlet Cross Slope Sx = ",0
+"Inlet Sag = ",0
+"Inlet ID = ",""
+"Local Inlet Depression = ",0
+"Gutter N-Value = ",0
+"---------------------------------------"
+"Line No. = ",5
+"Line ID = ",""
+"Downstream Line No. = ",4
+"X,Y Coord Dn = ",1804795,832099.6
+"X,Y Coord Up = ",1804777,832086.7
+"Deflection Angle = ",-77.16086
+"Bearing = ",-215.8961
+"Known Q = ",0
+"Sub Drainage Area 1 = ",0
+"Sub Drainage Area 2 = ",0
+"Sub Drainage Area 3 = ",0
+"Drainage Area = ",0
+"Runoff Coeff. = ",0
+"Inlet Time = ",0
+"Line Length = ",22.06569
+"Invert Elev Dn = ",0
+"Line Slope = ",0
+"Invert Elev Up = ",0
+"Rise = ",0
+"Span = ",0
+"N-Value = ",.013
+"Line Type = ","Cir"
+"Junction Loss Coeff = ",1
+"Ground / Rim Elev Dn = ",0
+"Ground / Rim Elev Up = ",0
+"Junction Type = ",0
+"Downstream Inlet No. = ",4
+"Inlet Length = ",0
+"Inlet throat height = ",0
+"Grate Opening Area = ",0
+"Grate Width = ",0
+"Grate Length = ",0
+"Known Capacity = ",0
+"Gutter Width = ",0
+"Gutter Slope = ",0
+"Inlet Cross Slope Sw = ",0
+"Inlet Cross Slope Sx = ",0
+"Inlet Sag = ",0
+"Inlet ID = ",""
+"Local Inlet Depression = ",0
+"Gutter N-Value = ",0
+"---------------------------------------"
+"IDF Curves"
+"FHA"
+48.38522,57.28075,61.93248,65.07044,61.77916,54.94071,50.68927,45.9
+11.80001,12.20001,12.70001,12.90001,12.30001,11.00001,10.1,8.999998
+.8630495,.8590845,.8603584,.8417071,.799021,.7384071,.6961845,.6514508
+0,.01886,.01812,.02535,.03519,.04818,.06176,0
+4.24,2.82,1.93,1.21
+4.98,3.34,2.3,1.45
+5.23,3.52,2.45,1.55
+5.74,3.87,2.75,1.76
+6.34,4.28,3.1,2.02
+7.1,4.79,3.54,2.36
+7.67,5.16,3.88,2.63
+8.23,5.51,4.22,2.91
+"IDF PORTLAND 2 (40-7359).IDF"
+#FALSE#,"",""
+#FALSE#,"",""
+"Number of Parcel lines = ",0
+"Number of Parcel circles = ",0
+0,0,0,0
+"End of file"

@@ -120,7 +120,16 @@ name, rect, and setter checks all came back clean.
 > setter (`SetCaption` visibly repaints `btnHelp`), vertical clipping
 > (`btnHelp` sits *lower* at y 650–675 and paints). What is left is
 > **fore colour matching the background**, or a **broken font** — neither ever
-> checked. Run `PFPINK`, **floating**.
+> checked. ~~Run `PFPINK`, **floating**.~~
+>
+> **Answered from the vendor docs instead, and `PFPINK` is deleted.** It was
+> both: `Foreground Color` -24 (Transparent) and `Font Size` 0. `PFPINK`
+> would have read `GetForeColor`/`GetBackColor` off `btnHelp` — a Text Button
+> that supports neither — raising four uncatchable modal dialogs to answer a
+> question the [Label reference
+> page](https://www.opendcl.com/HelpFiles/ENU/Reference/Control/Label.htm)
+> settles for free. Replacement probe: `PFPTHEME`, whose reads are gated by
+> `pfp:type-can`.
 >
 > The earlier `SetForeColor` probe does **not** count: it was run docked,
 > underneath the gray box, where nothing could have shown regardless. It

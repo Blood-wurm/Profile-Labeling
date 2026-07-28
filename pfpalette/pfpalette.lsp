@@ -41,12 +41,16 @@
 ;;   window exists.  This replaces the old pfp:repaint enable-toggle hack.
 ;;   pfp:refresh is also the single entry point for the three refresh
 ;;   signals to come (OnDocActivated / PF* command-ended reactor / btnRefresh).
+;;   pfp:skin (7) runs here for the same reason from the other side: Close
+;;   DESTROYS the controls, so runtime formatting never survives a toggle and
+;;   has to be re-applied on every open.  Silent unless a setter failed.
 (defun c:PFPALETTE ( / )
   (if (pfp:ensure)
     (if (dcl-Form-IsActive pfsuite/pfsPalette)
       (dcl-Form-Close pfsuite/pfsPalette)
       (progn
         (dcl-Form-Show pfsuite/pfsPalette)
+        (pfp:skin nil nil)                  ; colours+font, for the same reason
         (pfp:refresh)))                     ; data fill AFTER the window exists
     (prompt "\nPFPALETTE: could not load the OpenDCL project."))
   (princ))
@@ -240,6 +244,18 @@
 ;; (pfp:sel-row Key) -> reg-row | nil   (nil when Key is a Type parent)
 (defun pfp:sel-row (key) (cdr (assoc key *pfp-tree-map*)))
 
+;; (pfp:status-cell anchor) -> "PASSING" | "STALE (LABEL, XING)" | ...
+;;   The ROLL-UP, worked out here and never stored: nothing would update a saved
+;;   summary when one of the three records beneath it moved.  Worst state wins,
+;;   so one failing input can never render as green.  Pure reads throughout, so
+;;   it is legal from this modeless handler.
+(defun pfp:status-cell (anchor / roll)
+  (setq roll (pfa:status-roll anchor))
+  (strcat (pfa:status-label (car roll))
+          (if (nth 3 roll)
+            (strcat " (" (pf:join (nth 3 roll) ", ") ")")
+            "")))
+
 ;; (pfp:meta-rows row) -> list of (prop -1 value -1) rows for metaList
 (defun pfp:meta-rows (row / type name ename at cl mat)
   (setq type (car row) name (cadr row))
@@ -252,6 +268,7 @@
      (list (list "Type"       -1 type                          -1)
            (list "Line"       -1 name                          -1)
            (list "State"      -1 "Anchored"                    -1)
+           (list "Checks"     -1 (pfp:status-cell ename)       -1)
            (list "Datum"      -1 (pfp:dash (pfa:att "DATUM" at)) -1)
            (list "Start sta"  -1 (pfp:dash (pfa:att "STA0"  at)) -1)
            (list "H plot"     -1 (pfp:dash (pfa:att "HPLOT" at)) -1)
@@ -585,51 +602,15 @@
      (prompt "\n=== end of PFPMOVE ===")))
   (princ))
 
-;; C:PFPINK -- why does a correct Label draw no glyphs, in ANY state?
-;;   FLOAT THE PALETTE FIRST.  The docked gray box covers these controls, so
-;;   the earlier SetForeColor probe was run somewhere nothing could show --
-;;   it proved only that the call returns ok.
-;;   Established 2026-07-27: lblProject/lblCounts resolve, Visible T,
-;;   Enabled T, correct captions (lblCounts held live registry counts),
-;;   correct rects, form-level in Studio, and render nothing docked OR
-;;   floating -- while the same SetCaption visibly repaints btnHelp.
-;;   That leaves colour and font.  btnHelp is read alongside as the control:
-;;   whatever differs between it and the labels is the cause.
-(defun c:PFPINK ( / L B g)
-  (cond
-    ((not (pfp:ensure))
-     (prompt "\nPFPINK: could not load the OpenDCL project."))
-    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
-     (prompt "\nPFPINK: run PFPALETTE first."))
-    (T
-     (setq L pfsuite/pfsPalette/lblProject
-           B pfsuite/pfsPalette/btnHelp)
-     (prompt "\n=== PFPINK -- FLOAT the palette before reading this ===")
-     (pfp:selfcheck)
-     ;; 1. Read colour + font off both, and compare.  Fore = Back is the answer.
-     (foreach g '("GetForeColor" "GetBackColor" "GetFontHeight" "GetFontName")
-       (prompt (strcat "\n  " g ":  lblProject -> "
-                       (pfp:ask (strcat "dcl-Control-" g) (list L))
-                       "   |  btnHelp -> "
-                       (pfp:ask (strcat "dcl-Control-" g) (list B)))))
-     (prompt (strcat "\n  FORM GetBackColor -> "
-                     (pfp:ask "dcl-Form-GetBackColor" (list pfsuite/pfsPalette))))
-     ;; 2. Force unmissable colours, one at a time, and LOOK.
-     (pfp:try "dcl-Control-SetCaption" (list L "<<INK>>"))
-     (pfp:pause "[0] BASELINE caption set")
-     (prompt (strcat "\n  [1] ForeColor 255 (red)      -> "
-                     (pfp:try "dcl-Control-SetForeColor" (list L 255))))
-     (pfp:pause "[1] red text?")
-     (prompt (strcat "\n  [2] ForeColor 16777215 (wht) -> "
-                     (pfp:try "dcl-Control-SetForeColor" (list L 16777215))))
-     (pfp:pause "[2] white text?")
-     (prompt (strcat "\n  [3] BackColor 255 (red)      -> "
-                     (pfp:try "dcl-Control-SetBackColor" (list L 255))))
-     (pfp:pause "[3] does a RED BLOCK appear?  That locates the control exactly")
-     (prompt "\n  Red block but never text -> font.  No block at all -> covered.")
-     (prompt "\n  Toggle PFPALETTE off/on to restore.")
-     (prompt "\n=== end of PFPINK ===")))
-  (princ))
+;; C:PFPINK -- DELETED 2026-07-27.  It read GetForeColor / GetBackColor off
+;;   btnHelp, a Text Button, which the vendor documents for NEITHER -- four
+;;   uncatchable modal dialogs per run.  It also called GetFontHeight and
+;;   GetFontName, which do not exist under those names (the properties are
+;;   Font and Font Size).  The question it was built to answer is answered:
+;;   the labels carried Foreground Color -24 (Transparent) and Font Size 0.
+;;   Its successor is 7 -- pfp:skin sets both, and C:PFPTHEME reads them back
+;;   through pfp:type-can so a read can no longer land on a type that has no
+;;   such property.
 
 ;; C:PFPDBMOD -- the write-free contract as a DELTA, not an absolute.
 ;;   PALETTE-TESTING 3 asked for DBMOD 0 and the field test read 5 on a
@@ -651,11 +632,457 @@
   (princ))
 
 
+;;; ==========================================================================
+;;; SECTION 7  --  Native look:  the colour/font skin and the geometry probe
+;;; ==========================================================================
+;;
+;; PALETTE-LAYOUT 8 left colours "decision pending" between Tier 1 (set
+;; nothing, inherit) and Tier 3 (read COLORTHEME and paint).  The vendor's
+;; property reference settles it, and the answer is MOSTLY TIER 1 -- not by
+;; preference, but because the controls that carry this palette's content
+;; cannot be coloured at all:
+;;
+;;   Tree      -- NO colour property of any kind.  Font only.
+;;   List View -- Background, but NO Foreground.
+;;   Frame, Tab Strip -- neither.  Font only.
+;;   Label, Option List, Check Box -- both.
+;;
+;; So a dark scheme is not reachable: tvwLines and tarLines would stay light
+;; whatever it did, and the three List Views would take a dark background
+;; under black text.  DARK COMES FROM THE WINDOWS THEME, which the Tree and
+;; List common controls follow on their own.  What this section can do, and
+;; does by default, is unify the FONT across all 29 controls, set the form
+;; background, and give the two Labels a real foreground -- which is also the
+;; runtime half of the blank-footer-label fix.
+;;
+;; The earlier revision of this section painted a chrome/data split invented
+;; here rather than read off the applies-to lists.  It would have called a
+;; missing property THIRTEEN times -- 6 on Frames, 4 on Trees, 3 on List
+;; Views -- and each one raises a modal dialog below LISP that no catch can
+;; suppress.  The capability table below is the correction, and the rule it
+;; encodes is: check the property page's applies-to list, never infer a
+;; property from a similar control.
+;;
+;; Everything here is UI-only -- no drawing write, the same class as
+;; SetEnabled -- so it is modeless-legal.  Confirm with PFPDBMOD.
+;;
+;; RUNTIME FORMATTING DOES NOT PERSIST.  dcl-Form-Close destroys the controls
+;; and the next open rebuilds them from the .odcl, so pfp:skin runs on EVERY
+;; open, from C:PFPALETTE beside pfp:refresh.
+
+;; ---- tunables -- plain setq, so re-loading the suite restores the defaults
+
+;; HOW MUCH to paint.
+;;   'off  -- nothing; inherit everything.
+;;   'font -- (DEFAULT) font on all 29 controls, form background, and Label
+;;            colours.  Every call is documented for that control's type, and
+;;            nothing here can be overridden by a visual style.
+;;   'full -- adds Option List, Check Box and List View backgrounds.  Opt-in,
+;;            because both caveats under `the capability table' below apply.
+(setq *pfp-skin-mode* 'font)
+
+;; WHICH colours.
+;;   'sys   -- (DEFAULT) the OpenDCL system-colour enumeration.  Tracks the
+;;             WINDOWS theme, which is also what the Tree and List controls
+;;             do on their own, so the palette stays internally consistent.
+;;   'theme -- RGB chosen off COLORTHEME.  See the dark-theme note below
+;;             before reaching for this.
+(setq *pfp-skin-scheme* 'sys)
+
+;; The system enumeration (PALETTE-LAYOUT 8).  A Color may be a negative
+;; logical value OR an (R G B) list -- both are documented, and the list form
+;; is why no bit-packing helper exists here.
+(setq *pfp-scheme-sys*
+  '((chrome-bg -16) (chrome-fg -19)      ; button face / button text
+    (data-bg    -6) (data-fg    -9)))    ; window / window text
+
+;; STARTING VALUES, NOT A SPEC.  Autodesk publishes no RGB for palette chrome
+;; -- the only documented dark value (33,40,48) is the drawing area, not the
+;; frame.  Eyedropper a docked Properties palette and correct these.
+;;
+;; A DARK SCHEME CANNOT BE COMPLETED, and that is a vendor limit, not a gap
+;; here:  Tree exposes NO colour property at all, and List View exposes
+;; Background but not Foreground.  A dark pass therefore leaves tvwLines and
+;; tarLines light, and gives the three List Views a dark background with
+;; black text.  Dark has to come from the WINDOWS theme, which the common
+;; controls follow by themselves.  These tables are kept because the light
+;; side is harmless and the structure is where measured values would go.
+(setq *pfp-scheme-dark*
+  '((chrome-bg  55  55  55) (chrome-fg 220 220 220)
+    (data-bg    43  43  43) (data-fg   220 220 220)))
+
+(setq *pfp-scheme-light*
+  '((chrome-bg 240 240 240) (chrome-fg   0   0   0)
+    (data-bg   255 255 255) (data-fg     0   0   0)))
+
+;; Font.  "MS Shell Dlg" is OpenDCL's own default and the standard dialog
+;; font in every localized Windows -- more native than naming Segoe UI, which
+;; is only correct on some of them.  Set either to nil to leave fonts alone.
+;;   SIZE SIGN, from the vendor: NEGATIVE sizes in screen pixels, POSITIVE in
+;;   points (1/72") computed from screen resolution and display size.  Points
+;;   are the DPI-aware form, so a positive value is what tracks a monitor.
+;;   A real size also cures the Studio-side `Font Size 0' that is half of the
+;;   blank-footer-label bug (PALETTE-TESTING 2.3/2.4), for as long as the
+;;   skin runs.
+(setq *pfp-font-name* "MS Shell Dlg")
+(setq *pfp-font-size* 9)
+
+;; ---- the capability table -------------------------------------------------
+;;
+;; WHY THIS EXISTS:  a missing PROPERTY raises a modal OpenDCL dialog below
+;; LISP that no catch can suppress, so a property may only be called on a
+;; control whose type the vendor documents it for.  pfp:try guards a missing
+;; FUNCTION; nothing guards this.  The applies-to lists are read off the
+;; property reference pages and are the authority -- not the control pages,
+;; and never a guess from what a similar control accepts.
+;;
+;;   Font / Font Size ... every type below.  This is the broadest of the four
+;;                        and the reason 'font mode can cover all 29 controls.
+;;   Background Color ... label list optlist check + the Palette form.
+;;                        NOT tree, NOT frame, NOT tab, NOT button.
+;;   Foreground Color ... label optlist check.
+;;                        NOT list, NOT tree, NOT frame, NOT tab, NOT button.
+;;
+;; Two caveats behind 'full:
+;;   -- List View takes a Background but no Foreground, so darkening it
+;;      leaves black text on a dark pane.
+;;   -- Check Box, Frame, Option Button, Tab Strip and Text Button carry
+;;      `Use Visual Style', and the vendor says a visual style MAY OVERRIDE
+;;      background and foreground.  So a colour set on those may silently do
+;;      nothing -- and switching the style off to force it makes the control
+;;      look less native, which is the opposite of the point.
+(setq *pfp-control-types*
+  '(("tabMain" . tab)
+    ("lblProject" . label) ("lblCounts" . label)
+    ("btnRefresh" . button) ("btnHelp" . button)
+    ("tvwLines" . tree) ("metaList" . list) ("lvwLinkage" . list)
+    ("btnPickCL" . button) ("btnPickINV" . button) ("btnPickTOP" . button)
+    ("btnPickDESIGN" . button) ("btnPickEXIST" . button)
+    ("btnAnchor" . button) ("btnEdit" . button) ("btnNew" . button)
+    ("btnRemove" . button) ("btnZoom" . button)
+    ("tarLines" . tree)
+    ("frmLabel" . frame) ("optLabel" . optlist)
+    ("frmTools" . frame) ("optTools" . optlist)
+    ("frmOptions" . frame) ("optRun" . optlist)
+    ("detailsList" . list) ("chkbxZoom" . check)
+    ("btnClear" . button) ("btnRun" . button)))
+
+;; Types that accept each colour, per the applies-to lists above.
+(setq *pfp-can-backcolor* '(label list optlist check))
+(setq *pfp-can-forecolor* '(label optlist check))
+
+;; Types 'font mode is allowed to colour.  Label only: it is the one type
+;; that takes BOTH colours, has no visual style to override it, and is the
+;; type the blank-footer-label bug lives on.
+(setq *pfp-font-mode-colour* '(label))
+
+;; Which scheme row a type reads.  The Trees and List Views are the content
+;; panes, so they would take `data' -- but the capability table blocks every
+;; colour on a Tree and the foreground on a List View, so `data' only ever
+;; reaches a List View background, and only in 'full mode.
+(setq *pfp-data-types* '(list tree))
+
+;; Design size, from PALETTE-LAYOUT 2.  Needed because there is no form-size
+;; getter -- dcl-Form-GetWidth does not exist (it is what killed PFPREAD run
+;; 1).  If Studio's form size changes, change it here too.
+(setq *pfp-design-size* '(900 670))
+
+;; Baseline rects for PFPSCALE, captured once per session so repeated scaling
+;; compounds from the design layout instead of from the last scaled one.
+(if (not (boundp '*pfp-rect-base*)) (setq *pfp-rect-base* nil))
+
+
+;; (pfp:colour scheme key) -> Color value | nil
+;;   A scheme row is (key r g b) or (key <negative logical>).  BOTH forms are
+;;   documented Color values -- the vendor accepts "a list of three integers
+;;   in the range 0-255" as well as an integer -- so the triple is passed
+;;   through as a list and NOTHING here bit-packs a colour.  That is
+;;   deliberate: the packed form's byte order is undocumented, and guessing
+;;   it was going to be a live defect.
+(defun pfp:colour (scheme key / v)
+  (setq v (cdr (assoc key scheme)))
+  (cond ((null v) nil)
+        ((= 1 (length v)) (car v))
+        (T v)))
+
+;; (pfp:scheme) -> the scheme alist to paint with
+(defun pfp:scheme ( / ct)
+  (if (eq *pfp-skin-scheme* 'sys)
+    *pfp-scheme-sys*
+    ;; COLORTHEME: 0 dark, 1 light.  getvar returns nil on a release that
+    ;; predates it -- treat that as light, the pre-theme default.
+    (progn
+      (setq ct (getvar "COLORTHEME"))
+      (if (and ct (= 0 ct)) *pfp-scheme-dark* *pfp-scheme-light*))))
+
+;; (pfp:type-can nm prop) -> T | nil    prop is 'bg | 'fg | 'font
+;;   THE GUARD THAT MATTERS, and it guards READS as much as writes -- a getter
+;;   is a property accessor too, so dcl-Control-GetForeColor on a List View
+;;   raises the same modal dialog the setter would.  pfp:try catches a missing
+;;   FUNCTION; only this catches a missing PROPERTY.
+(defun pfp:type-can (nm prop / ty)
+  (setq ty (cdr (assoc nm *pfp-control-types*)))
+  (cond
+    ((null ty) nil)                       ; unknown name -> touch nothing
+    ((eq prop 'font) T)                   ; every type here takes Font+FontSize
+    ((eq prop 'bg) (and (member ty *pfp-can-backcolor*) T))
+    (T             (and (member ty *pfp-can-forecolor*) T))))
+
+;; (pfp:may nm prop) -> T | nil   capability AND what the mode permits
+(defun pfp:may (nm prop / ty)
+  (setq ty (cdr (assoc nm *pfp-control-types*)))
+  (and (pfp:type-can nm prop)
+       (or (eq prop 'font)
+           (not (eq *pfp-skin-mode* 'font))
+           (and (member ty *pfp-font-mode-colour*) T))))
+
+;; (pfp:skin-one nm bg fg size) -> list of "<call> -> <result>" strings
+;;   One control, every property its TYPE accepts and the mode allows.  Each
+;;   call is also routed through pfp:try, so a setter this OpenDCL build does
+;;   not have reports "no such function" instead of aborting the pass (a bad
+;;   FUNCTION is raised before vl-catch-all-apply engages -- see
+;;   pfp:callable-p).  The two guards cover different failures and both are
+;;   needed.
+(defun pfp:skin-one (nm bg fg size / c out p)
+  (setq c   (eval (read (strcat "pfsuite/pfsPalette/" nm)))
+        out '())
+  (if (null c)
+    (setq out (list (strcat "control is nil -- " nm)))
+    ;; Function names are the vendor's, not inferred: the accessors live on
+    ;; the PROPERTY pages, and the properties are Font and FontSize -- there
+    ;; is no FontName and no FontHeight.
+    (foreach p (list (list "dcl-Control-SetBackColor" bg              'bg)
+                     (list "dcl-Control-SetForeColor" fg              'fg)
+                     (list "dcl-Control-SetFont"      *pfp-font-name* 'font)
+                     (list "dcl-Control-SetFontSize"  size            'font))
+      (if (and (cadr p) (pfp:may nm (caddr p)))
+        (setq out (cons (strcat (car p) " -> " (pfp:try (car p) (list c (cadr p))))
+                        out)))))
+  (reverse out))
+
+;; (pfp:tally lines) -> ((line . count) ...)
+;;   29 controls give 29 copies of the same result line.  Collapse them, so
+;;   the report is four lines when it works and names the outlier when it
+;;   does not.
+(defun pfp:tally (lines / acc s hit)
+  (setq acc '())
+  (foreach s lines
+    (if (setq hit (assoc s acc))
+      (setq acc (subst (cons s (1+ (cdr hit))) hit acc))
+      (setq acc (cons (cons s 1) acc))))
+  (reverse acc))
+
+;; (pfp:skin verbose size) -> nil
+;;   THE one formatting entry point, mirroring pfp:refresh for data.  size nil
+;;   means *pfp-font-size*; PFPSCALE passes a scaled one.  Silent unless
+;;   something failed, so the call from C:PFPALETTE costs no console noise.
+(defun pfp:skin (verbose size / scheme cbg cfg dbg dfg lines nm ty r)
+  (if (null size) (setq size *pfp-font-size*))
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (if verbose (prompt "\n  skin: the palette is closed -- nothing to paint.")))
+    ((eq *pfp-skin-mode* 'off)
+     (if verbose (prompt "\n  skin: mode is 'off -- inheriting the host.")))
+    (T
+     (setq scheme (pfp:scheme)
+           cbg    (pfp:colour scheme 'chrome-bg)
+           cfg    (pfp:colour scheme 'chrome-fg)
+           dbg    (pfp:colour scheme 'data-bg)
+           dfg    (pfp:colour scheme 'data-fg)
+           ;; The form is a Palette, which IS in Background Color's applies-to
+           ;; list.  Foreground is not, so the form takes a background only.
+           lines  (list (strcat "dcl-Form-SetBackColor -> "
+                                (pfp:try "dcl-Form-SetBackColor"
+                                         (list pfsuite/pfsPalette cbg)))))
+     ;; Every control in the roster, every time -- pfp:may decides what each
+     ;; one actually receives, so there is no second membership list to drift
+     ;; out of step with the type table.
+     (foreach nm *pfp-controls*
+       (setq ty (cdr (assoc nm *pfp-control-types*)))
+       (if (member ty *pfp-data-types*)
+         (setq lines (append lines (pfp:skin-one nm dbg dfg size)))
+         (setq lines (append lines (pfp:skin-one nm cbg cfg size)))))
+     ;; Report every distinct outcome when verbose; only the failures when not.
+     (foreach r (pfp:tally lines)
+       (if (or verbose (not (wcmatch (car r) "*-> ok")))
+         (prompt (strcat "\n  " (itoa (cdr r)) "x  " (car r)))))))
+  (princ))
+
+;; C:PFPTHEME -- re-apply the skin now, verbosely, and read back what landed.
+;;   Needed because a palette is modeless: COLORTHEME can be flipped while it
+;;   is open, and nothing tells the form.  A vlr-sysvar-reactor on COLORTHEME
+;;   would automate this and is the documented next step -- deliberately not
+;;   installed yet, because a reactor outlives the palette and this suite has
+;;   exactly one planned reactor (PALETTE-LAYOUT 10).  Run this after a theme
+;;   flip, or after editing the scheme tables above.
+(defun c:PFPTHEME ( / ct g L D)
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPTHEME: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPTHEME: the palette is CLOSED -- run PFPALETTE first."))
+    (T
+     (setq ct (getvar "COLORTHEME"))
+     (prompt (strcat "\n=== PFPTHEME -- COLORTHEME "
+                     (if ct (itoa ct) "(unavailable)")
+                     (cond ((null ct) "") ((= 0 ct) " (dark)") (T " (light)"))
+                     ",  mode "   (vl-princ-to-string *pfp-skin-mode*)
+                     ",  scheme " (vl-princ-to-string *pfp-skin-scheme*) " ==="))
+     (pfp:selfcheck)
+     (pfp:skin T nil)
+     ;; Read back a Label and a List View.  A setter that returns ok and a
+     ;; getter that reports the old value is the difference between "the call
+     ;; exists" and "the call took".  Each read is capability-gated for the
+     ;; same reason the writes are -- GetForeColor on metaList would raise the
+     ;; modal dialog, and printing `n/a' is the honest answer anyway.
+     (setq L "lblProject" D "metaList")
+     (prompt "\n  readback            lblProject (Label)   |   metaList (List View)")
+     (foreach g '(("GetBackColor" . bg)   ("GetForeColor" . fg)
+                  ("GetFont"      . font) ("GetFontSize"  . font))
+       (prompt (strcat "\n    " (car g) "  " (pfp:peek L (car g) (cdr g))
+                       "   |   "            (pfp:peek D (car g) (cdr g)))))
+     (prompt "\n  n/a = the vendor does not document that property for that type.")
+     (prompt "\n=== end of PFPTHEME ===")))
+  (princ))
+
+;; (pfp:peek nm getter prop) -> printable value | "n/a"
+;;   Capability-gated read.  See pfp:type-can for why a getter needs the gate.
+(defun pfp:peek (nm getter prop / c)
+  (if (and (pfp:type-can nm prop)
+           (setq c (eval (read (strcat "pfsuite/pfsPalette/" nm)))))
+    (pfp:ask (strcat "dcl-Control-" getter) (list c))
+    "n/a"))
+
+;; (pfp:num fname ctrl) -> number | nil   guarded numeric read
+(defun pfp:num (fname ctrl / r)
+  (if (pfp:callable-p fname)
+    (progn
+      (setq r (vl-catch-all-apply (read fname) (list ctrl)))
+      (if (and (not (vl-catch-all-error-p r)) (numberp r)) r))))
+
+;; (pfp:capture) -> ((nm l t w h) ...)   read every rect the roster resolves
+(defun pfp:capture ( / out nm c l tp w h)
+  (setq out '())
+  (foreach nm *pfp-controls*
+    (if (setq c (eval (read (strcat "pfsuite/pfsPalette/" nm))))
+      (progn
+        (setq l  (pfp:num "dcl-Control-GetLeft"   c)
+              tp (pfp:num "dcl-Control-GetTop"    c)
+              w  (pfp:num "dcl-Control-GetWidth"  c)
+              h  (pfp:num "dcl-Control-GetHeight" c))
+        (if (and l tp w h) (setq out (cons (list nm l tp w h) out))))))
+  (reverse out))
+
+;; (pfp:scale-to f v) -> integer   round, never to zero
+(defun pfp:scale-to (f v) (max 1 (fix (+ 0.5 (* f v)))))
+
+;; (pfp:move-one nm l tp w h) -> list of "<call> -> <result>" strings
+;;   The four setters are NOT attested (PALETTE-TESTING 1.7g never ran), so
+;;   each is guarded and the tally names whichever one this build lacks.
+(defun pfp:move-one (nm l tp w h / c out p)
+  (setq c   (eval (read (strcat "pfsuite/pfsPalette/" nm)))
+        out '())
+  (if (null c)
+    (setq out (list (strcat "control is nil -- " nm)))
+    (foreach p (list (cons "dcl-Control-SetLeft"   l)
+                     (cons "dcl-Control-SetTop"    tp)
+                     (cons "dcl-Control-SetWidth"  w)
+                     (cons "dcl-Control-SetHeight" h))
+      (setq out (cons (strcat (car p) " -> " (pfp:try (car p) (list c (cdr p))))
+                      out))))
+  (reverse out))
+
+;; (pfp:font-at f) -> font size scaled by f, SIGN PRESERVED | nil
+;;   *pfp-font-size* is signed on purpose -- negative sizes are in screen
+;;   pixels, positive in points -- and pfp:scale-to floors at 1, so scaling a
+;;   negative size through it directly would return 1 and silently switch the
+;;   font from pixels to points as well as resizing it.  Scale the magnitude,
+;;   put the sign back.
+(defun pfp:font-at (f)
+  (if *pfp-font-size*
+    (* (if (minusp *pfp-font-size*) -1 1)
+       (pfp:scale-to f (abs *pfp-font-size*)))))
+
+;; C:PFPSCALE -- geometry probe, X and Y independent.
+;;   STUDIO OWNS THE GEOMETRY (PALETTE-LAYOUT, first line).  This does not
+;;   change that: it is how you FIND the factors by looking at them, so the
+;;   resulting rects can be typed into Studio, where they belong.  Nothing it
+;;   does survives a palette toggle -- Close destroys the controls and the
+;;   next open rebuilds from the .odcl, which is also the undo.
+;;
+;;   X AND Y ARE SEPARATE BECAUSE THE TWO AXES ARE NOT THE SAME PROBLEM.  A
+;;   native palette is a NARROW, TALL strip: the useful experiment is X well
+;;   under 1 with Y at or above 1, and a single uniform factor cannot express
+;;   it.  Enter one factor and take the default on the second to get uniform.
+;;     X scales Left and Width;  Y scales Top and Height.
+;;
+;;   WHAT X CANNOT REACH:  a ~300px strip means X ~= 0.33, and two things
+;;   stop it.  The form has a 900px MIN WIDTH that is load-bearing
+;;   (PALETTE-LAYOUT 2 -- it is what closed the vanishing-buttons issue by
+;;   construction), so the runtime clamps the frame and only the controls
+;;   move.  And the five fixed-width Registry button rows have no layout flow
+;;   to redistribute into, so their captions clip long before 0.33 and the
+;;   tree is unreadable.  Reflowing those rows is the named, unscheduled
+;;   redesign.  Use this to trim 10-20% on X, not to reach 300px.
+;;
+;;   FONTS FOLLOW THE SMALLER FACTOR.  Glyphs do not stretch on one axis --
+;;   the height comes from Y but the text still has to fit the X-narrowed
+;;   box, so the min is the only choice that cannot clip.
+(defun c:PFPSCALE ( / fx fy w h r lines rect e)
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPSCALE: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPSCALE: the palette is CLOSED -- run PFPALETTE first."))
+    (T
+     (if (null *pfp-rect-base*)
+       (progn
+         (setq *pfp-rect-base* (pfp:capture))
+         (prompt (strcat "\n  baseline captured from "
+                         (itoa (length *pfp-rect-base*)) " controls."))))
+     (if (null *pfp-rect-base*)
+       (prompt "\nPFPSCALE: no rect getter returned a number -- cannot scale.")
+       (progn
+         (initget 6)                       ; no zero, no negative
+         (setq fx (getreal "\nX factor (Left + Width) <0.85>: "))
+         (if (null fx) (setq fx 0.85))
+         (initget 6)
+         (setq fy (getreal (strcat "\nY factor (Top + Height) <"
+                                   (rtos fx 2 3) ">: ")))
+         (if (null fy) (setq fy fx))       ; same on both -> uniform
+         (setq w (pfp:scale-to fx (car  *pfp-design-size*))
+               h (pfp:scale-to fy (cadr *pfp-design-size*)))
+         (prompt (strcat "\n=== PFPSCALE  X x" (rtos fx 2 3)
+                         "  Y x" (rtos fy 2 3)
+                         "  -- form -> " (itoa w) " x " (itoa h) " ==="))
+         (setq r (pfp:try "dcl-Form-Resize" (list pfsuite/pfsPalette w h)))
+         (prompt (strcat "\n  dcl-Form-Resize -> " r))
+         (if (< w 900)
+           (prompt "\n  NOTE: below the 900 Min Width -- expect the frame to clamp."))
+         (setq lines '())
+         (foreach rect *pfp-rect-base*
+           (setq lines (append lines
+                               (pfp:move-one (car rect)
+                                             (pfp:scale-to fx (cadr   rect))
+                                             (pfp:scale-to fy (caddr  rect))
+                                             (pfp:scale-to fx (cadddr rect))
+                                             (pfp:scale-to fy (last   rect))))))
+         (foreach e (pfp:tally lines)
+           (prompt (strcat "\n  " (itoa (cdr e)) "x  " (car e))))
+         ;; Text has to scale with the box or the exercise is pointless.
+         (if *pfp-font-size* (pfp:skin nil (pfp:font-at (min fx fy))))
+         (prompt "\n  LOOK, then toggle PFPALETTE off/on to restore.")
+         (prompt "\n  Keep them?  Multiply the Studio rects per axis in Studio.")
+         (prompt "\n=== end of PFPSCALE ===")))))
+  (princ))
+
+
 (princ "\npfpalette.lsp loaded (V5 palette, milestone 2).  Command: PFPALETTE.")
 (princ "\n  AFTER EVERY STUDIO SAVE:  PFPRELOAD   (else the .odcl is not re-read)")
 (princ "\n  Diagnostics: PFPDIAG (names), PFPPROBE (setters), PFPREAD (rects),")
-(princ "\n               PFPINK (colour/font), PFPMOVE (clipping),")
+(princ "\n               PFPMOVE (clipping),")
 (princ "\n               PFPNUDGE (repaint), PFPDBMOD (writes).")
+(princ "\n  Native look: PFPTHEME (re-skin after a COLORTHEME flip), PFPSCALE.")
 (princ)
 ;;; ==========================================================================
 ;;; end of pfpalette.lsp

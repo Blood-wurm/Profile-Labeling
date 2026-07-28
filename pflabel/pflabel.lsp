@@ -114,56 +114,11 @@
 ;;; SECTION 3  --  Run setup helpers
 ;;; ==========================================================================
 
-;; GATHER-PATH PURITY: this runs from the run dialogs and setup, BEFORE any
-;; undo group (and one day from a modeless palette handler), so it must not
-;; write the drawing: pf:cl-geom is called read-only (a cache miss re-samples,
-;; never files) and a re-matched twin is USED for this run but NOT filed --
-;; persisting GEOM/TWIN belongs to PFSETUP registration and PFXLABEL discovery,
-;; which run in a command context.  Cost of an unfiled twin: one ssget scan
-;; per un-filed line per run.
-(defun pflabel:build-lines (pairs / tbl file nm geom rng vts tol h entry p)
-  (setq tbl '())
-  (foreach p pairs
-    (setq file (car p) nm (cdr p))
-    (if (setq geom (pf:cl-geom file nil))      ; READ-ONLY: never files from a gather
-      (progn
-        (setq rng (car geom)
-              ;; membership pre-filter = the DRAWN twin's LIVE verts (exact PIs,
-              ;; no sampled corner-cut at deflections), read via the filed handle
-              h   (pfa:twin-get file)
-              vts (pf:twin-verts h)
-              tol nil)                         ; exact shape -> exact corridor
-        ;; twin missing from the store (pre-feature registry, New-placed line,
-        ;; purged handle): re-match for THIS run only -- no pfa:twin-put here
-        (if (null vts)
-          (progn
-            (setq h (pf:cl-twin-handle file *pf-corridor*))
-            (if h (setq vts (pf:twin-verts h)))))
-        ;; STILL nothing drawn to match -- registered-only lines never have a
-        ;; twin, and they are exactly what pflabel:registry-pairs adds.  Fall
-        ;; back to the .cl's own SAMPLED shape, which pf:cl-geom already
-        ;; returned in (cdr geom): a coarse corridor, but a corridor.  Shipping
-        ;; nil here turned the pre-filter OFF for those lines, and every
-        ;; structure in the drawing then reached cl_location_at_pt -- the
-        ;; "unable to locate point along centerline" parade (see
-        ;; pf:lines-at-point).
-        (if (and (null vts) (cdr geom))
-          (setq vts (cdr geom)
-                tol *pf-corridor-sampled*))    ; corner-cut allowance
-        ;; bbox computed ONCE here; it is consulted per structure per line
-        (setq entry (list file nm (car rng) (cadr rng) vts tol
-                          (pf:verts-bbox vts))
-              tbl   (cons entry tbl))
-        (prompt (strcat "\nLoaded line '" nm "' (Sta " (pf:fmt-station (car rng))
-                        " to " (pf:fmt-station (cadr rng)) ")"
-                        (cond
-                          ((null vts)
-                           "  [no shape available -- pre-filter off, authored test only].")
-                          (tol
-                           "  [no drawn centerline matched -- sampled .cl corridor].")
-                          (T ".")))))
-      (prompt (strcat "\nError: Could not read station range from " file))))
-  (reverse tbl))
+;; The line-table builder and the inlet gather moved to pfanchor SECTION 4b as
+;; pfa:build-lines / pfa:gather-inlets, 2026-07-27.  Both were always registry
+;; and selection knowledge rather than label knowledge, and the membership index
+;; writer -- position 4 -- cannot reach up to this file at 7.  No alias left
+;; behind; same precedent as pfa:entry-cl, moved out of pfxlabel 2026-07-26.
 
 (defun pflabel:line-loaded-p (name lines)
   (car (vl-member-if '(lambda (e) (= (cadr e) name)) lines)))
@@ -191,26 +146,17 @@
       (setq out (cons (cons clf (cadr r)) out))))
   (reverse out))
 
-;; (pflabel:gather-inlets) -> block enames matching a *pf-rule-table* rule
-;;   Model space only: a paper-space INSERT has sheet coordinates, which
-;;   pf:lines-at-point would test against real-world stationing.
-(defun pflabel:gather-inlets ( / ss i e nm lst)
-  (setq ss (ssget "_X" '((0 . "INSERT") (410 . "Model"))) lst '() i 0)
-  (if ss
-    (while (< i (sslength ss))
-      (setq e  (ssname ss i)
-            nm (cdr (assoc 2 (entget e))))
-      (if (pf:rule-for nm *pf-rule-table*)
-        (setq lst (cons e lst)))
-      (setq i (1+ i))))
-  (reverse lst))
-
 ;; (pflabel:index-stations inlets line-table) -> (name . sorted-stations)*
+;;   The ranking input: every station on every line, so pf:rank-on-line can
+;;   count how many structures precede one.  THE LARGEST UNMEMOISED consumer of
+;;   membership in the suite -- it runs on every PFLABEL and every PFREPORT, and
+;;   unlike the gather it has no session memo behind it.  Reads the saved index
+;;   through pfa:lines-at.
 (defun pflabel:index-stations (inlets line-table / idx pt hits e h)
   (setq idx '())
   (foreach e inlets
     (setq pt   (cdr (assoc 10 (entget e)))
-          hits (pf:lines-at-point pt line-table))
+          hits (pfa:lines-at e pt line-table))
     (foreach h hits
       (setq idx (pf:idx-add idx (car h) (cadr h)))))
   (mapcar '(lambda (pair) (cons (car pair) (vl-sort (cdr pair) '<))) idx))
@@ -237,7 +183,7 @@
   (setq out '())
   (foreach e inlets
     (setq pt   (cdr (assoc 10 (entget e)))
-          hits (pf:lines-at-point pt lines)
+          hits (pfa:lines-at e pt lines)
           ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
     (if ph (setq out (cons (list (cadr ph) e (cdr (assoc 2 (entget e))))
                            out))))
@@ -497,8 +443,8 @@
            pairs      (pf:dedupe-pairs
                         (cons (cons cl rd-primary)
                               (pflabel:registry-pairs cl)))
-           rd-lines   (pflabel:build-lines pairs)
-           rd-inlets  (pflabel:gather-inlets))
+           rd-lines   (pfa:build-lines pairs)
+           rd-inlets  (pfa:gather-inlets))
      (if (null (pflabel:rd-compute))
        (progn
          (prompt (strcat "\nCenterline for '" rd-primary
@@ -592,7 +538,7 @@
                          (progn
                            (setq pairs (pf:dedupe-pairs
                                          (cons prim (pflabel:registry-pairs cl))))
-                           (pflabel:build-lines pairs)))
+                           (pfa:build-lines pairs)))
                primary (cdr prim))
          (cond
            ((null lines)
@@ -603,7 +549,7 @@
             nil)
            (T
             (prompt "\nIndexing structures for ranking...")
-            (setq inlets (if preinlets preinlets (pflabel:gather-inlets))
+            (setq inlets (if preinlets preinlets (pfa:gather-inlets))
                   index  (pflabel:index-stations inlets lines))
             (list (cons 'xform    xf)
                   (cons 'anchor   anchor)
@@ -642,7 +588,7 @@
         name    (cdr (assoc 2 ed))
         xf      (cdr (assoc 'xform context))
         primary (cdr (assoc 'primary context))
-        hits    (pf:lines-at-point pt (cdr (assoc 'lines context))))
+        hits    (pfa:lines-at block-ename pt (cdr (assoc 'lines context))))
   (setq primhit (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
   ;; label X = transform; label Y = the TOP-OF-GRID PROBE at that station.
   ;; Grid tops STEP, so the stored top is nominal only -- each label sits
@@ -691,6 +637,14 @@
          (setq *pflabel-run-ents* (append (cdr res) *pflabel-run-ents*))
          (setq e2 (pfd:station-line px gtop topy *pf-layer*))
          (if e2 (setq *pflabel-run-ents* (cons e2 *pflabel-run-ents*)))
+         ;; THE TOP-UP.  Engine side, inside the open undo group, so writing is
+         ;; legal here in a way it never is on the gather path.  The index
+         ;; therefore fills in along the routes actually driven; nothing walks
+         ;; every structure in normal use, which is what PFINDEX is for.
+         ;; No-op when the record is already current, and catch-wrapped inside
+         ;; pfa:memb-sync so a locked-layer structure costs a cache entry, not
+         ;; the run.
+         (pfa:memb-sync block-ename pt (cdr (assoc 'lines context)) *pfa-roster*)
          (prompt (strcat "\n  Labeled " id "."))
          ;; verification parade (no-op unless "Zoom To" on).  ONE RULE, all
          ;; three commands: grid base up to grid top OR the drawn stack top,
@@ -733,7 +687,7 @@
     (progn
       (foreach e inlets
         (setq pt   (cdr (assoc 10 (entget e)))
-              hits (pf:lines-at-point pt lines)
+              hits (pfa:lines-at e pt lines)
               ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
         (if ph (setq pending (cons (list (cadr ph) e) pending))))
       (setq pending (vl-sort pending '(lambda (a b) (< (car a) (car b)))))))
@@ -747,7 +701,7 @@
 ;;   inputs and writes status AFTER, so labeling can never be older than
 ;;   its check.
 (defun pflabel:write-pass (ctx / anchor clayer-p allmode handles old meta
-                            stored cur state findings e)
+                            stored res state findings e)
   (setq anchor   (cdr (assoc 'anchor ctx))
         clayer-p (cdr (assoc 'clayer-p ctx))
         allmode  (= (cdr (assoc 'mode ctx)) "All")
@@ -764,24 +718,15 @@
               (setq old (pfa:pass-handles anchor "LABEL")))
        (setq handles (append old handles)))
      (pfa:pass-put anchor "LABEL" *pf-layer* nil handles)))
-  ;; ---- input validation -> STATUS ---------------------------------------
-  (setq meta    (pfa:meta-get anchor)
-        stored  (if (assoc 301 meta) (cdr (assoc 301 meta)) "")
-        cur     (pf:checksum-file (cdr (assoc 1 meta)))
-        findings '())
-  (cond
-    ((= stored "")
-     (setq state 0
-           findings '("no .cl checksum on record (pre-V4 anchor) -- run PFSETUP")))
-    ((null cur)
-     (setq state 2
-           findings '(".cl on record could not be read for checksum")))
-    ((= stored cur)
-     (setq state 1))
-    (T
-     (setq state 2
-           findings '(".cl content CHANGED since setup -- stations may be stale; re-run PFSETUP"))))
-  (pfa:status-put anchor state findings)
+  ;; ---- input validation -> STATUS_LABEL ---------------------------------
+  ;; PFLABEL's input is the .cl and nothing else.  This used to write the one
+  ;; shared "STATUS" record, so a later PFINVERT run about a .pro erased it.
+  (setq meta   (pfa:meta-get anchor)
+        stored (if (assoc 301 meta) (cdr (assoc 301 meta)) "")
+        res    (pfa:status-check anchor "LABEL" (cdr (assoc 1 meta)) stored)
+        state  (car res)
+        findings (cdr res))
+  (pfa:status-put anchor "LABEL" state stored findings)
   (prompt (strcat "\nPass recorded.  Status: " (pfa:status-label state)))
   (foreach e findings (prompt (strcat "\n  FINDING: " e)))
   (princ))

@@ -1,0 +1,4 @@
+pfanchor/pfanchor.lsp uses pfset:confirm (owned by pfsettings/pfsettings.lsp, loads later)
+pfanchor/pfanchor.lsp uses pfset:pick-index (owned by pfsettings/pfsettings.lsp, loads later)
+pftools-lib/pftools-lib.lsp uses pfa:geom-get (owned by pfanchor/pfanchor.lsp, loads later)
+pftools-lib/pftools-lib.lsp uses pfa:geom-put (owned by pfanchor/pfanchor.lsp, loads later)

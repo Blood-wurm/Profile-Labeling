@@ -374,7 +374,7 @@ pass, `detailsList` shows **already-merged crossings only** via `pfa:xing-list` 
 context, and the list repopulates on the next refresh.
 
 Structures and Inverts have no such constraint: `pflabel:registry-pairs`,
-`pflabel:build-lines`, `pflabel:gather-inlets` and `pflabel:pending` are all
+`pfa:build-lines`, `pfa:gather-inlets` and `pflabel:pending` are all
 write-free by contract.
 
 ### Still missing
@@ -506,9 +506,76 @@ reactor filtered to `PF*` · `btnRefresh`
 > taken from a forum thread about the 8.0.0.13 label-foreground regression
 > without checking that Labels expose the property. They do not.
 
-**Decision pending.** "Native" for a docked palette means matching the host, and
-the host theme moves: `COLORTHEME` (0 dark / 1 light) is user-switchable at any
-time, so a hardcoded scheme is wrong the moment someone flips it.
+> ## 2026-07-27 — DECIDED FROM THE PROPERTY REFERENCE: mostly Tier 1, and not by choice
+>
+> Built as `pfpalette.lsp` **§7** (`pfp:skin`, `C:PFPTHEME`). The deciding
+> facts are the **applies-to lists on the property pages**, which neither tier
+> above had been checked against:
+>
+> | | Background | Foreground | Font + Font Size |
+> |---|---|---|---|
+> | Label, Option List, Check Box | ✅ | ✅ | ✅ |
+> | List View | ✅ | ❌ | ✅ |
+> | Tree, Frame, Tab Strip, Text Button | ❌ | ❌ | ✅ |
+> | Palette (the form) | ✅ | ❌ | — |
+>
+> **A dark scheme is not reachable.** Tree exposes no colour property of any
+> kind and List View exposes no foreground, so a dark pass would leave
+> `tvwLines` and `tarLines` light while giving the three List Views a dark
+> background under black text. **Dark has to come from the Windows theme**,
+> which the Tree and List common controls follow on their own. Tier 3 is
+> therefore not the answer, and the earlier revision of this note — which
+> recorded it as decided — was wrong.
+>
+> **What §7 does by default (`'font` mode):** one font across all 29 controls
+> (Font + Font Size is the one property pair every type accepts), the form
+> background, and Label colours. Nothing there can misfire. `'full` adds
+> Option List, Check Box and List View backgrounds and is opt-in, because
+> those types carry `Use Visual Style` and the vendor says a visual style
+> **may override** background and foreground — a colour set there may silently
+> do nothing, and switching the style off to force it looks less native.
+>
+> **Font names and the size sign, corrected.** The properties are `Font` (face
+> name, String) and `Font Size` — accessors `dcl-Control-SetFont` /
+> `dcl-Control-SetFontSize`. There is no `FontName` and no `FontHeight` —
+> `PFPINK` called both, and is deleted. **Negative sizes are
+> in screen pixels, positive in points** (1/72") computed from screen
+> resolution and display size — so positive is the DPI-aware form. Default
+> face is `MS Shell Dlg`, OpenDCL's own default and the standard dialog font
+> in every localized Windows.
+>
+> **No colour is bit-packed.** A `Color` may be a negative logical value *or*
+> a list of three 0–255 integers, both documented. §7 passes the list form,
+> so the packed form's undocumented byte order never arises. An earlier
+> revision of this note asserted BGR from the "255 (red)" comment in the
+> since-deleted `PFPINK` — an inference from a diagnostic that had never been
+> run, and exactly the kind of guess the list form makes unnecessary.
+>
+> **The one rule to carry forward:** a property may only be called on a
+> control whose type the vendor documents it for, **reads included** — a
+> getter is a property accessor, so `GetForeColor` on a List View raises the
+> same uncatchable modal dialog the setter would. `pfp:type-can` is that gate.
+> The first §7 draft invented a chrome/data split instead of reading the
+> lists, and would have hit a missing property 13 times.
+>
+> **The RGB tables are starting points, not a spec.** Eyedropper a docked
+> Properties palette — Autodesk publishes no RGB for palette chrome, and the
+> one documented dark value (33,40,48) is the *drawing area*.
+>
+> **Theme flips while open are manual.** `C:PFPTHEME` re-skins. A
+> `vlr-sysvar-reactor` on `COLORTHEME` would automate it, deliberately not
+> installed — a reactor outlives the palette, and §10 admits exactly one.
+>
+> **Runtime formatting never persists.** Close destroys the controls, so
+> `pfp:skin` runs on every open from `C:PFPALETTE`. The skin therefore
+> *masks* the blank-footer-label bug rather than curing it: a real
+> `Foreground Color` and `Font Size` still belong in Studio, because a session
+> with mode `'off` gets transparent text back.
+
+**Superseded — kept for the reasoning.** "Native" for a docked palette means
+matching the host, and the host theme moves: `COLORTHEME` (0 dark / 1 light) is
+user-switchable at any time, so a hardcoded scheme is wrong the moment someone
+flips it.
 
 | Tier | Approach | Cost |
 |---|---|---|
@@ -602,7 +669,14 @@ the Crossings reshape.
 
 **Phase 5 — lifecycle.** `DocActivated` and `EnteringNoDocState` per §7.
 
-**Phase 6 — colors.** Per §8, once the dropdown question is settled.
+**Phase 6 — colors. ✅ BUILT 2026-07-27, UNVERIFIED IN CAD.** `pfp:skin` +
+`C:PFPTHEME` per §8; `C:PFPSCALE` for the size question. The property names,
+the applies-to lists, the `Color` forms and the font-size sign are all settled
+from the vendor reference. What still needs one CAD run: whether `'font` mode
+paints the two footer labels (the strongest single signal — Label supports both
+colours and a real size, so it is the control the whole design rests on),
+whether the geometry setters exist, and what the eyedropper says the RGB rows
+should be if `'theme` is ever wanted for the light side.
 
 ---
 
@@ -613,7 +687,8 @@ must keep working from the command line with the palette closed, unloaded, or
 absent.
 
 - **Entry points are frozen:** `C:PFSETUP`, `C:PFLABEL`/`PFL`,
-  `C:PFXLABEL`/`PFX`, `C:PFINVERT`/`PFI`, `C:PFLABELSET`, `C:PFREMOVE`. The
+  `C:PFXLABEL`/`PFX`, `C:PFINVERT`/`PFI`, `C:PFLABELSET`, `C:PFREMOVE`,
+  `C:PFINDEX` (added 2026-07-27 — additional, replaces nothing). The
   `C:PF*RUN` commands (Phase 2) and `C:PFPVERB` (Phase 3) are *additional*
   names alongside them, not replacements.
 - **Modals stay working** until the palette provably replaces each one, then are

@@ -52,6 +52,23 @@ bracket), `pfi:lateral-info`, `pfi:endpoint-hits`, `pfi:inv-row`,
 `pfi:label-all` / `pfi:label-sel`, `pfi:write-pass`, `pfi:rd-*` +
 `pfi:run-dialog`.
 
+**The ticket carries the work, 2026-07-27.** `pfi:rd-sel` / `pfi:rd-all`
+now file the gather's full station-sorted pending list under `'pend`
+alongside `'sel`, and `pfi:run` threads both into the context.
+`pfi:label-all` reads `'sel` instead of rebuilding it, and
+`pfi:line-min-sta` takes `(caar pend)` instead of walking every inlet to
+find one number it was standing next to. That is **two full inlet × line
+membership scans removed from every PFINVERT run** — each point in them
+costing a `cl_location_at_pt`. PFLABEL received this fix long ago; PFINVERT
+never did, which is the same divergence class as the registry-builder and
+same-type-membership bugs in OPEN-ISSUES. Both old paths survive only for a
+caller handing over a ticket with no `'sel` / no `'pend`.
+
+**STATUS is per-tool.** `pfi:write-pass` writes `STATUS_INVERT` and
+validates the `_INV .pro` alone. It used to write the single shared
+`STATUS`, so running PFINVERT after PFLABEL silently erased everything
+known about the `.cl`.
+
 ## Invariants
 
 - Every elevation this command draws comes from the bound `_INV.pro`; no

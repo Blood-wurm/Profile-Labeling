@@ -1,4 +1,4 @@
-# PFTools V4 — Shakedown Checklist
+# PFTools V5 — Shakedown Checklist
 
 Run on a **scratch copy** of a real job. Goal: break it. Every test names its
 expected result — anything else is a finding. Work top to bottom; later
@@ -8,48 +8,43 @@ phases depend on earlier state.
 manhole with a known I.I/I.O, a junction structure on ≥2 lines, at least one
 real crossing, the project folder (`Type_Name.cl` + `_INV`/`_TOP.pro` pairs,
 `.tin` files), `PF-PIPE_<NN>` blocks, and the `L080` style.
+**For §9 also bring a drawing registered before 2026-07-27** — that is the
+only way to test the ledger rename against a real legacy record.
 
 **Known-open issues to probe deliberately** (expected findings, not
-surprises):
+surprises). Everything else lives in `OPEN-ISSUES.md`; this list is only what
+you should expect to *see* during a shakedown:
 
-- **Backtick names bug (UNFIXED):** `pf:parse-sheet-name` closes only on a
+- **Structures silently dropped near deflection PIs (wrong-output, CRITICAL,
+  OPEN).** `cl_location_at_pt` returns nil where there is no perpendicular
+  foot. Unblocked but not fixed — `pf:cl-parse` removed the blocker, not the
+  bug. Membership still gates on `cl_location_at_pt`. Probe in §3 and §9.
+- **Backtick names (UNFIXED):** `pf:parse-sheet-name` closes only on a
   straight `'` — a PF-NAME like ``STORM LINE `DA` `` silently skips in AUTO.
-- **Command echo (FIXED 2026-07-21, verify):** `CMDECHO` is now saved/zeroed
-  per command (`pf:echo-off`/`pf:echo-on`) and restored on both normal and
-  error exit. Confirm no UNDO/ZOOM/DELAY chatter during a run, and that
-  CMDECHO returns to its prior value after the command (and after an Esc).
 - **MR justification:** confirmed "grows down" by recollection — **verify
   visually** in 6.6; it decides the invert stack's direction.
-- **PVI check:** RESOLVED 2026-07-22 — the Road API has no vertex accessor
-  (only `profile z` / `profile sta range`). `pfi:invert-bracket` now reads exact
-  vertices by parsing the `.pro` file (`pf:pro-verts`); `pfi:break-scan` is gone.
-- **Dialog layer (2026-07-19 rework + 2026-07-21 pick-first split):**
-  the registry manager (`pfsetup_registry`), PFLABEL's `pf_run`, PFINVERT's
-  own `pfi_run` (separate definition, `pi_*` tiles), the crossings dialog
-  (`pfxl_run`), `pf_confirm`, and the slot-based `pfsetup_main`. **Both label
-  commands are now pick-first:** `pfs:choose-or-place` resolves the target
-  (a `pf_pick` list) *before* the run dialog opens — there is **no target
-  popup**, and the dialog lists a single target's structures. Expect DCL
-  layout findings (tile widths, list column drift under the proportional
-  font) on top of logic findings.
-- **PFINVERT bracket is BROKEN (wrong-output, CRITICAL — probe first):**
-  I.I/I.O swapped, the I.O elevation applied to both inverts, shared inverts
-  missed, ~0.05 ft high. The 2026-07-21 upload touched only PFINVERT's
-  dialog, not its bracket math — this is live. See §6 and `OPEN-ISSUES.md`.
-- **Cross-utility scoping (FIXED 2026-07-21, verify):** PFLABEL/PFINVERT
-  membership is now scoped to the primary's utility type (was whole-registry).
-  Verify in 3.1 and 6.4 that other-utility blocks no longer leak in and
-  same-type junctions still combine.
+- **Dialog layer.** Both label commands are **pick-first**:
+  `pfs:choose-or-place` resolves the target (a `pf_pick` list) *before* the
+  run dialog opens — there is **no target popup**, and the dialog lists a
+  single target's structures. Expect DCL layout findings (tile widths, list
+  column drift under the proportional font) on top of logic findings.
+
+**Closed since the last shakedown — do not re-litigate, just confirm in
+passing:** the PFINVERT I.I/I.O bracket bug (exact-vertex bracket, no grade
+tolerance, `pfi:break-scan` gone), cross-utility contamination (membership is
+same-type via `pflabel:registry-pairs`), `CMDECHO` suppression (now
+`pf:run-command`'s job), and the PVI probe (the Road API has no vertex
+accessor; `pf:pro-verts` parses the file).
 
 ---
 
 ## 0. Load
 
-- [ ] 0.1 `(load ".../V4/pftools-load.lsp")` → banner lists **PFSETUP,
-      PFLABEL (PFL), PFXLABEL (PFX), PFINVERT (PFI), PFLABELSET** (PFROOT is
-      retired — project root is native `tmpdir$`), "Coming this cycle:
-      PFCHECK". No load errors.
-- [ ] 0.2 `*pftools-dir*` inside `pftools-load.lsp` points at THIS V4
+- [ ] 0.1 `(load ".../V5/pftools-load.lsp")` → banner lists **PFSETUP,
+      PFLABEL (PFL), PFXLABEL (PFX), PFINVERT (PFI), PFLABELSET, PFREMOVE,
+      PFINDEX, PFREPORT, PFPALETTE** (PFROOT is retired — project root is
+      native `tmpdir$`). No load errors.
+- [ ] 0.2 `*pftools-dir*` inside `pftools-load.lsp` points at THIS V5
       folder (it ships hardcoded — fix the path first or nothing loads).
 - [ ] 0.3 Each command name autocompletes / runs from the command line.
 - [ ] 0.4 **Dialog smoke:** every dialog OPENS (a DCL syntax error kills
@@ -143,11 +138,13 @@ surprises):
       first then alphabetical; combined ID alphabetical (`AA-1/BB-2`); const
       row from the rule table (SMH/DMH before MH — label one of each);
       elevation row placeholder; HDWL drops the elevation row.
-      **Cross-utility scoping (FIXED 2026-07-21, verify):** on a sheet with
-      mixed types near the same station, confirm the label does NOT pull in a
-      different-type line's structure/block — membership is now scoped to the
-      primary's type. A same-type junction (two STORM lines) MUST still get the
-      combined ID; a SANITARY line the STORM merely crosses MUST NOT appear.
+      **Type scoping:** on a sheet with mixed types near the same station,
+      the label must NOT pull in a different-type line's structure/block —
+      membership is scoped to the primary's type. A same-type junction (two
+      STORM lines) MUST still get the combined ID; a SANITARY line the STORM
+      merely crosses MUST NOT appear. **Re-run this after §9.5** — it is the
+      test most likely to expose a bad saved record, because a wrong line set
+      shows up directly in the combined ID.
 - [ ] 3.2 **Stub contribution:** with a secondary line unanchored (stub
       only), the junction ID still includes it.
 - [x] 3.3 Stepped-top grid: labels sit on the top **at each station**, not
@@ -205,10 +202,15 @@ surprises):
 - [ ] 5.3 Move a grid WITHOUT its anchor → next command reports the corner
       DRIFT warning. Move grid + anchor together → silent (by design).
 - [ ] 5.4 Stretch the grid (taller) → top-drift warning on next touch.
-- [ ] 5.5 Edit a bound `.cl`'s content → next PFLABEL pass writes STATUS
-      FAILING with the changed-checksum finding.
+- [ ] 5.5 Edit a bound `.cl`'s content → next PFLABEL pass writes
+      `STATUS_LABEL` = **STALE**, with the changed-input finding. **This
+      changed 2026-07-27:** it used to report FAILING. State 2 now means
+      only "the file cannot be read at all"; state 3 means "the file changed
+      under you", and collapsing the two lost the difference.
+- [ ] 5.6 **Delete** a bound `.cl` from disk → next pass writes **FAILING**
+      (state 2), not STALE. The two must not be confusable.
 
-## 6. PFINVERT (never executed — the critical section)
+## 6. PFINVERT (the least-exercised command)
 
 - [ ] 6.1 Record checks: run on an anchor with no `_INV.pro` bound → fatal
       with the PFSETUP message, no undo group left open.
@@ -227,13 +229,18 @@ surprises):
       justification finding from the spec session.
 - [ ] 6.7 Lateral skip cases report: unregistered lateral; lateral with no
       `_INV.pro`; station off its `.pro` range.
-- [ ] 6.8 Grade-tol sanity: a structure where grades change mildly
-      (< ~5%/ft) with no drop → bracket falls back to the station read, no
-      false break. A real drop face → caught.
+- [ ] 6.8 **Terminus:** a `.pro` endpoint whose only neighbour is a full
+      pipe-run away → ONE invert row, classified by elevation (lower profile
+      end = I.O only, higher = I.I only). There is no grade tolerance and no
+      station fallback any more — the bracket is exact-vertex, so a mild
+      grade change must not invent a break.
 - [ ] 6.9 Label All re-run replaces by handle; Label Selected appends;
       CLAYER fire-and-forget; `U` reverses; Esc unwinds.
-- [ ] 6.10 STATUS after the pass reflects the `_INV.pro` checksum (edit the
-      file → FAILING finding on the next pass).
+- [ ] 6.10 `STATUS_INVERT` after the pass reflects the `_INV.pro` checksum
+      (edit the file → **STALE** on the next pass; delete it → FAILING).
+      **Then run PFLABEL and re-read `STATUS_LABEL`** — it must be
+      untouched. One shared record used to make the second command erase the
+      first's verdict.
 - [ ] 6.11 **Scale test:** place a grid at a different HPLOT (e.g. 50):
       text height scales, but the 5.0 column drop does NOT (by design —
       confirm it still reads well at that scale; this was a deliberate
@@ -274,8 +281,14 @@ surprises):
       ledger) and PFINVERT.
 - [ ] 8.2 Run commands in a drawing with NO registry, NO PF-NAME text, NO
       grid layers — graceful messages, never a crash.
-- [ ] 8.3 Lock the target text layer, run PFLABEL → what happens? (Unknown
-      — entmake on a locked layer; record the behavior.)
+- [ ] 8.3 Lock the target TEXT layer, run PFLABEL → what happens? (Still
+      unknown — `entmake` on a locked layer; record the behaviour.)
+- [ ] 8.3b Lock the layer the STRUCTURE BLOCKS sit on, run PFLABEL → the
+      run must COMPLETE. The index top-up writes an xdict to each structure
+      and a locked layer refuses it; `pfa:memb-sync` is catch-wrapped so
+      that costs a cache entry, never the run. Those structures then show up
+      under `PFINDEX Report` as not-indexed. **A caching optimisation that
+      can kill a labeling run is a failed test, not a finding.**
 - [ ] 8.4 Line names with spaces / hyphens / numbers → sanitize survives in
       block names, dict keys, table names.
 - [ ] 8.5 A `.cl` with negative stations → crossing key breaks (documented
@@ -291,106 +304,162 @@ surprises):
       suspect is §13.3's per-crossing `pfa:find-anchor` scans — note the
       crossing count vs. wall time.
 
+## 9. Membership index (built 2026-07-27, NEVER run in CAD)
+
+Design: `pfanchor/INDEX-PLAN.md`. Nine steps landed together and **not one
+of them has touched AutoCAD.** Static gates only.
+
+**The shape of the thing:** each structure block gets a `MEMB` xrecord —
+where it was, a roster stamp, and the lines it sits on with stations. The
+stamp covers *every* registered line, so any `.cl` edit stales every record.
+That is coarse on purpose: a record lists HITS, so nothing in it can say
+which lines were tested and missed, and only a whole-roster stamp can answer
+"was this worked out when the world looked like it does now".
+
+### 9a. The order matters — do these first
+
+- [ ] 9.1 **Timing baseline, BEFORE anything else.** On the largest real job:
+      time `PFLABEL` → Label All, cold (drawing just opened), then again
+      without closing. Write both numbers down. Skip this and every later
+      "it's faster" claim is unfalsifiable.
+- [ ] 9.2 `PFINDEX` → Enter (Report is the default) on that same untouched
+      drawing. Expect **everything under "not indexed"**, 0 current, 0
+      stale, and a roster string. Pure read: `DBMOD` must not move.
+- [ ] 9.3 `PFINDEX` → `Build`. Expect a count of structures indexed and
+      nothing skipped. **One `U` must reverse the whole build.**
+- [ ] 9.4 `PFINDEX` → `Report` again → all current, 0 stale, 0 not-indexed.
+- [ ] 9.5 **`PFINDEX` → `Verify`. THIS IS THE ACCEPTANCE GATE.** It computes
+      membership from the saved record AND the long way, then names every
+      disagreement. **Empty output is the only passing result.** Anything
+      else: stop, set `*pf-index-on*` nil in `pftools-cfg.lsp`, and report
+      the lines it printed. Do not proceed to 9.6.
+- [ ] 9.6 Re-time `PFLABEL` Label All cold against 9.1. Labels must be
+      **identical**; the time should not be. Diff the two runs' command-line
+      output if anything looks off.
+
+### 9b. Staleness — each of these must be caught
+
+Run `PFINDEX Report` after each; the changed structures must read **stale**,
+and a re-run of `PFLABEL` must produce the same labels as before the change.
+
+- [ ] 9.7 **Move one structure** a few feet along its line → that structure
+      stale (the stored insertion point no longer matches). Move it back
+      under `*pfa-memb-move-tol*` (0.001 ft) → still current.
+- [ ] 9.8 **Edit a bound `.cl`'s content** → *every* record stale, not just
+      that line's. Coarse by design; confirm it is not silently partial.
+- [ ] 9.9 **Move ONE interior PI of a drawn centerline**, parallel to its
+      bounding box, without adding or removing a vertex. **This is the
+      specific fault step 2 was written to close** — the old fingerprint was
+      the bounding box plus the vertex count, and neither moves under that
+      edit, so the shape read unchanged while the corridor had shifted.
+      `pf:verts-hash` walks the points. Records must go stale. **If they do
+      not, `pf:verts-hash` is not wired into the stamp and the index can
+      serve a wrong answer with no signal at all.**
+- [ ] 9.10 **Register a new line** (PFSETUP AUTO or place) → every record
+      stale. Known and accepted: registration deliberately does not
+      re-index (INDEX-PLAN "What was built"). `PFINDEX Build` clears it.
+- [ ] 9.11 **Erase a structure** → its record dies with it (the xdict is
+      hard-owned). No orphan, no error on the next run.
+- [ ] 9.12 **Copy a structure** to a different spot → the copy inherits the
+      stamp but not the position, so it re-derives. A copy **in place** does
+      not, and that is documented-degenerate, not a finding.
+
+### 9c. Top-up and the off switch
+
+- [ ] 9.13 On a drawing where 9.10 left everything stale, run `PFLABEL` →
+      Label All on ONE line. `PFINDEX Report` → only that line's structures
+      are current. The index heals along the route driven; nothing in normal
+      use walks every structure, which is what Build is for.
+- [ ] 9.14 Run the same `PFLABEL` twice. The second must write nothing —
+      `pfa:memb-sync` is a no-op when the record is current. Check with
+      `PFPDBMOD`: mark, re-run, compare.
+- [ ] 9.15 **The off switch.** Set `*pf-index-on*` nil, reload, run every
+      command. Everything must behave exactly as it did before the index
+      existed, records in the drawing left untouched. `PFINDEX` says so
+      rather than pretending to work. Set it back to `T` → the existing
+      records resume being used with no rebuild.
+- [ ] 9.16 **Esc mid-run with the top-up live** (extends 8.9). Esc a
+      `PFLABEL` All mid-parade → one `U` peels the labels *and* the index
+      writes together, because both are in the same group.
+
+### 9d. Write-free contract (the palette can never write)
+
+- [ ] 9.17 `PFPDBMOD` to mark → open the palette, click through every line
+      in the tree (which now reads the new "Checks" row via
+      `pfa:status-roll`) → `PFPDBMOD` again → **UNCHANGED**. `pfa:lines-at`
+      and `pfp:status-cell` are new on palette read paths; both claim
+      `create` nil, and this is the only thing that proves it.
+- [ ] 9.18 Same with a drawing that has **no** `PFTOOLS` dictionary at all —
+      opening the palette must not create one.
+
+## 10. Ledger rename + the STATUS split
+
+- [ ] 10.1 **On a drawing registered BEFORE 2026-07-27** (the legacy record
+      is the whole point — a fresh drawing cannot test this): run `PFLABEL`.
+      It must find the anchor's ledger under the old `PFXLEDGER` name, and
+      the first write must **rename the entry to `PFLEDGER`**.
+- [ ] 10.2 Then `PFREMOVE` on that same anchor → the confirm counts are
+      right and teardown erases the tracked entities. **This is the test
+      that matters:** if the rename lost the `PASS_*` records, teardown
+      finds no handles and silently erases nothing.
+- [ ] 10.3 `dictrename` on an xdict entry has **no precedent anywhere in the
+      suite** — if 10.1/10.2 fail, the fallback branch still *reads* old
+      ledgers, so nothing is lost; the migration just never happens. Report
+      it rather than working around it.
+- [ ] 10.4 Open a legacy drawing in the **palette only** and touch nothing.
+      The rename must NOT happen — it is gated on `create`, because a read
+      may never dirty the drawing. `PFPDBMOD` unchanged.
+- [ ] 10.5 **Four statuses, not one.** On one anchor run PFLABEL, then
+      PFINVERT, then PFXLABEL. All three verdicts must survive
+      independently — check the palette's "Checks" row. Before the split,
+      each command erased the previous one's.
+- [ ] 10.6 PFXLABEL now writes a status **at all** (it never used to).
+      Confirm `STATUS_XING` appears after a crossings pass.
+- [ ] 10.7 **The roll-up is worst-wins.** With one input edited and the
+      others clean, the palette's "Checks" row reads STALE and names which
+      pass. One failing input must never render as green.
+- [ ] 10.8 **Edits reset per file, not wholesale.** PFSETUP → Edit → rebind
+      only the `_INV .pro`. `STATUS_INVERT` goes UNCHECKED; `STATUS_LABEL`
+      and `STATUS_XING` keep their state, timestamp and findings. Rebind
+      only the `.cl` → the mirror image.
+
+## 11. PFINVERT ticket fix
+
+- [ ] 11.1 `PFINVERT` → Label All, and `PFINVERT` → Label Selected. Output
+      must be **identical to before** — this change removed two redundant
+      membership scans, nothing else.
+- [ ] 11.2 The **leftmost structure's** invert stack still shifts right,
+      clear of the elevation axis. That shift depends on
+      `pfi:line-min-sta`, which now reads the ticket's `'pend` instead of
+      re-walking every inlet. If the shift is missing or lands on the wrong
+      structure, `'pend` is not reaching the context.
+- [ ] 11.3 Time both against a pre-change run if you have one.
+
 ---
 
 **Log findings** as: test #, expected vs observed, severity
 (crash / wrong-output / annoyance). Wrong-output beats crash — a crash is
 honest, silently wrong numbers on a plan sheet are not.
 
-## Field-test findings (2026-07-20), triaged 2026-07-21
+## History
 
-Open issues are now tracked in **`OPEN-ISSUES.md`** (separated by tool). This
-section keeps the record of what the pull resolved; the raw log is archived
-below it.
+The 2026-07-20 field test and its 2026-07-21 triage are **closed**. Everything
+that survived is in `OPEN-ISSUES.md`, tracked per tool; everything that did not
+is in git. The raw log, the resolved-item list, and the project-path discussion
+that used to sit here were removed 2026-07-27 — they described work that has
+since shipped, and a checklist that carries its own obituary is a checklist
+people stop reading to the bottom of.
 
-**Resolved by the 2026-07-21 pull — re-verify, then close:**
+Two things from that era are still worth knowing while testing:
 
-- PFXLABEL `"Checking for crossings"` progress message added (was silent).
-- PFXLABEL zero-count `"Discovery: 0 new, 0 updated, 0 moved"` now suppressed
-  (prints only when something changed).
-- `profile z` → **`profile_z`** Road-API fix. This is almost certainly why
-  `SANITARY_A @ 5+14.38` skipped "SOURCE INVERT UNREADABLE" **and** why the
-  crossing line "dropped" (skipped crossings draw nothing). Re-run that case.
-- PFLABEL station-line prefix now per-type via the `[util]` token
-  (`sta_suf` = `"[util] LINE '[line]'"`), not a hardcoded "STORM".
-- Perpendicular-deflection miss fixed by the drawn-twin pre-filter (exact PIs).
-- Ghost dropdown *likely* fixed by the pick-first refactor — verify in 3.0.
-
-**Still open → see `OPEN-ISSUES.md`:** PFINVERT I.I/I.O bracket bug (CRITICAL),
-cross-utility scoping, PFSETUP Place-All flow + dialog size, discover-at-setup,
-anchor block style, CMDECHO, per-crossing scan perf, backtick names, PICKADD,
-GEOM sidecar decision, PVI probe.
-
----
-
-### Raw field log (2026-07-20, archived)
-
-•	.cl crossings and shared stations need to be found at pfsetup.
-•	For pflabel and pfinvert we don’t need to run checks against other utility types. If STORM we only need to compare to STORM etc.
-•	Performance improvements?
-•	Pfxlabel suppressed cmdecho for .cl checks. Need at least “Checking for crossings” so the user doesn’t think it is freezing up.
-•	Pfxlabel “Discovery: 0 new, 0 updated, 0 moved.” is a bit confusing makes it seem like nothing was labeled. Probably move this to an output only if something has changed.
-•	Pfxlabel dropped the crossing line 
-•	First pfxlabel run. == PFXLABEL: 0 labeled, 1 skipped ==
-  SKIPPED  SANITARY_A @ tgt sta 5+14.38  -- SOURCE INVERT UNREADABLE (profile z)
-•	Didn’t recognize profile names in drawing. (Don’t need this anyway.)
-•	PICKADD variable change?
-- pfsetup place all gives you an unskipple dialog paraded one after the other. Think about being able to pause dialog to navigate to profile then reopen.
-- Dialog for pfsetup needs to allow navigation between each placement. (or something....its current dialog flow is annoying. Click place > dialog > elevation > extents pick > back to main dialog.....leaves no way to navigate to next profile without closing the main dialog and reopening afterward)
-- Size of dialog box should be increased.
-- anchorblock style.
-- pflabel is using STORM LINE prefix for station line instead of defaulting per type.
-- pflabel dialog has ghost dropdown upon opening. Looks glitchy/unprofessional.
-- pflabel is labeling structures that aren't there, may be using multiple .cl files instead of just target.
-- missed a structure at a perpendicular deflection. - solved- 
-- pfinvert labels I.I. and I.O. swapped. Is applying the I.O. elevation (Incorrectly labeled I.I) to bothe inverts. Missed shared structure inverts. elevation is consistently .05 feet higher than the actual elevation.
-- pflabel grabs block from other utilities
-- pflabel names by [UTIL]
-- 
-
-> **UPDATE 2026-07-21 — the project-path question below is ANSWERED.** The
-> suite now reads the project data folder natively from Carlson's `tmpdir$`
-> (`pfset:root-get`); the user-declared NOD "ROOT" / `C:PFROOT` mechanism is
-> retired. This *unblocks* the GEOM-sidecar option (a reliable project path was
-> its prerequisite) — that decision still rides on the one open question:
-> **one sheet per project, or many sheets sharing one data folder?** The
-> discussion below is kept as the rationale.
-
-*The storage-location deviation I called out in the plan: geometry lives in a shared NOD store keyed by .cl identity, not on the stub/anchor record with promotion carry-forward. Behavior matches what we designed; it's just less machinery. If you specifically want it on the record, that's a different edit.
-
-*Here's the current mechanism, because it reframes the storage decision.
-
-Today the suite does NOT read the project location from Carlson at all. C:PFSETUP calls pfset:root-get, which reads a "ROOT" xrecord from the drawing's NOD dictionary. If it's unset, the user browses to any file in the data folder (pfset:browse → getfiled), and the derived directory is stored back per-drawing (pfset:root-set, also exposed as C:PFROOT). So the data folder is user-declared once and remembered in each drawing — pfs:cl-lookup/pfs:pro-lookup then vl-directory-files that path.
-
-The Carlson bridge itself is cf:road_api (from EWORKS.ARX, scload-ed from lspdir$) — a named-dispatch: the suite calls "cl_sta_range", "cl_location_at_pt", "profile_z", etc. through it. Nothing project-path-related goes through it today.
-
-Whether Carlson can hand us the project path through that bridge is empirical — I can't determine it from the LISP source. The ARX is a black box; the source only shows which ops the suite currently uses, not the full menu EWORKS exposes. So this needs a live probe. Candidates to try in Carlson, best-first:
-
-A cf:road_api op for it — try things like (cf:road_api "project_path") / "data_path" / "current_project". Carlson's civil ARX often exposes the active project's data directory; if EWORKS has such an op, that's the cleanest source.
-Carlson config getters — Carlson SCAD exposes settings via its own config functions (varies by version). The current project/data path is usually queryable there.
-(getvar "DWGPREFIX") — the reliable AutoLISP fallback: the sheet drawing's own folder. In many workflows the .cl/.pro data sits alongside the sheet or in a known subfolder, so this is at minimum a good seed for the browse default even if it's not authoritative.
-Why this matters for the GEOM storage decision — and I think this is the real reason you linked them: the cache I built lives in the drawing's NOD, so it's per-drawing. Every sheet that references the same project data re-traces the lines. If you can reliably resolve the project data folder, the alternative is a sidecar cache file in that folder — traced once per project, shared across every sheet drawing. That's a strictly bigger win than per-drawing, and it's exactly what a reliable project path unlocks.
-
-So the storage fork is really:
-
-In-drawing NOD (what I built) — self-contained, no external files, survives as part of the DWG; but per-drawing, so N sheets = N traces.
-Project-folder sidecar — trace once per project, every sheet reads it; but depends on reliably knowing (and re-finding) the data folder, and it's an external file to manage/invalidate.
-My read: keep the NOD "ROOT" as the source of truth / fallback regardless (it works today and needs no Carlson cooperation), add a Carlson-read as an auto-seed if a probe finds one, and let the in-DWG-vs-sidecar choice come down to one question — do multiple sheet drawings in your workflow share the same project .cl/.pro data? If yes, the sidecar's "trace once per project" is worth the external-file complexity. If each project is basically one drawing, the in-DWG cache I built is already the right shape.
-
-Before I take this further: which is it — one sheet per project, or many sheets sharing one data folder?
-
-The following is a list of useful variables:
-lspdir$ - Carlson LSP folder where program files are located (string)
-tmpdir$ - current project data folder (string)
-usrdir$ - folder for program settings and temporary files (string)
-psname - Carlson Support folder (string)
-sv:sm - horizontal scale (real)
-sv:vs - vertical scale (real)
-sv:ts - text size scaler (real)
-sv:ps - symbol size scaler (real)
-is metric - english/metric mode (0=english, 1=metric)
-crdfile - current coordinate file (string)
-
-Both right-flags on = the whole label rides the right edge at fixed width; top-flags off = it stays pinned near the top.
-
-For reference later, that 4-flag model maps the README table like this: fixed top-left = 0/0/0/0; stretch horizontally (like tvwLines, metaList) = Left-from-right 0, Right-from-right 1; stretch vertically = Top-from-bottom 0, Bottom-from-bottom 1. tvwLines (stretches both) ends up 0/1/0/1.
+- **The project data folder is native.** `pfset:root-get` reads Carlson's
+  `tmpdir$`; the user-declared NOD "ROOT" and `C:PFROOT` are retired. Useful
+  Carlson variables: `lspdir$` (LSP folder), `tmpdir$` (project data),
+  `usrdir$` (settings/temp), `sv:sm` / `sv:vs` (h/v scale), `sv:ts` (text
+  scaler), `crdfile` (coordinate file).
+- **GEOM lives in the drawing's NOD, keyed by `.cl` identity** — not in a
+  project-folder sidecar. That fork was left open pending one question: do
+  several sheet drawings share one data folder? If they ever do, a sidecar
+  traces once per project instead of once per sheet. Until then the in-drawing
+  store is the right shape, and the membership index (§9) follows the same
+  rule for the same reason.

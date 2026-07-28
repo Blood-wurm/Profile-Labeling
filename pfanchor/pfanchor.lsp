@@ -448,17 +448,31 @@
        (setq in nil))))
   out)
 
-;; (pfa:ledger-dict anchor create) -> PFXLEDGER dictionary ename | nil
-;;   HARD-OWNED (280 . 1): erasing the anchor erases the ledger.
-(defun pfa:ledger-dict (anchor create / xde sub)
-  (setq xde (pfa:extdict-of anchor))
+;; (pfa:ledger-dict ent create) -> PFLEDGER dictionary ename | nil
+;;   HARD-OWNED (280 . 1): erasing the entity erases its ledger.
+;;   OWNER-AGNOSTIC, and always was -- nothing below ever looked at the anchor.
+;;   An ANCHOR's ledger holds META / FILES / STATUS_* / SCOPE / PASS_* / X_*;
+;;   a STRUCTURE's holds MEMB.  The parameter was renamed from `anchor` to
+;;   `ent` 2026-07-27 to stop the name implying a constraint the code does not
+;;   have.
+;;
+;;   LEGACY READ + HEAL: drawings registered before the rename carry the ledger
+;;   under *pfa-dict-legacy*.  Read it as-is, and RENAME it on the first write
+;;   so the fallback drains instead of being carried forever.  A read must NOT
+;;   rename -- the palette reads with create nil and may never touch the
+;;   database (the write-free contract), so the rename is gated on `create`.
+(defun pfa:ledger-dict (ent create / xde sub)
+  (setq xde (pfa:extdict-of ent))
   (if (and (null xde) create)
     (setq xde (vlax-vla-object->ename
                 (vla-getextensiondictionary
-                  (vlax-ename->vla-object anchor)))))
+                  (vlax-ename->vla-object ent)))))
   (if xde
     (cond
       ((setq sub (dictsearch xde *pfa-dict-name*))
+       (cdr (assoc -1 sub)))
+      ((setq sub (dictsearch xde *pfa-dict-legacy*))
+       (if create (dictrename xde *pfa-dict-legacy* *pfa-dict-name*))
        (cdr (assoc -1 sub)))
       (create
        (dictadd xde *pfa-dict-name*
@@ -811,23 +825,104 @@
                     (list (cons 1 handle) (cons 300 (if ck ck "")))))
     (if (setq dict (pfa:nod-dict nil))
       (pfa:xrec-del dict (pfa:twin-key clfile)))))
-;;; ---- STATUS: state + timestamp + findings --------------------------------
+;;; ---- STATUS_<PASS>: per-tool input verdict -------------------------------
 ;;; state: 0 unchecked / 1 passing / 2 failing / 3 stale.
 ;;; UNCHECKED NEVER RENDERS GREEN.
+;;;
+;;; ONE RECORD PER TOOL, split 2026-07-27.  There used to be a single "STATUS",
+;;; written by PFSETUP, PFLABEL and PFINVERT about THREE DIFFERENT FILES -- so
+;;; whichever ran last erased the others' verdict, and running PFLABEL then
+;;; PFINVERT silently discarded everything known about the .cl.  Keyed
+;;; STATUS_<PASS> to match the PASS_<name> grammar beside it, so each command
+;;; writes only its own and pfa:dict-keys enumerates the set.
+;;;   LABEL  -> the .cl        INVERT -> the _INV .pro
+;;;   XING   -> target + source .cl, whose checksums SCOPE already holds; that
+;;;             record stays the source of truth and is not copied here.
+;;;
+;;; WHAT IS AND IS NOT STORED.  Stored: the input's checksum AT PASS TIME (301).
+;;; You cannot work out later what a file WAS when it was labeled, so this is
+;;; real state and it is the whole basis of "stale".  NOT stored: how many
+;;; structures are done out of how many.  A saved count reads 12-of-12 forever
+;;; after someone erases a label; the live gather owns that number (see the
+;;; drift-echo note in pflabel:gather-compute, which makes the same argument).
 
-(defun pfa:status-get (anchor) (pfa:rec-get anchor "STATUS"))
+(defun pfa:status-key (pass) (strcat "STATUS_" (strcase pass)))
 
-(defun pfa:status-put (anchor state findings / data f)
-  (setq data (list (cons 70 state) (cons 1 (pf:timestamp))))
+;; (pfa:status-get anchor pass) -> data | nil
+;;   Falls back to the pre-split "STATUS" record so an anchor written before
+;;   2026-07-27 still reports something instead of reading UNCHECKED.  That old
+;;   record has no pass identity, so it answers for every pass -- which is
+;;   exactly as much as it ever knew.
+(defun pfa:status-get (anchor pass / d)
+  (if (setq d (pfa:rec-get anchor (pfa:status-key pass)))
+    d
+    (pfa:rec-get anchor "STATUS")))
+
+;; (pfa:status-put anchor pass state cksum findings) -> xrecord ename
+(defun pfa:status-put (anchor pass state cksum findings / data f)
+  (setq data (list (cons 70 state)
+                   (cons 1  (pf:timestamp))
+                   (cons 301 (if cksum cksum ""))))
   (foreach f findings
     (setq data (append data (list (cons 300 f)))))
-  (pfa:rec-put anchor "STATUS" data))
+  (pfa:rec-put anchor (pfa:status-key pass) data))
+
+;; (pfa:status-reset anchor passes findings) -> nil
+;;   Back to UNCHECKED for the named passes only.  PER FILE, NOT BLANKET:
+;;   re-binding the _INV .pro invalidates what PFINVERT knew and says nothing
+;;   about the .cl, so it must not clear PFLABEL's verdict.  The old single
+;;   record could only be reset wholesale, which is why an edit used to throw
+;;   away checks it had not invalidated.
+(defun pfa:status-reset (anchor passes findings / p)
+  (foreach p passes (pfa:status-put anchor p 0 "" findings))
+  (princ))
 
 (defun pfa:status-label (state)
   (cond ((= state 1) "PASSING")
         ((= state 2) "FAILING")
         ((= state 3) "STALE")
         (T "UNCHECKED")))
+
+;; (pfa:status-check anchor pass file stored) -> (state . findings)
+;;   THE ONE COMPARISON, shared by every writer: what the input file's checksum
+;;   was when the pass ran, against what it is now.  State 3 finally has a
+;;   writer -- "the file changed under you" is a different fact from state 2,
+;;   "the file cannot be read at all", and collapsing them lost the difference.
+(defun pfa:status-check (anchor pass file stored / cur)
+  (setq cur (pf:checksum-file file))
+  (cond
+    ((or (null stored) (= stored ""))
+     (cons 0 (list (strcat "no checksum on record for " pass
+                           " -- run PFSETUP (edit)"))))
+    ((null cur)
+     (cons 2 (list (strcat "the " pass
+                           " input on record could not be read for checksum"))))
+    ((= stored cur) (cons 1 '()))
+    (T
+     (cons 3 (list (strcat "the " pass
+                           " input CHANGED since the pass -- output may be"
+                           " stale; re-run PFSETUP"))))))
+
+;; (pfa:status-roll anchor) -> (state done total stale-inputs)
+;;   THE OVERALL VALUE, worked out on the fly and never stored -- nothing would
+;;   ever update a saved roll-up when one of the three beneath it moved.  Worst
+;;   state wins, so a single failing input cannot read green.  done/total are
+;;   the caller's to supply from a live gather; this reports only what the
+;;   stored records know.
+(defun pfa:status-roll (anchor / worst n d p st s)
+  (setq worst 1 n 0 s '())
+  (foreach p '("LABEL" "INVERT" "XING")
+    (setq d  (pfa:status-get anchor p)
+          st (if (and d (assoc 70 d)) (cdr (assoc 70 d)) 0))
+    (if (= st 0) (setq n (1+ n)))
+    (if (member st '(2 3)) (setq s (cons p s)))
+    ;; 2 failing beats 3 stale beats 0 unchecked beats 1 passing
+    (if (> (pfa:status-rank st) (pfa:status-rank worst)) (setq worst st)))
+  (list worst (- 3 n) 3 (reverse s)))
+
+;; (pfa:status-rank state) -> sort weight; higher is worse.
+(defun pfa:status-rank (state)
+  (cond ((= state 2) 3) ((= state 3) 2) ((= state 0) 1) (T 0)))
 
 ;;; ---- SCOPE: PFXFIND discovery scope --------------------------------------
 
@@ -884,6 +979,229 @@
   (if (setq dict (pfa:ledger-dict anchor nil))
     (pfa:xrec-del dict (pfa:pass-key name)))
   n)
+
+
+;;; ==========================================================================
+;;; SECTION 4b  --  The membership index  (structure -> lines, saved)
+;;; ==========================================================================
+;;; THE PROBLEM: PFLABEL re-derives, from scratch, which structures sit on
+;;; which lines -- including the work it did five seconds earlier on an
+;;; unchanged drawing.  PFINVERT does it again.  PFREPORT does it again.  The
+;;; facts are stable; nothing persisted them.
+;;;
+;;; THE RECORD IS THE RETURN SHAPE.  pf:lines-at-point takes a point and gives
+;;; back the set of lines it falls on; that IS what gets stored, in the order it
+;;; came back (offset-ascending -- re-sorting on write would make the reader
+;;; non-identical to the function it stands in for).  A structure whose set has
+;;; more than one entry is a junction, with no cross-line read.
+;;;
+;;; WHAT IT HOLDS AND WHAT IT DOES NOT.  In: structure, line, station, and the
+;;; stamps that say when to stop believing it.  Out: everything that needs a
+;;; .pro -- inverts, cover, clearance, wall thickness.  Membership is stable and
+;;; .pro churns through design, so caching the second would produce a record
+;;; that is wrong most of the time.  Crossings are out too: X_* above already
+;;; persists them, with additive merge and key-drift renaming.
+;;;
+;;; STAMPS.  A LINE stamp folds everything that can change one line's answer
+;;; into one token: the .cl's CONTENT (pf:cl-id is a canonical PATH and cannot
+;;; see an edit), the station range that gates a hit, the corridor width, and a
+;;; real hash of the pre-filter shape.  A ROSTER stamp folds every registered
+;;; line's stamp into one.
+;;;
+;;; WHY THE ROSTER STAMP AND NOT PER-LINE STAMPS.  A record lists HITS.  Nothing
+;;; in it says which lines were tested and missed.  So per-line stamps cannot
+;;; answer the question that actually matters -- "was this worked out when the
+;;; world looked like it does now" -- and a structure that was off BA and is now
+;;; on it would read clean forever, because its record never mentions BA.  One
+;;; stamp covering the whole roster does answer it: match means the hits are
+;;; complete AND the misses are still misses.  The cost is coarser: any .cl edit
+;;; stales every record.  Geometry does not churn, and a rebuild is one command.
+;;;
+;;; Documented in pfanchor/INDEX-PLAN.md; INDEX-DESIGN.md / INDEX-VALUES.md hold
+;;; the reasoning that got here.
+
+;;; ---- Registry + selection helpers (moved from pflabel 2026-07-27) ---------
+;;; Both were always registry/selection knowledge rather than label knowledge,
+;;; and the index writer -- position 4 -- cannot reach up to pflabel at 7.  No
+;;; alias left behind; same precedent as pfa:entry-cl.
+
+;; (pfa:build-lines pairs) -> line table: (clfile name lo hi verts tol bbox)*
+;;   GATHER-PATH PURITY: this runs from the run dialogs and setup, BEFORE any
+;;   undo group (and from a modeless palette handler), so it must not write the
+;;   drawing: pf:cl-geom is called read-only (a cache miss re-samples, never
+;;   files) and a re-matched twin is USED for this run but NOT filed --
+;;   persisting GEOM/TWIN belongs to PFSETUP registration and PFXLABEL
+;;   discovery, which run in a command context.  Cost of an unfiled twin: one
+;;   ssget scan per un-filed line per run.
+;;   Publishes *pfa-roster* as a side effect -- see pfa:roster-set.
+(defun pfa:build-lines (pairs / tbl file nm geom rng vts tol h entry p)
+  (setq tbl '())
+  (foreach p pairs
+    (setq file (car p) nm (cdr p))
+    (if (setq geom (pf:cl-geom file nil))      ; READ-ONLY: never files from a gather
+      (progn
+        (setq rng (car geom)
+              ;; membership pre-filter = the DRAWN twin's LIVE verts (exact PIs,
+              ;; no sampled corner-cut at deflections), read via the filed handle
+              h   (pfa:twin-get file)
+              vts (pf:twin-verts h)
+              tol nil)                         ; exact shape -> exact corridor
+        ;; twin missing from the store (pre-feature registry, New-placed line,
+        ;; purged handle): re-match for THIS run only -- no pfa:twin-put here
+        (if (null vts)
+          (progn
+            (setq h (pf:cl-twin-handle file *pf-corridor*))
+            (if h (setq vts (pf:twin-verts h)))))
+        ;; STILL nothing drawn to match -- registered-only lines never have a
+        ;; twin, and they are exactly what pflabel:registry-pairs adds.  Fall
+        ;; back to the .cl's own SAMPLED shape, which pf:cl-geom already
+        ;; returned in (cdr geom): a coarse corridor, but a corridor.  Shipping
+        ;; nil here turned the pre-filter OFF for those lines, and every
+        ;; structure in the drawing then reached cl_location_at_pt -- the
+        ;; "unable to locate point along centerline" parade (see
+        ;; pf:lines-at-point).
+        (if (and (null vts) (cdr geom))
+          (setq vts (cdr geom)
+                tol *pf-corridor-sampled*))    ; corner-cut allowance
+        ;; bbox computed ONCE here; it is consulted per structure per line
+        (setq entry (list file nm (car rng) (cadr rng) vts tol
+                          (pf:verts-bbox vts))
+              tbl   (cons entry tbl))
+        (prompt (strcat "\nLoaded line '" nm "' (Sta " (pf:fmt-station (car rng))
+                        " to " (pf:fmt-station (cadr rng)) ")"
+                        (cond
+                          ((null vts)
+                           "  [no shape available -- pre-filter off, authored test only].")
+                          (tol
+                           "  [no drawn centerline matched -- sampled .cl corridor].")
+                          (T ".")))))
+      (prompt (strcat "\nError: Could not read station range from " file))))
+  (setq tbl (reverse tbl))
+  (pfa:roster-set tbl nil)          ; the run's read-side stamp, memo-fast
+  tbl)
+
+;; (pfa:gather-inlets) -> block enames matching a *pf-rule-table* rule
+;;   Model space only: a paper-space INSERT has sheet coordinates, which
+;;   pf:lines-at-point would test against real-world stationing.
+(defun pfa:gather-inlets ( / ss i e nm lst)
+  (setq ss (ssget "_X" '((0 . "INSERT") (410 . "Model"))) lst '() i 0)
+  (if ss
+    (while (< i (sslength ss))
+      (setq e  (ssname ss i)
+            nm (cdr (assoc 2 (entget e))))
+      (if (pf:rule-for nm *pf-rule-table*)
+        (setq lst (cons e lst)))
+      (setq i (1+ i))))
+  (reverse lst))
+
+;;; ---- Stamps --------------------------------------------------------------
+
+(if (not (boundp '*pfa-roster*)) (setq *pfa-roster* nil))
+
+;; (pfa:line-stamp entry write-p) -> string    one line, folded to one token.
+;;   entry = a pfa:build-lines row.  write-p T takes the memo-BYPASSING
+;;   checksum: a stamp about to be stored must not inherit pf:checksum-file's
+;;   (path, mtime, size) shortcut, because that wrong answer would be persisted
+;;   rather than dying with the session.
+(defun pfa:line-stamp (entry write-p / ck vh)
+  (setq ck (if write-p
+             (pf:checksum-strict (car entry))
+             (pf:checksum-file  (car entry)))
+        vh (pf:verts-hash (nth 4 entry)))
+  (strcat (cadr entry)
+          "|" (if ck ck "?")
+          "|" (rtos (nth 2 entry) 2 4)
+          "|" (rtos (nth 3 entry) 2 4)
+          "|" (if (nth 5 entry) (rtos (nth 5 entry) 2 4) "-")
+          "|" (if vh vh "-")))
+
+;; (pfa:roster-stamp lines write-p) -> string   the whole line table, folded.
+;;   Sorted before folding so the stamp does not depend on table order, which
+;;   varies with which line is primary.  The schema number rides in front: it is
+;;   the only cover for *pf-offset-tol* / *pf-range-eps*, which are applied
+;;   inside pf:lines-at-point where no per-line stamp can see them.
+(defun pfa:roster-stamp (lines write-p / parts)
+  (setq parts (mapcar '(lambda (e) (pfa:line-stamp e write-p)) lines))
+  (strcat (itoa *pf-index-schema*) "/"
+          (pf:hash-string (pf:join (if parts (acad_strlsort parts) '()) ";"))))
+
+;; (pfa:roster-set lines write-p) -> the stamp   publishes *pfa-roster*.
+;;   ONE assignment threads the roster through every reader instead of a new
+;;   argument on eight call sites.  Run-scoped derived state, the same pattern
+;;   as *pf-layer* / *pf-style* -- not a user option, which would belong in the
+;;   order ticket (root README 6b).
+(defun pfa:roster-set (lines write-p)
+  (setq *pfa-roster* (pfa:roster-stamp lines write-p)))
+
+;;; ---- The MEMB record -----------------------------------------------------
+;;;   (10 x y 0.0)                    insertion point as indexed
+;;;   (302 . roster-stamp)            what the lines looked like at the time
+;;;   (300 . name)(40 . station)      repeating, in pf:lines-at-point order
+
+(setq *pfa-memb-key* "MEMB")
+
+;; (pfa:memb-put ent pt hits roster) -> xrecord ename   WRITE
+;;   Caller must hold an open undo group.
+(defun pfa:memb-put (ent pt hits roster / data h)
+  (setq data (list (list 10 (car pt) (cadr pt) 0.0)
+                   (cons 302 roster)))
+  (foreach h hits
+    (setq data (append data (list (cons 300 (car h)) (cons 40 (cadr h))))))
+  (pfa:xrec-put (pfa:ledger-dict ent T) *pfa-memb-key* data))
+
+;; (pfa:memb-get ent roster) -> (T . ((name sta) ...)) | nil    PURE READ
+;;   The cons is not decoration: a structure genuinely on NO line has an empty
+;;   hit list, and in AutoLISP nil and '() are the same object -- returning the
+;;   list bare would make "no record" and "on nothing" indistinguishable, so
+;;   every off-line structure would re-derive on every run forever.
+;;   nil means: index off, no record, roster moved, or the structure moved.
+(defun pfa:memb-get (ent roster / dict d pt live out nm cur)
+  (if (and *pf-index-on*
+           roster
+           (setq dict (pfa:ledger-dict ent nil))       ; create nil: never writes
+           (setq d    (pfa:xrec-data dict *pfa-memb-key*))
+           (setq pt   (cdr (assoc 10 d)))
+           (equal (cdr (assoc 302 d)) roster)
+           (setq live (cdr (assoc 10 (entget ent))))
+           (<= (distance (list (car pt) (cadr pt))
+                         (list (car live) (cadr live)))
+               *pfa-memb-move-tol*))
+    (progn
+      (setq out '() nm nil)
+      (foreach cur d
+        (cond
+          ((= (car cur) 300) (setq nm (cdr cur)))
+          ((and nm (= (car cur) 40))
+           (setq out (cons (list nm (cdr cur)) out) nm nil))))
+      (cons T (reverse out)))))
+
+;; (pfa:lines-at ent pt lines) -> ((name station) ...)      THE READ SEAM.
+;;   Serves the saved record when it is trustworthy; otherwise does exactly what
+;;   every caller did before it existed.  NEVER WRITES, so it is legal on the
+;;   gather path and from a modeless palette handler.  Reads *pfa-roster*, which
+;;   pfa:build-lines published for this run.
+(defun pfa:lines-at (ent pt lines / r)
+  (if (setq r (pfa:memb-get ent *pfa-roster*))
+    (cdr r)
+    (pf:lines-at-point pt lines)))
+
+;; (pfa:memb-sync ent pt lines roster) -> T when a record was written
+;;   THE TOP-UP.  Engine-side only -- caller holds an open undo group.  Writes
+;;   nothing when the record is already current, so a second run over the same
+;;   structures is free.
+;;   CATCH-WRAPPED ON PURPOSE: a structure on a locked layer refuses the
+;;   dictadd, and a caching optimisation must never be able to kill a labeling
+;;   run.  That structure simply goes uncached, and PFINDEX reports it.
+(defun pfa:memb-sync (ent pt lines roster / r)
+  (cond
+    ((not *pf-index-on*) nil)
+    ((null roster) nil)
+    ((pfa:memb-get ent roster) nil)             ; already current
+    (T
+     (setq r (vl-catch-all-apply
+               'pfa:memb-put
+               (list ent pt (pf:lines-at-point pt lines) roster)))
+     (not (vl-catch-all-error-p r)))))
 
 
 ;;; ==========================================================================
@@ -1253,7 +1571,145 @@
   (pf:run-command "PFREMOVE" nil 'pfrem:cmd))
 
 
-(princ "\npfanchor.lsp loaded (V4 record + registry).  Command: PFREMOVE.")
+;;; ==========================================================================
+;;; SECTION 8  --  C:PFINDEX  (build / verify / report the membership index)
+;;; ==========================================================================
+;;; Nothing in normal use walks every structure -- the engine top-up only
+;;; refreshes what it labeled -- so a drawing that has never been indexed, or
+;;; one where a line was just added, needs this.  The cold build is ALLOWED to
+;;; be slow: run one pays, run two onward is nearly free.
+;;;
+;;; VERIFY is the point of the whole command.  Every acceptance test for this
+;;; feature is "same labels, faster", and nothing else compares the two answers.
+;;; This does: read the saved record AND do the arithmetic the old way, then
+;;; name the disagreements.  It is the only thing that turns a quiet wrong
+;;; answer into a visible one.
+
+;; (pfa:index-lines) -> the full same-type line table for every registered line
+;;   The index is drawing-wide, so the table is every registry entry that
+;;   resolves to a .cl -- not one profile's same-type subset.  Read-only.
+(defun pfa:index-lines ( / pairs r clf)
+  (setq pairs '())
+  (foreach r (pfa:registry)
+    (if (setq clf (pfa:entry-cl r))
+      (setq pairs (cons (cons clf (cadr r)) pairs))))
+  (pfa:build-lines (pf:dedupe-pairs (reverse pairs))))
+
+;; (pfa:index-build lines inlets roster) -> (written skipped)
+;;   Rewrites every structure's record against `roster`.  Caller holds an open
+;;   undo group.  A refused write (locked layer, read-only xref) is counted,
+;;   never fatal.
+(defun pfa:index-build (lines inlets roster / nw ns e pt r)
+  (setq nw 0 ns 0)
+  (foreach e inlets
+    (setq pt (cdr (assoc 10 (entget e))))
+    (setq r (vl-catch-all-apply
+              'pfa:memb-put
+              (list e pt (pf:lines-at-point pt lines) roster)))
+    (if (vl-catch-all-error-p r) (setq ns (1+ ns)) (setq nw (1+ nw))))
+  (list nw ns))
+
+;; (pfa:index-scan lines inlets roster) -> (current stale absent)
+;;   Pure read: how much of the index is usable right now.
+(defun pfa:index-scan (lines inlets roster / nc nst na e dict)
+  (setq nc 0 nst 0 na 0)
+  (foreach e inlets
+    (cond
+      ((pfa:memb-get e roster) (setq nc (1+ nc)))
+      ((and (setq dict (pfa:ledger-dict e nil))
+            (pfa:xrec-data dict *pfa-memb-key*))
+       (setq nst (1+ nst)))                     ; a record, but not trustworthy
+      (T (setq na (1+ na)))))                   ; no record at all
+  (list nc nst na))
+
+;; (pfa:index-verify lines inlets roster) -> list of disagreement strings
+;;   THE PROOF.  For every structure holding a usable record, compute membership
+;;   the old way and compare.  An empty list is the only evidence that the saved
+;;   answers are the same answers.
+(defun pfa:index-verify (lines inlets roster / out e pt saved live sv lv)
+  (setq out '())
+  (foreach e inlets
+    (if (setq saved (pfa:memb-get e roster))
+      (progn
+        (setq pt   (cdr (assoc 10 (entget e)))
+              live (pf:lines-at-point pt lines)
+              sv   (mapcar '(lambda (h) (strcat (car h) "@"
+                                                (rtos (cadr h) 2 3)))
+                           (cdr saved))
+              lv   (mapcar '(lambda (h) (strcat (car h) "@"
+                                                (rtos (cadr h) 2 3)))
+                           live))
+        (if (not (equal (acad_strlsort (if sv sv '("-")))
+                        (acad_strlsort (if lv lv '("-")))))
+          (setq out (cons (strcat (cdr (assoc 2 (entget e)))
+                                  " handle " (pf:handle e)
+                                  ":  saved [" (pf:join sv ",")
+                                  "]  live [" (pf:join lv ",") "]")
+                          out))))))
+  (reverse out))
+
+;; (pfindex:cmd) -> nil   The command body, run under pf:run-command.
+;;   BORROWS *pfs-undo-open* deliberately.  pf:group-open-p checks a FIXED list
+;;   of five flags, so a sixth of its own would be invisible to pf:run-error and
+;;   an Esc mid-Build would leak an open undo group.  PFINDEX and PFSETUP cannot
+;;   run at once, so sharing the flag is the safe option, not the lazy one.
+(defun pfindex:cmd ( / lines inlets roster act res scan bad)
+  (setq *pfs-undo-open* nil)
+  (pf:load-apis)
+  (initget "Build Verify Report")
+  (setq act (getkword "\nPFINDEX [Build/Verify/Report] <Report>: "))
+  (if (null act) (setq act "Report"))
+  (prompt "\nReading the registry...")
+  (setq lines  (pfa:index-lines)
+        inlets (pfa:gather-inlets)
+        roster (pfa:roster-stamp lines (= act "Build")))
+  (cond
+    ((null lines)
+     (prompt "\nNo registered lines -- nothing to index."))
+    ((null inlets)
+     (prompt "\nNo structure blocks match a label rule -- nothing to index."))
+    ((not *pf-index-on*)
+     (prompt "\nThe membership index is switched OFF (*pf-index-on* nil).")
+     (prompt "\n  Records are neither read nor trusted; every command computes")
+     (prompt "\n  membership the long way.  Turn it on in pftools-cfg.lsp."))
+    ((= act "Build")
+     (pf:undo-begin '*pfs-undo-open*)
+     (setq res (pfa:index-build lines inlets roster))
+     (pf:undo-end '*pfs-undo-open*)
+     (prompt (strcat "\nPFINDEX build: " (itoa (car res)) " structure(s) indexed"
+                     (if (> (cadr res) 0)
+                       (strcat ", " (itoa (cadr res))
+                               " skipped (locked layer or read-only entity)")
+                       "")
+                     ".  (One U reverses it.)")))
+    ((= act "Verify")
+     (prompt (strcat "\nChecking " (itoa (length inlets))
+                     " structure(s) BOTH ways -- this is the slow one..."))
+     (setq bad (pfa:index-verify lines inlets roster))
+     (if (null bad)
+       (prompt "\nPFINDEX verify: every saved record matches a fresh computation.")
+       (progn
+         (prompt (strcat "\nPFINDEX verify: " (itoa (length bad))
+                         " DISAGREEMENT(S) -- the index is not trustworthy."))
+         (prompt "\n  Run PFINDEX Build, and if it recurs set *pf-index-on* nil.")
+         (foreach res bad (prompt (strcat "\n  " res))))))
+    (T
+     (setq scan (pfa:index-scan lines inlets roster))
+     (prompt (strcat "\nPFINDEX  " (itoa (length lines)) " line(s), "
+                     (itoa (length inlets)) " structure(s):"))
+     (prompt (strcat "\n  " (itoa (car scan))   " current"
+                     "\n  " (itoa (cadr scan))  " stale (a record, but the lines moved under it)"
+                     "\n  " (itoa (caddr scan)) " not indexed"))
+     (prompt (strcat "\n  roster " roster))
+     (if (> (+ (cadr scan) (caddr scan)) 0)
+       (prompt "\n  PFINDEX Build refreshes the lot."))))
+  (princ))
+
+(defun c:PFINDEX ()
+  (pf:run-command "PFINDEX" nil 'pfindex:cmd))
+
+
+(princ "\npfanchor.lsp loaded (V4 record + registry).  Commands: PFREMOVE, PFINDEX.")
 (princ)
 ;;; ==========================================================================
 ;;; end of pfanchor.lsp

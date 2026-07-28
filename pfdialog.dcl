@@ -116,12 +116,12 @@ pfsetup_registry : dialog {
     height          = 12;
     multiple_select = false;
   }
-  : text { label = "Double-click: anchor a registered profile, edit an anchored one."; }
+  : text { label = "Double-click: place an unplaced profile, edit a placed one."; }
   errtile;
   : row {
     fixed_width = true;
-    : button { key = "reg_place"; label = "Anchor";              mnemonic = "A"; width = 13; }
-    : button { key = "reg_all";   label = "Anchor All";          mnemonic = "l"; width = 13; }
+    : button { key = "reg_place"; label = "Place";              mnemonic = "P"; width = 13; }
+    : button { key = "reg_all";   label = "Place All";          mnemonic = "A"; width = 13; }
     : button { key = "reg_edit";  label = "Edit";               mnemonic = "E"; width = 13; }
     : button { key = "reg_new";   label = "New...";             mnemonic = "N"; width = 13; }
     : button { key = "reg_scan";  label = "Refresh";            mnemonic = "R"; width = 13; }
@@ -353,7 +353,7 @@ pfxl_run : dialog {
 // The ONE system-scoped dialog in the suite: the list is the REGISTRY, not
 // one target's structures, because a storm system spans lines.  Multi-select
 // is the point here (the other three dialogs use it for convenience).  Only
-// ANCHORED entries with a .cl and an _INV .pro are listed -- pfr:candidates
+// PLACED entries with a .cl and an _INV .pro are listed -- pfr:candidates
 // names every exclusion on the command line.
 pfrpt_run : dialog {
   label = "PFREPORT - Hydraflow Export";

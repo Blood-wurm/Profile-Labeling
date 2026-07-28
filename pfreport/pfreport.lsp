@@ -205,7 +205,7 @@
 
 ;; (pfr:elev-texts) -> ((x y prefix value raw) ...)   ONE model-space scan
 ;;   value is nil for an unfilled placeholder row.  Model space only, for the
-;;   same reason pflabel:gather-inlets is: paper-space text carries sheet
+;;   same reason pfa:gather-inlets is: paper-space text carries sheet
 ;;   coordinates, which the station transform would misread.
 (defun pfr:elev-texts ( / ss i ed s pt out p)
   (setq ss  (ssget "_X" '((0 . "TEXT") (410 . "Model")))
@@ -268,7 +268,7 @@
 ;;   structure label are the same string by construction.
 (defun pfr:struct-id (ename lines index / pt hits alpha names ranks)
   (setq pt    (cdr (assoc 10 (entget ename)))
-        hits  (pf:lines-at-point pt lines)
+        hits  (pfa:lines-at ename pt lines)
         alpha (pf:sort-line-infos-alpha hits)
         names (mapcar 'car alpha)
         ranks (mapcar '(lambda (li)
@@ -842,7 +842,7 @@
         (if (not (member ty seen))
           (setq seen  (cons ty seen)
                 pairs (append (reverse (pflabel:registry-pairs cl)) pairs))))))
-  (pflabel:build-lines (pf:dedupe-pairs (reverse pairs))))
+  (pfa:build-lines (pf:dedupe-pairs (reverse pairs))))
 
 ;; (pfr:default-path sel) -> the save dialog's starting path
 (defun pfr:default-path (sel / dir)
@@ -863,7 +863,7 @@
                       ") -- confirm these really are one system.")))
   (prompt "\nBuilding the line table...")
   (setq lines  (pfr:line-table sel)
-        inlets (pflabel:gather-inlets)
+        inlets (pfa:gather-inlets)
         index  (pflabel:index-stations inlets lines)
         texts  (pfr:elev-texts))
   (prompt (strcat "\n" (itoa (length texts))

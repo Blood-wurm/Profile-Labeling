@@ -215,7 +215,7 @@ drawing — not even "harmlessly":
 - `pf:cl-geom` takes a `write-p` flag; gather paths pass nil (a cache miss
   re-reads, never files). Only PFSETUP registration and PFXLABEL discovery
   — both inside command undo groups — pass T.
-- `pflabel:build-lines` is write-free: a re-matched twin is used for the run
+- `pfa:build-lines` is write-free: a re-matched twin is used for the run
   but not filed.
 - `pflabel:gather-compute` — the one gather-compute, shared by PFLABEL and
   PFINVERT — is dialog-blind and pure-read, so the Commands tab can call it
@@ -461,7 +461,7 @@ PALETTE-TESTING §1.7f. The fix is never to make the call.
 
 `pf:lines-at-point`'s corridor pre-filter **failed open**: no verts meant
 every structure in the drawing got tested against that line. And
-`pflabel:build-lines` was discarding the shape `pf:cl-geom` already handed it
+`pfa:build-lines` was discarding the shape `pf:cl-geom` already handed it
 in `(cdr geom)`, hunting instead for a drawn twin that registered-only lines
 never have — which is exactly what `registry-pairs` adds. Fixed, plus a new
 `*pf-corridor-sampled*` for approximate shapes. **Confirmed in CAD: 47 lines,

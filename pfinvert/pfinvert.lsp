@@ -143,7 +143,7 @@
                          (progn
                            (setq pairs (pf:dedupe-pairs
                                          (cons prim (pflabel:registry-pairs cl))))
-                           (pflabel:build-lines pairs)))
+                           (pfa:build-lines pairs)))
                primary (cdr prim))
          (cond
            ((null lines)
@@ -153,7 +153,7 @@
                             "' failed to load -- aborting."))
             nil)
            (T
-            (setq inlets (if preinlets preinlets (pflabel:gather-inlets)))
+            (setq inlets (if preinlets preinlets (pfa:gather-inlets)))
             (list (cons 'xform    xf)
                   (cons 'anchor   anchor)
                   (cons 'lines    lines)
@@ -250,7 +250,7 @@
         style   (cdr (assoc 'style context))
         layer   (cdr (assoc 'layer context))
         ht      (cdr (assoc 'ht context))
-        hits    (pf:lines-at-point pt (cdr (assoc 'lines context))))
+        hits    (pfa:lines-at block-ename pt (cdr (assoc 'lines context))))
   (setq primhit (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
   (cond
     ((null hits)
@@ -324,6 +324,9 @@
                       (pf:xf-vscale xf)
                       (pf:xf-sf xf)))
          (setq *pfinvert-run-ents* (cons en *pfinvert-run-ents*))))
+     ;; top-up, same contract as PFLABEL's: engine side, inside the undo group,
+     ;; no-op when current, catch-wrapped against a locked layer
+     (pfa:memb-sync block-ename pt (cdr (assoc 'lines context)) *pfa-roster*)
      (prompt (strcat "\n  Inverts labeled at " name "  ("
                      (if io (strcat "I.O. " (rtos (cdr io) 2 2)) "")
                      (if (and io ii) " / " "")
@@ -349,17 +352,29 @@
 ;;   line (across ALL inlets, not just the selected subset), or nil.  This is
 ;;   the leftmost structure on the grid -- the one whose stack shifts clear of
 ;;   the elevation-axis labels.
-(defun pfi:line-min-sta (context / lines primary inlets best e pt hits ph)
-  (setq lines   (cdr (assoc 'lines context))
-        primary (cdr (assoc 'primary context))
-        inlets  (cdr (assoc 'inlets context))
-        best    nil)
-  (foreach e inlets
-    (setq pt   (cdr (assoc 10 (entget e)))
-          hits (pf:lines-at-point pt lines)
-          ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
-    (if (and ph (or (null best) (< (cadr ph) best))) (setq best (cadr ph))))
-  best)
+;;
+;;   THE TICKET ALREADY CARRIES THIS.  pfi:rd-sel / pfi:rd-all file the gather's
+;;   pending list under 'pend, station-sorted ascending, so the minimum is its
+;;   first station.  Recomputing it was a full inlet x line membership scan --
+;;   every point in it costing a cl_location_at_pt -- to learn one number the
+;;   caller was already holding.  Same fix pflabel:label-all got; PFINVERT never
+;;   received it.  The walk survives ONLY for a caller that hands us a ticket
+;;   with no 'pend (nothing does today, but pfi:run is the documented entry
+;;   point for the palette's deferred command too).
+(defun pfi:line-min-sta (context / pend lines primary inlets best e pt hits ph)
+  (if (setq pend (cdr (assoc 'pend context)))
+    (caar pend)
+    (progn
+      (setq lines   (cdr (assoc 'lines context))
+            primary (cdr (assoc 'primary context))
+            inlets  (cdr (assoc 'inlets context))
+            best    nil)
+      (foreach e inlets
+        (setq pt   (cdr (assoc 10 (entget e)))
+              hits (pfa:lines-at e pt lines)
+              ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
+        (if (and ph (or (null best) (< (cadr ph) best))) (setq best (cadr ph))))
+      best)))
 
 ;; (pfi:label-sel context) -> nil
 ;;   Labels the structures picked in the run dialog's list (sorted by
@@ -372,17 +387,25 @@
   (foreach pr sel (pfi:process-structure (cadr pr) context))
   (princ))
 
+;; (pfi:label-all context) -> nil
+;;   The ticket ALREADY carries this list: pfi:rd-all files id-pend (the
+;;   gather's pending result, station-sorted) under 'sel for mode "All" exactly
+;;   as pfi:rd-sel does for "Sel".  Rebuilding it here was a second full
+;;   inlet x line membership scan.  Twin of the pflabel:label-all fix; use the
+;;   ticket, and rebuild ONLY when handed a mode-"All" ticket with no 'sel.
 (defun pfi:label-all (context / lines primary inlets pt hits ph pending e pr)
   (setq lines   (cdr (assoc 'lines context))
         primary (cdr (assoc 'primary context))
         inlets  (cdr (assoc 'inlets context))
-        pending '())
-  (foreach e inlets
-    (setq pt   (cdr (assoc 10 (entget e)))
-          hits (pf:lines-at-point pt lines)
-          ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
-    (if ph (setq pending (cons (list (cadr ph) e) pending))))
-  (setq pending (vl-sort pending '(lambda (a b) (< (car a) (car b)))))
+        pending (cdr (assoc 'sel context)))
+  (if (null pending)
+    (progn
+      (foreach e inlets
+        (setq pt   (cdr (assoc 10 (entget e)))
+              hits (pfa:lines-at e pt lines)
+              ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
+        (if ph (setq pending (cons (list (cadr ph) e) pending))))
+      (setq pending (vl-sort pending '(lambda (a b) (< (car a) (car b)))))))
   ;; first structure = lowest station (pending is sorted ascending)
   (setq context (cons (cons 'first-sta (caar pending)) context))
   (prompt (strcat "\nLabeling inverts at " (itoa (length pending))
@@ -394,7 +417,7 @@
 ;;   Records the pass + validates the _INV .pro against the FILES checksum,
 ;;   writing STATUS after (labeling can never be older than its check).
 (defun pfi:write-pass (ctx / anchor clayer-p allmode handles old files
-                       stored cur state findings e layer)
+                       stored res state findings e layer)
   (setq anchor   (cdr (assoc 'anchor ctx))
         clayer-p (cdr (assoc 'clayer-p ctx))
         layer    (cdr (assoc 'layer ctx))
@@ -412,24 +435,15 @@
               (setq old (pfa:pass-handles anchor *pfi-pass-name*)))
        (setq handles (append old handles)))
      (pfa:pass-put anchor *pfi-pass-name* layer nil handles)))
-  ;; ---- input validation -> STATUS ---------------------------------------
-  (setq files   (pfa:files-get anchor)
-        stored  (if (and files (assoc 300 files)) (cdr (assoc 300 files)) "")
-        cur     (pf:checksum-file (cdr (assoc 'proinv ctx)))
-        findings '())
-  (cond
-    ((= stored "")
-     (setq state 0
-           findings '("no _INV .pro checksum on record -- run PFSETUP (edit)")))
-    ((null cur)
-     (setq state 2
-           findings '("_INV .pro on record could not be read for checksum")))
-    ((= stored cur)
-     (setq state 1))
-    (T
-     (setq state 2
-           findings '("_INV .pro content CHANGED since setup -- inverts may be stale; re-run PFSETUP"))))
-  (pfa:status-put anchor state findings)
+  ;; ---- input validation -> STATUS_INVERT --------------------------------
+  ;; PFINVERT's input is the _INV .pro and nothing else.  Its own record now,
+  ;; so this no longer overwrites what PFLABEL learned about the .cl.
+  (setq files  (pfa:files-get anchor)
+        stored (if (and files (assoc 300 files)) (cdr (assoc 300 files)) "")
+        res    (pfa:status-check anchor "INVERT" (cdr (assoc 'proinv ctx)) stored)
+        state  (car res)
+        findings (cdr res))
+  (pfa:status-put anchor "INVERT" state stored findings)
   (prompt (strcat "\nPass recorded.  Status: " (pfa:status-label state)))
   (foreach e findings (prompt (strcat "\n  FINDING: " e)))
   (princ))
@@ -493,8 +507,13 @@
     (progn
       (setq idxs (read (strcat "(" s ")")) out '())
       (foreach i idxs (setq out (cons (nth i id-pend) out)))
+      ;; 'pend rides beside 'sel: the FULL station-sorted list of structures on
+      ;; the primary, which pfi:line-min-sta needs and which the gather already
+      ;; computed.  Without it that function walked every inlet a second time
+      ;; just to find the smallest number in a list it was standing next to.
       (setq id-res (list (cons 'mode   "Sel")
                          (cons 'sel    (reverse out))
+                         (cons 'pend   id-pend)
                          (cons 'lines  id-lines)
                          (cons 'inlets id-inlets)))
       (done_dialog 1))))
@@ -505,6 +524,7 @@
     (progn
       (setq id-res (list (cons 'mode   "All")
                          (cons 'sel    id-pend)
+                         (cons 'pend   id-pend)
                          (cons 'lines  id-lines)
                          (cons 'inlets id-inlets)))
       (done_dialog 1))))
@@ -526,8 +546,8 @@
            pairs      (pf:dedupe-pairs
                         (cons (cons cl id-primary)
                               (pflabel:registry-pairs cl)))
-           id-lines   (pflabel:build-lines pairs)
-           id-inlets  (pflabel:gather-inlets))
+           id-lines   (pfa:build-lines pairs)
+           id-inlets  (pfa:gather-inlets))
      (if (null (pfi:rd-compute))
        (progn
          (prompt (strcat "\nCenterline for '" id-primary
@@ -583,7 +603,8 @@
       ;; resolve INSIDE the ctx guard: a nil-ctx abort must not consume a
       ;; pending one-shot palette override
       (pf:zoom-resolve nil)         ; PFINVERT does NOT parade unless the palette asks
-      (setq ctx (cons (cons 'sel (cdr (assoc 'sel rd))) ctx))
+      (setq ctx (cons (cons 'sel  (cdr (assoc 'sel  rd))) ctx)
+            ctx (cons (cons 'pend (cdr (assoc 'pend rd))) ctx))
       (setq *pfinvert-run-ents* '())
       (setq *pfinvert-run-ctx* ctx)       ; publish for the Esc flush
       (pf:undo-begin '*pfinvert-undo-open*)
