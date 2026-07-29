@@ -284,7 +284,7 @@
 ;;   open undo group.
 (defun pfa:write-anchor (line util xform tfile / ins wid hgt isc vals y i
                          anchor)
-  (pfd:ensure-layer *pfa-layer* T)
+  (pfd:ensure-layer-c *pfa-layer* T *pfa-layer-color*)
   (pfa:ensure-anchor-block)
   (setq ins (list (pf:xf-leftx xform) (pf:xf-basey xform) 0.0)
         wid (if (pf:xf-get 'rightx xform)
@@ -844,7 +844,7 @@
 ;;; real state and it is the whole basis of "stale".  NOT stored: how many
 ;;; structures are done out of how many.  A saved count reads 12-of-12 forever
 ;;; after someone erases a label; the live gather owns that number (see the
-;;; drift-echo note in pflabel:gather-compute, which makes the same argument).
+;;; drift-echo note in pfa:gather-compute, which makes the same argument).
 
 (defun pfa:status-key (pass) (strcat "STATUS_" (strcase pass)))
 
@@ -1053,7 +1053,7 @@
             (setq h (pf:cl-twin-handle file *pf-corridor*))
             (if h (setq vts (pf:twin-verts h)))))
         ;; STILL nothing drawn to match -- registered-only lines never have a
-        ;; twin, and they are exactly what pflabel:registry-pairs adds.  Fall
+        ;; twin, and they are exactly what pfa:registry-pairs adds.  Fall
         ;; back to the .cl's own SAMPLED shape, which pf:cl-geom already
         ;; returned in (cdr geom): a coarse corridor, but a corridor.  Shipping
         ;; nil here turned the pre-filter OFF for those lines, and every
@@ -1067,7 +1067,10 @@
         (setq entry (list file nm (car rng) (cadr rng) vts tol
                           (pf:verts-bbox vts))
               tbl   (cons entry tbl))
-        (prompt (strcat "\nLoaded line '" nm "' (Sta " (pf:fmt-station (car rng))
+        ;; PROGRESS: one line per line in the gather set.  Suppressed under
+        ;; *pf-quiet* -- a palette click runs this same path and does not want
+        ;; a six-line preamble.  The error below is a FINDING and still prints.
+        (pf:progress (strcat "\nLoaded line '" nm "' (Sta " (pf:fmt-station (car rng))
                         " to " (pf:fmt-station (cadr rng)) ")"
                         (cond
                           ((null vts)
@@ -1202,6 +1205,323 @@
                'pfa:memb-put
                (list ent pt (pf:lines-at-point pt lines) roster)))
      (not (vl-catch-all-error-p r)))))
+
+
+;;; ==========================================================================
+;;; SECTION 4c  --  The gather  (membership -> pending -> status)
+;;; ==========================================================================
+;;; MOVED DOWN FROM pflabel 2026-07-29, completing the migration begun on
+;;; 2026-07-27 with pfa:build-lines / pfa:gather-inlets.  Every function here
+;;; is membership-and-ledger knowledge rather than label knowledge: not one of
+;;; them called anything in pflabel, and each reaches only pfanchor (position 4)
+;;; or pftools-lib (position 2).
+;;;
+;;; The forcing reason is the palette.  pfpalette sits at position 11 and needs
+;;; per-target counts; with the gather at 7 it would have had to reach sideways
+;;; into pflabel, and pfanchor -- which every module already depends on --
+;;; could never have served them, because 4 cannot reach up to 7.  Now the
+;;; three label commands, pfreport and the palette all resolve membership
+;;; through ONE path.  Same precedent as pfa:entry-cl (out of pfxlabel,
+;;; 2026-07-26) and the build-lines/gather-inlets move.
+;;;
+;;; ALL PURE READS -- the palette contract holds throughout, so a modeless
+;;; handler may call any of it.
+
+(defun pfa:line-loaded-p (name lines)
+  (car (vl-member-if '(lambda (e) (= (cadr e) name)) lines)))
+
+;; (pfa:registry-pairs primary-cl) -> list of (path . name): every
+;;   OTHER registry entry's .cl -- anchors AND stubs.  The self-maintaining
+;;   secondary set.  Stubs count because membership is plan-view station
+;;   math: IDENTITY IS ENOUGH -- a registered line still contributes to a
+;;   junction's combined ID.  (This closes the old silently-shorter-ID gap.)
+;;   Secondaries are SAME-UTILITY-TYPE only: a STORM profile's junctions are
+;;   other STORM lines.  A different type sharing a station is a CROSSING, not
+;;   a junction -- that's PFXLABEL's job, not a combined-ID contributor here.
+;;
+;;   ONE BUILDER (audit #12): a thin filter over pfa:registry -- the one
+;;   merged, COPY-EXCLUDING, sorted walk -- resolved via pfa:entry-cl, self
+;;   dropped by canonical identity (pf:cl-id).  Consumers: both setups, both
+;;   run dialogs, pfreport, and pfa:target-counts.  PFLABEL and PFINVERT can
+;;   no longer disagree about a junction's line set by construction.
+(defun pfa:registry-pairs (primary-cl / out r clf ptype pid)
+  (setq out '() ptype (pf:type-of primary-cl) pid (pf:cl-id primary-cl))
+  (foreach r (pfa:registry)
+    (if (and (setq clf (pfa:entry-cl r))
+             (/= (pf:cl-id clf) pid)                ; drop self
+             (= (pf:type-of clf) ptype))            ; same type only
+      (setq out (cons (cons clf (cadr r)) out))))
+  (reverse out))
+
+;; (pfa:pending inlets lines primary) -> ((sta ename blkname) ...)
+;;   Every structure on the PRIMARY line, sorted by station.
+(defun pfa:pending (inlets lines primary / out e pt hits ph)
+  (setq out '())
+  (foreach e inlets
+    (setq pt   (cdr (assoc 10 (entget e)))
+          hits (pfa:lines-at e pt lines)
+          ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
+    (if ph (setq out (cons (list (cadr ph) e (cdr (assoc 2 (entget e))))
+                           out))))
+  (vl-sort out '(lambda (a b) (< (car a) (car b)))))
+
+;; (pfa:pass-xs anchor passname) -> X ordinates of the pass's entities
+(defun pfa:pass-xs (anchor passname / out h e ed p)
+  (setq out '())
+  (foreach h (pfa:pass-handles anchor passname)
+    (if (and (setq e (handent h)) (setq ed (entget e))
+             (setq p (cdr (assoc 10 ed))))
+      (setq out (cons (car p) out))))
+  out)
+
+;; (pfa:labeled-x-p x xs eps) -> T when a pass entity sits at this X
+;;   Symmetric in its two arguments -- also used the other way round, to ask
+;;   whether a STRUCTURE sits at a given pass entity's X (see orphan-xs).
+(defun pfa:labeled-x-p (x xs eps / found v)
+  (setq found nil)
+  (foreach v xs
+    (if (<= (abs (- v x)) eps) (setq found T)))
+  found)
+
+;; (pfa:cluster-xs xs eps) -> one representative X per eps-cluster
+;;   A label STACK is many entities at one X (every row, plus the station
+;;   line), so a raw count of pass entities would report one moved structure
+;;   as five.  Collapse to stations before counting anything.
+(defun pfa:cluster-xs (xs eps / out v)
+  (setq out '())
+  (foreach v xs
+    (if (not (pfa:labeled-x-p v out eps)) (setq out (cons v out))))
+  (reverse out))
+
+;; (pfa:orphan-xs pend xs eps xf) -> pass X ordinates with no structure
+;;   THE DRIFT DETECTOR, and the reverse of the [LABELED] test.  labeled-x-p
+;;   asks "does a label sit at this structure?"; this asks "does a structure
+;;   sit under this label?"  A no means the structure MOVED or was ERASED
+;;   after it was labeled, and the label is now at a stale station.
+;;
+;;   No stored position is needed for this: the DRAWN LABELS ARE THE RECORD of
+;;   where the structures were.  The sheet is the baseline, which is also the
+;;   thing that is actually wrong when they disagree.
+;;
+;;   Degrades honestly -- a moved structure reads Outstanding at its new
+;;   station AND leaves an orphan at its old one.  Two signals, one event.
+(defun pfa:orphan-xs (pend xs eps xf / sxs out v)
+  (setq sxs (mapcar '(lambda (p) (pf:station->profile-x (car p) xf)) pend)
+        out '())
+  (foreach v (pfa:cluster-xs xs eps)
+    (if (not (pfa:labeled-x-p v sxs eps)) (setq out (cons v out))))
+  (reverse out))
+
+;;; ---- The gather memo  (SESSION-scoped; not a drawing write) --------------
+;;; The membership product is inlets x lines and it was recomputed from
+;;; scratch on every run, every target switch, and every cancelled dialog.
+;;; This memoises ONLY that product.  build-lines still runs fresh each time,
+;;; because it is O(lines) rather than O(lines x structures) and running it
+;;; keeps the twin verts LIVE -- so a moved plan centerline can never be
+;;; served stale out of here.
+;;;
+;;; AutoLISP globals are per-document, so this is naturally per-drawing.
+;;; Nothing here touches the database: it is a LISP variable, legal from a
+;;; modeless handler, and it survives a cancelled dialog (which is precisely
+;;; the case that used to throw a full gather away).
+;;;
+;;; THE KEY IS THE WHOLE INPUT SET of the thing memoised, and every part of it
+;;; is cheap.  Since the 2026-07-29 split this memo holds PEND ONLY, so the key
+;;; is exactly what pfa:pending reads:
+;;;   primary                   which line is being asked about
+;;;   inlet signature           (handle x y) per structure -- catches ADD,
+;;;                             ERASE and MOVE, which is the full set of
+;;;                             things that can change membership
+;;;   line signature            per line: name, range, corridor tol, bbox and
+;;;                             vertex count -- catches a re-bound .cl, a
+;;;                             moved twin, a registry add/remove
+;;; A stale entry cannot be served: anything that would change the answer is
+;;; in the key.  Nothing is derived-and-trusted.
+;;;
+;;; NOT IN THE KEY -- anchor, pass name, pass X ordinates.  None are inputs to
+;;; pending.  The ordinates were there only because the entry used to carry
+;;; status and orphans too; status now recomputes every call (pfa:status-for),
+;;; so drawing a label no longer throws away a walk it never invalidated.
+
+(if (not (boundp '*pfa-gather-memo*)) (setq *pfa-gather-memo* '()))
+(setq *pfa-memo-max* 8)        ; a few targets stay warm; no unbounded growth
+
+;; (pfa:inlet-sig inlets) -> ((handle x y) ...)
+(defun pfa:inlet-sig (inlets / out e ed p)
+  (setq out '())
+  (foreach e inlets
+    (if (and (setq ed (entget e)) (setq p (cdr (assoc 10 ed))))
+      (setq out (cons (list (cdr (assoc 5 ed)) (car p) (cadr p)) out))))
+  (reverse out))
+
+;; (pfa:lines-sig lines) -> ((name lo hi tol bbox nverts) ...)
+;;   Derived from the table just built, so it costs a walk of a list already
+;;   in hand.  bbox + vertex count catch a shape change; the range catches a
+;;   re-bound .cl; the list itself catches a registry add or remove.
+(defun pfa:lines-sig (lines / out e)
+  (setq out '())
+  (foreach e lines
+    (setq out (cons (list (cadr e) (nth 2 e) (nth 3 e) (nth 5 e) (nth 6 e)
+                          (length (nth 4 e)))
+                    out)))
+  (reverse out))
+
+;; assoc by `equal` -- AutoLISP's assoc is not dependable on list keys
+(defun pfa:memo-get (key memo / hit c)
+  (foreach c memo (if (and (null hit) (equal (car c) key)) (setq hit c)))
+  hit)
+
+(defun pfa:memo-put (key val memo / out n)
+  (setq out (list (cons key val)) n 1)
+  (foreach c memo
+    (if (and (< n *pfa-memo-max*) (not (equal (car c) key)))
+      (setq out (cons c out) n (1+ n))))
+  (reverse out))
+
+;; (pfa:pend-for primary lines inlets) -> ((sta ename blkname) ...)
+;;   THE EXPENSIVE HALF, split out of gather-compute 2026-07-29 so ONE walk can
+;;   serve MANY passes -- the Commands tab shows Structure and Invert counts
+;;   side by side, and asking gather-compute twice used to mean two identical
+;;   inlets x lines walks.
+;;   Assumes primary is loaded in lines -- gather-compute holds that guard.
+(defun pfa:pend-for (primary lines inlets / key hit pend)
+  (setq key (list primary
+                  (pfa:inlet-sig inlets)
+                  (pfa:lines-sig lines)))
+  (if (setq hit (pfa:memo-get key *pfa-gather-memo*))
+    (cdr hit)                                 ; HIT -- no inlets x lines walk
+    (progn
+      (setq pend (pfa:pending inlets lines primary)
+            *pfa-gather-memo*
+                 (pfa:memo-put key pend *pfa-gather-memo*))
+      pend)))
+
+;; (pfa:status-for anchor passname pend xform) -> (status orphans)
+;;   THE CHEAP HALF: a handle walk (pass-xs) plus arithmetic per structure, so
+;;   it is recomputed every call rather than memoised.  That is the point --
+;;   status describes what is DRAWN RIGHT NOW, and a stored answer goes stale
+;;   the moment a pass is drawn.  Call it once per pass over one shared pend.
+(defun pfa:status-for (anchor passname pend xform / xs eps status p)
+  (setq xs     (pfa:pass-xs anchor passname)
+        eps    (max *pfa-recon-eps*
+                    (* 1.5 (pf:text-height (pf:xf-hplot xform))))
+        status '())
+  (foreach p pend
+    (setq status
+          (append status
+                  (list (pfa:labeled-x-p
+                          (pf:station->profile-x (car p) xform) xs eps)))))
+  (list status (pfa:orphan-xs pend xs eps xform)))
+
+;; (pfa:gather-compute anchor passname primary lines inlets)
+;;   -> (pend status orphans) | nil        nil = the primary line never loaded
+;;
+;;   THE ONE GATHER-COMPUTE, shared by PFLABEL and PFINVERT.  Both commands ask
+;;   the identical question -- which structures are on this line, and which
+;;   already carry a label from THIS pass -- and the only thing that varied
+;;   between the two copies was the pass name, which was already a parameter.
+;;   `.pro` never entered here: PFINVERT's profile work is downstream, in the
+;;   engine (pfi:invert-bracket / pf:pro-verts), not in the gather.
+;;
+;;   The dialog FILLS stay local to each command, because tile names belong to
+;;   their own DCL dialog.  Only the dialog-blind part is shared -- so this is
+;;   callable from a modeless palette handler too (pure reads throughout).
+(defun pfa:gather-compute (anchor passname primary lines inlets
+                            / pend xf so orphans stas res)
+  (if (not (pfa:line-loaded-p primary lines))
+    nil
+    (progn
+      (setq xf   (pfa:anchor->xform anchor)
+            pend (pfa:pend-for primary lines inlets)
+            so   (pfa:status-for anchor passname pend xf)
+            res  (list pend (car so) (cadr so)))
+      ;; DRIFT ECHO -- printed, never persisted, and printed on a memo HIT too:
+      ;; it describes the DRAWING, not the freshness of this computation.
+      ;; STATUS means "correct as of the last pass" and drift accumulates
+      ;; BETWEEN passes, so a stored flag would always read clean one command
+      ;; after it stopped being true.  The live view owns "correct right now";
+      ;; this is its command-line half, and it sits with the other
+      ;; warn-loudly-let-the-user-decide findings.
+      (if (setq orphans (caddr res))
+        (progn
+          (setq stas (mapcar '(lambda (v)
+                                (pf:fmt-station (pf:profile-x->station v xf)))
+                             orphans))
+          ;; Advisory, and the palette renders the same fact in detailsList's
+          ;; Drift row -- so under *pf-quiet* it is a DUPLICATE, not a loss.
+          ;; On the command line (flag nil) it prints exactly as before.
+          (pf:progress (strcat "\n  DRIFT: " (itoa (length orphans))
+                          " label(s) with no structure -- something moved since"
+                          " the last pass."
+                          "\n         Sta " (pf:join stas ", ")
+                          "\n         Re-run with Label All to replace the pass"
+                          " (the anchor and the .cl are not implicated)."))))
+      res)))
+
+;; (pfa:line-table anchor) -> (primary lines) | nil
+;;   THE target -> line-set resolution, one home.  Four call sites built this
+;;   by hand (both setups, both run dialogs); they now all come here.
+;;   nil = no xform on record, or no .cl bound.  Pure read.
+(defun pfa:line-table (anchor / xf cl primary pairs)
+  (setq xf (pfa:anchor->xform anchor))
+  (if (or (null xf) (null (setq cl (pf:xf-get 'clfile xf))))
+    nil
+    (progn
+      (setq primary (pf:xf-get 'name xf)
+            pairs   (pf:dedupe-pairs
+                      (cons (cons cl primary) (pfa:registry-pairs cl))))
+      (list primary (pfa:build-lines pairs)))))
+
+;; (pfa:target-counts anchor) -> alist | nil       nil = not an anchored target
+;;   THE per-target roll-up the palette's Commands tab reads.  Worked out on
+;;   read and never stored, for the same reason pfa:status-roll is: nothing
+;;   would update a saved summary when one of the records beneath it moved.
+;;
+;;   ONE pend walk serves BOTH label passes -- that is what pfa:pend-for exists
+;;   for.  Crossings come off the ledger, which is why they are nearly free.
+;;
+;;   Keys: primary lines structures label-done label-out invert-done invert-out
+;;         crossings xing-done xing-out drift
+;;   Pure reads throughout -- legal from a modeless handler.
+(defun pfa:target-counts (anchor / lt primary lines inlets pend xf
+                                   lab inv work recon n nd e)
+  (setq lt (pfa:line-table anchor))
+  (if (null lt)
+    nil
+    (progn
+      (setq primary (car lt)
+            lines   (cadr lt)
+            xf      (pfa:anchor->xform anchor))
+      (if (not (pfa:line-loaded-p primary lines))
+        nil
+        (progn
+          (setq inlets (pfa:gather-inlets)
+                pend   (pfa:pend-for primary lines inlets)
+                lab    (pfa:status-for anchor "LABEL"  pend xf)
+                inv    (pfa:status-for anchor "INVERT" pend xf)
+                work   (pfa:xing-list anchor)
+                recon  (if work (pfa:recon xf work) '())
+                n      (length work)
+                nd     0)
+          (foreach e work
+            (if (cdr (assoc (pfa:xr-key e) recon)) (setq nd (1+ nd))))
+          (list (cons 'primary     primary)
+                (cons 'lines       (length lines))
+                (cons 'structures  (length pend))
+                (cons 'label-done  (pfa:count-t (car lab)))
+                (cons 'label-out   (- (length pend) (pfa:count-t (car lab))))
+                (cons 'invert-done (pfa:count-t (car inv)))
+                (cons 'invert-out  (- (length pend) (pfa:count-t (car inv))))
+                (cons 'crossings   n)
+                (cons 'xing-done   nd)
+                (cons 'xing-out    (- n nd))
+                (cons 'drift       (length (cadr lab)))))))))
+
+;; (pfa:count-t lst) -> how many entries are non-nil
+(defun pfa:count-t (lst / n v)
+  (setq n 0)
+  (foreach v lst (if v (setq n (1+ n))))
+  n)
 
 
 ;;; ==========================================================================
@@ -1476,12 +1796,25 @@
 ;;   work  = the command body (QUOTED symbol, no args) -- gather + engine
 ;;   The body still opens/closes its own undo group (via pf:undo-begin/end)
 ;;   at the point its writes start -- gather stays OUTSIDE the group.
+;;
+;;   API LOADING IS PART OF THE PROLOGUE, 2026-07-29.  It used to be the first
+;;   line of each command BODY, and six of the nine entry points remembered it.
+;;   C:PFPVERB did not: the palette's anchor verb calls pfs:place-one directly
+;;   rather than pfs:cmd, so in a session where no other PFTools command had run
+;;   yet, btnAnchor prompted for scales and datum and then died on the first
+;;   centerline read -- "bad function: CF:ROAD_API".  It read as working because
+;;   testing a palette button almost always follows a command-line run that has
+;;   already scloaded eworks.  Same class as audit #9: what EVERY entry point
+;;   needs belongs to the ONE wrapper, not to the discipline of whoever writes
+;;   the next command.  scload is idempotent and catch-wrapped, so repeat calls
+;;   cost nothing, and it sits AFTER echo-off so the load chatter is suppressed.
 (defun pf:run-command (name flush work)
   (setq *pf-run-prev-error* *error*
         *pf-run-name*       name
         *pf-run-flush*      flush
         *error*             pf:run-error)
   (pf:echo-off)
+  (pf:load-apis)
   (apply work '())
   (pf:echo-on)
   (setq *error*        *pf-run-prev-error*
@@ -1655,7 +1988,6 @@
 ;;   run at once, so sharing the flag is the safe option, not the lazy one.
 (defun pfindex:cmd ( / lines inlets roster act res scan bad)
   (setq *pfs-undo-open* nil)
-  (pf:load-apis)
   (initget "Build Verify Report")
   (setq act (getkword "\nPFINDEX [Build/Verify/Report] <Report>: "))
   (if (null act) (setq act "Report"))

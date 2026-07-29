@@ -8,7 +8,8 @@
 (vl-load-com)
 
 ;; Run-scoped state (set fresh by every command run).
-(setq *pf-layer*  "STORM-TEXT_P")
+(setq *pf-layer*  "PF-ANNO")     ; placeholder; pflabel:setup overwrites it every
+                                 ; run from *pf-anno-layer* (pftools-cfg)
 (setq *pf-style*  "L080")
 (setq *pf-height* 1.60)
 (if (not (boundp '*pflabel-run-ents*)) (setq *pflabel-run-ents* '()))
@@ -89,9 +90,11 @@
         (action_tile "help"
           (strcat "(pfset:help \"Label text prefixes/suffixes feed PFLABEL's "
                   "rows; greyed fields are owned by the firm's rule table."
-                  "\\n\\nLayer: the run derives <TYPE>-TEXT_P from the "
-                  "anchor unless 'Use current layer' is on (then output is "
-                  "untracked).\\nStyle must exist in the drawing.\\n\\n"
+                  "\\n\\nLayer: ALL label output goes to PF-ANNO (no-plot, "
+                  "green) unless 'Use current layer' is on -- then it goes to "
+                  "the current layer and the pass is untracked.  The Layer "
+                  "field itself is retired and no longer read."
+                  "\\nStyle must exist in the drawing.\\n\\n"
                   "Load/Save move the whole settings file.\")"))
         (setq result (vl-catch-all-apply 'start_dialog '()))
         (unload_dialog dcl_id)
@@ -120,31 +123,17 @@
 ;; writer -- position 4 -- cannot reach up to this file at 7.  No alias left
 ;; behind; same precedent as pfa:entry-cl, moved out of pfxlabel 2026-07-26.
 
-(defun pflabel:line-loaded-p (name lines)
-  (car (vl-member-if '(lambda (e) (= (cadr e) name)) lines)))
-
-;; (pflabel:registry-pairs primary-cl) -> list of (path . name): every
-;;   OTHER registry entry's .cl -- anchors AND stubs.  The self-maintaining
-;;   secondary set.  Stubs count because membership is plan-view station
-;;   math: IDENTITY IS ENOUGH -- a registered line still contributes to a
-;;   junction's combined ID.  (This closes the old silently-shorter-ID gap.)
-;;   Secondaries are SAME-UTILITY-TYPE only: a STORM profile's junctions are
-;;   other STORM lines.  A different type sharing a station is a CROSSING, not
-;;   a junction -- that's PFXLABEL's job, not a combined-ID contributor here.
+;; THE WHOLE GATHER moved to pfanchor SECTION 4c, 2026-07-29 -- line-loaded-p,
+;; registry-pairs, pending, pass-xs, labeled-x-p, cluster-xs, orphan-xs,
+;; inlet-sig, lines-sig, the memo pair, pend-for, status-for and
+;; gather-compute, all now pfa:.  Not one of them called anything in this file;
+;; each was membership-and-ledger knowledge sitting in the labeling module by
+;; history.  The palette at position 11 needed per-target counts, and pfanchor
+;; at 4 -- which every module already depends on -- could not serve them from
+;; up here at 7.  No aliases left behind, same as the 2026-07-27 move.
 ;;
-;;   ONE BUILDER (audit #12): a thin filter over pfa:registry -- the one
-;;   merged, COPY-EXCLUDING, sorted walk -- resolved via pfa:entry-cl, self
-;;   dropped by canonical identity (pf:cl-id).  Consumers: pflabel:setup,
-;;   pfi:setup, pflabel:run-dialog, pfi:run-dialog.  PFLABEL and PFINVERT can
-;;   no longer disagree about a junction's line set by construction.
-(defun pflabel:registry-pairs (primary-cl / out r clf ptype pid)
-  (setq out '() ptype (pf:type-of primary-cl) pid (pf:cl-id primary-cl))
-  (foreach r (pfa:registry)
-    (if (and (setq clf (pfa:entry-cl r))
-             (/= (pf:cl-id clf) pid)                ; drop self
-             (= (pf:type-of clf) ptype))            ; same type only
-      (setq out (cons (cons clf (cadr r)) out))))
-  (reverse out))
+;; index-stations stays: it is combined-ID RANKING, not membership, and its
+;; only consumers are this file and pfreport.
 
 ;; (pflabel:index-stations inlets line-table) -> (name . sorted-stations)*
 ;;   The ranking input: every station on every line, so pf:rank-on-line can
@@ -177,64 +166,7 @@
 ;;; command's pass within eps of the station X.  Advisory only -- CLAYER
 ;;; passes are untracked and never marked.
 
-;; (pflabel:pending inlets lines primary) -> ((sta ename blkname) ...)
-;;   Every structure on the PRIMARY line, sorted by station.
-(defun pflabel:pending (inlets lines primary / out e pt hits ph)
-  (setq out '())
-  (foreach e inlets
-    (setq pt   (cdr (assoc 10 (entget e)))
-          hits (pfa:lines-at e pt lines)
-          ph   (car (vl-member-if '(lambda (h) (= (car h) primary)) hits)))
-    (if ph (setq out (cons (list (cadr ph) e (cdr (assoc 2 (entget e))))
-                           out))))
-  (vl-sort out '(lambda (a b) (< (car a) (car b)))))
-
-;; (pflabel:pass-xs anchor passname) -> X ordinates of the pass's entities
-(defun pflabel:pass-xs (anchor passname / out h e ed p)
-  (setq out '())
-  (foreach h (pfa:pass-handles anchor passname)
-    (if (and (setq e (handent h)) (setq ed (entget e))
-             (setq p (cdr (assoc 10 ed))))
-      (setq out (cons (car p) out))))
-  out)
-
-;; (pflabel:labeled-x-p x xs eps) -> T when a pass entity sits at this X
-;;   Symmetric in its two arguments -- also used the other way round, to ask
-;;   whether a STRUCTURE sits at a given pass entity's X (see orphan-xs).
-(defun pflabel:labeled-x-p (x xs eps / found v)
-  (setq found nil)
-  (foreach v xs
-    (if (<= (abs (- v x)) eps) (setq found T)))
-  found)
-
-;; (pflabel:cluster-xs xs eps) -> one representative X per eps-cluster
-;;   A label STACK is many entities at one X (every row, plus the station
-;;   line), so a raw count of pass entities would report one moved structure
-;;   as five.  Collapse to stations before counting anything.
-(defun pflabel:cluster-xs (xs eps / out v)
-  (setq out '())
-  (foreach v xs
-    (if (not (pflabel:labeled-x-p v out eps)) (setq out (cons v out))))
-  (reverse out))
-
-;; (pflabel:orphan-xs pend xs eps xf) -> pass X ordinates with no structure
-;;   THE DRIFT DETECTOR, and the reverse of the [LABELED] test.  labeled-x-p
-;;   asks "does a label sit at this structure?"; this asks "does a structure
-;;   sit under this label?"  A no means the structure MOVED or was ERASED
-;;   after it was labeled, and the label is now at a stale station.
-;;
-;;   No stored position is needed for this: the DRAWN LABELS ARE THE RECORD of
-;;   where the structures were.  The sheet is the baseline, which is also the
-;;   thing that is actually wrong when they disagree.
-;;
-;;   Degrades honestly -- a moved structure reads Outstanding at its new
-;;   station AND leaves an orphan at its old one.  Two signals, one event.
-(defun pflabel:orphan-xs (pend xs eps xf / sxs out v)
-  (setq sxs (mapcar '(lambda (p) (pf:station->profile-x (car p) xf)) pend)
-        out '())
-  (foreach v (pflabel:cluster-xs xs eps)
-    (if (not (pflabel:labeled-x-p v sxs eps)) (setq out (cons v out))))
-  (reverse out))
+;; pending / pass-xs / labeled-x-p / cluster-xs / orphan-xs -> pfanchor 4c.
 
 ;; ---- Run dialog: RENDER + handlers (rd-* live in pflabel:run-dialog) -------
 ;; rd-fill only PAINTS; rd-compute does the heavy work BEFORE new_dialog.
@@ -264,131 +196,15 @@
 
 ;; ALL heavy work, BEFORE new_dialog.  -> T when there is a list; nil on no line.
 ;; This is what keeps Road-API / recon work OUT of the dialog-init block.
-;;; ---- The gather memo  (SESSION-scoped; not a drawing write) --------------
-;;; The membership product is inlets x lines and it was recomputed from
-;;; scratch on every run, every target switch, and every cancelled dialog.
-;;; This memoises ONLY that product.  build-lines still runs fresh each time,
-;;; because it is O(lines) rather than O(lines x structures) and running it
-;;; keeps the twin verts LIVE -- so a moved plan centerline can never be
-;;; served stale out of here.
-;;;
-;;; AutoLISP globals are per-document, so this is naturally per-drawing.
-;;; Nothing here touches the database: it is a LISP variable, legal from a
-;;; modeless handler, and it survives a cancelled dialog (which is precisely
-;;; the case that used to throw a full gather away).
-;;;
-;;; THE KEY IS THE WHOLE INPUT SET, and every part of it is cheap:
-;;;   anchor + pass + primary   what is being asked
-;;;   inlet signature           (handle x y) per structure -- catches ADD,
-;;;                             ERASE and MOVE, which is the full set of
-;;;                             things that can change membership
-;;;   line signature            per line: name, range, corridor tol, bbox and
-;;;                             vertex count -- catches a re-bound .cl, a
-;;;                             moved twin, a registry add/remove
-;;;   pass X ordinates          so drawing labels invalidates the entry that
-;;;                             described the drawing before them
-;;; A stale entry cannot be served: anything that would change the answer is
-;;; in the key.  Nothing is derived-and-trusted.
-
-(if (not (boundp '*pfl-gather-memo*)) (setq *pfl-gather-memo* '()))
-(setq *pfl-memo-max* 8)        ; a few targets stay warm; no unbounded growth
-
-;; (pflabel:inlet-sig inlets) -> ((handle x y) ...)
-(defun pflabel:inlet-sig (inlets / out e ed p)
-  (setq out '())
-  (foreach e inlets
-    (if (and (setq ed (entget e)) (setq p (cdr (assoc 10 ed))))
-      (setq out (cons (list (cdr (assoc 5 ed)) (car p) (cadr p)) out))))
-  (reverse out))
-
-;; (pflabel:lines-sig lines) -> ((name lo hi tol bbox nverts) ...)
-;;   Derived from the table just built, so it costs a walk of a list already
-;;   in hand.  bbox + vertex count catch a shape change; the range catches a
-;;   re-bound .cl; the list itself catches a registry add or remove.
-(defun pflabel:lines-sig (lines / out e)
-  (setq out '())
-  (foreach e lines
-    (setq out (cons (list (cadr e) (nth 2 e) (nth 3 e) (nth 5 e) (nth 6 e)
-                          (length (nth 4 e)))
-                    out)))
-  (reverse out))
-
-;; assoc by `equal` -- AutoLISP's assoc is not dependable on list keys
-(defun pflabel:memo-get (key memo / hit c)
-  (foreach c memo (if (and (null hit) (equal (car c) key)) (setq hit c)))
-  hit)
-
-(defun pflabel:memo-put (key val memo / out n)
-  (setq out (list (cons key val)) n 1)
-  (foreach c memo
-    (if (and (< n *pfl-memo-max*) (not (equal (car c) key)))
-      (setq out (cons c out) n (1+ n))))
-  (reverse out))
-
-;; (pflabel:gather-compute anchor passname primary lines inlets)
-;;   -> (pend status orphans) | nil        nil = the primary line never loaded
-;;
-;;   THE ONE GATHER-COMPUTE, shared by PFLABEL and PFINVERT.  Both commands ask
-;;   the identical question -- which structures are on this line, and which
-;;   already carry a label from THIS pass -- and the only thing that varied
-;;   between the two copies was the pass name, which was already a parameter.
-;;   `.pro` never entered here: PFINVERT's profile work is downstream, in the
-;;   engine (pfi:invert-bracket / pf:pro-verts), not in the gather.
-;;
-;;   The dialog FILLS stay local to each command, because tile names belong to
-;;   their own DCL dialog.  Only the dialog-blind part is shared -- so this is
-;;   callable from a modeless palette handler too (pure reads throughout).
-(defun pflabel:gather-compute (anchor passname primary lines inlets
-                                / pend xf xs eps status orphans p stas
-                                  key hit res)
-  (if (not (pflabel:line-loaded-p primary lines))
-    nil
-    (progn
-      ;; --- the key: every cheap input, computed before the expensive one ---
-      (setq xf  (pfa:anchor->xform anchor)
-            xs  (pflabel:pass-xs anchor passname)
-            eps (max *pfa-recon-eps* (* 1.5 (pf:text-height (pf:xf-hplot xf))))
-            key (list (pf:handle anchor) passname primary
-                      (pflabel:inlet-sig inlets)
-                      (pflabel:lines-sig lines)
-                      xs))
-      (if (setq hit (pflabel:memo-get key *pfl-gather-memo*))
-        (setq res (cdr hit))                    ; HIT -- no inlets x lines walk
-        (progn
-          (setq pend   (pflabel:pending inlets lines primary)
-                status '())
-          (foreach p pend
-            (setq status
-                  (append status
-                          (list (pflabel:labeled-x-p
-                                  (pf:station->profile-x (car p) xf) xs eps)))))
-          (setq orphans (pflabel:orphan-xs pend xs eps xf)
-                res     (list pend status orphans)
-                *pfl-gather-memo*
-                        (pflabel:memo-put key res *pfl-gather-memo*))))
-      ;; DRIFT ECHO -- printed, never persisted, and printed on a memo HIT too:
-      ;; it describes the DRAWING, not the freshness of this computation.
-      ;; STATUS means "correct as of the last pass" and drift accumulates
-      ;; BETWEEN passes, so a stored flag would always read clean one command
-      ;; after it stopped being true.  The live view owns "correct right now";
-      ;; this is its command-line half, and it sits with the other
-      ;; warn-loudly-let-the-user-decide findings.
-      (if (setq orphans (caddr res))
-        (progn
-          (setq stas (mapcar '(lambda (v)
-                                (pf:fmt-station (pf:profile-x->station v xf)))
-                             orphans))
-          (prompt (strcat "\n  DRIFT: " (itoa (length orphans))
-                          " label(s) with no structure -- something moved since"
-                          " the last pass."
-                          "\n         Sta " (pf:join stas ", ")
-                          "\n         Re-run with Label All to replace the pass"
-                          " (the anchor and the .cl are not implicated)."))))
-      res)))
+;;; The gather memo, its two signatures, the memo pair, pend-for, status-for
+;;; and gather-compute all moved to pfanchor SECTION 4c on 2026-07-29, as
+;;; *pfa-gather-memo* / pfa:inlet-sig / pfa:lines-sig / pfa:memo-get /
+;;; pfa:memo-put / pfa:pend-for / pfa:status-for / pfa:gather-compute.
+;;; Rationale lives in that section; no aliases left behind.
 
 ;; Binds the shared compute into PFLABEL's dialog locals.  -> T | nil
 (defun pflabel:rd-compute ( / g)
-  (setq g (pflabel:gather-compute rd-anchor rd-pass rd-primary
+  (setq g (pfa:gather-compute rd-anchor rd-pass rd-primary
                                   rd-lines rd-inlets))
   (if (null g)
     (progn (setq rd-pend '() rd-status '() rd-orphans '()) nil)
@@ -425,7 +241,7 @@
 ;;   table, inlets, pending and recon all run BEFORE new_dialog -- the init
 ;;   block only paints, which is what cured the ghost-dropdown freeze.  No
 ;;   target popup: this dialog shows ONE target's structures.  The line table
-;;   is the ONE registry builder (pflabel:registry-pairs) plus the primary --
+;;   is the ONE registry builder (pfa:registry-pairs) plus the primary --
 ;;   the same build pfi:run-dialog and both setups use.
 (defun pflabel:run-dialog (title passname anchor
                            / rd-anchor rd-primary rd-pass rd-lines rd-inlets
@@ -442,7 +258,7 @@
      (setq rd-primary (pf:xf-get 'name xf)
            pairs      (pf:dedupe-pairs
                         (cons (cons cl rd-primary)
-                              (pflabel:registry-pairs cl)))
+                              (pfa:registry-pairs cl)))
            rd-lines   (pfa:build-lines pairs)
            rd-inlets  (pfa:gather-inlets))
      (if (null (pflabel:rd-compute))
@@ -516,13 +332,11 @@
      (if (= style "")
        (progn (prompt "\nNo usable text style in this drawing -- aborting.") nil)
        (progn
-         ;; layer per the settings toggle (Carlson-style "use current layer")
+         ;; layer per the settings toggle (Carlson-style "use current layer");
+         ;; otherwise THE annotation layer -- no longer derived from the
+         ;; utility type (2026-07-29)
          (setq clayer-p (= (cdr (assoc "use_clayer" s)) "1")
-               layer    (if clayer-p
-                          (getvar "CLAYER")
-                          (strcat (strcase (pf:xf-get 'type xf))
-                                  *pfx-text-layer-suffix*)))
-         (if (not clayer-p) (pfd:ensure-layer layer nil))
+               layer    (if clayer-p (getvar "CLAYER") (pfd:anno-layer)))
          (setq *pf-layer*  layer
                *pf-style*  style
                *pf-height* (pf:text-height (pf:xf-hplot xf)))
@@ -537,13 +351,13 @@
                          prelines
                          (progn
                            (setq pairs (pf:dedupe-pairs
-                                         (cons prim (pflabel:registry-pairs cl))))
+                                         (cons prim (pfa:registry-pairs cl))))
                            (pfa:build-lines pairs)))
                primary (cdr prim))
          (cond
            ((null lines)
             (prompt "\nNo readable centerlines -- aborting.") nil)
-           ((null (pflabel:line-loaded-p primary lines))
+           ((null (pfa:line-loaded-p primary lines))
             (prompt (strcat "\nPrimary line '" primary
                             "' failed to load -- aborting."))
             nil)
@@ -672,7 +486,7 @@
 
 ;; (pflabel:label-all context) -> nil
 ;;   The ticket ALREADY carries this list: pflabel:rd-all files rd-pend (the
-;;   gather's pflabel:pending result, sorted by station) under 'sel for mode
+;;   gather's pfa:pending result, sorted by station) under 'sel for mode
 ;;   "All" exactly as rd-sel does for "Sel".  Recomputing it here was a second
 ;;   full inlet x line membership scan -- every one of those points costs a
 ;;   cl_location_at_pt.  Use the ticket; rebuild ONLY when a caller hands us a
@@ -774,7 +588,6 @@
 ;; (pflabel:cmd) -> nil   The command body, run under pf:run-command.
 (defun pflabel:cmd ( / anchor rd)
   (setq *pflabel-undo-open* nil)
-  (pf:load-apis)
   ;; pick-first (PFXLABEL parity): choose/place the target, THEN list only its
   ;; structures.  choose-or-place anchors a registered pick on the fly.
   (setq anchor (pfs:choose-or-place))

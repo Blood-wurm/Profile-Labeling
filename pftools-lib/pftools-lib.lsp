@@ -695,6 +695,19 @@
 
 (defun pf:trim (s) (vl-string-trim " \t" s))
 
+;; (pf:progress s) -> nil   THE seam for suppressible console output.
+;;   Progress is the running commentary a command owes its user while it works.
+;;   The palette runs the SAME gather path on every tree click, where that
+;;   commentary is noise, so it binds *pf-quiet* (pftools-cfg) around its reads.
+;;
+;;   USE IT FOR PROGRESS ONLY.  A finding -- an error, a refusal, a skip report,
+;;   anything from *error* / pf:run-error -- calls (prompt) directly and always
+;;   prints.  The distinction is the whole point: silence the narration, never
+;;   the news.
+(defun pf:progress (s)
+  (if (not *pf-quiet*) (prompt s))
+  (princ))
+
 ;; (pf:subst-token str token repl) -> str with every `token` replaced
 (defun pf:subst-token (str token repl / pos out tlen)
   (setq out "" tlen (strlen token))
@@ -813,6 +826,13 @@
 ;;; ==========================================================================
 ;;; SECTION 7  --  Utility-type derived layers, templates, sizes
 ;;; ==========================================================================
+
+;;; RETIRED 2026-07-29 -- see *pf-anno-layer* / pfd:anno-layer.  All three of
+;;; these derive a layer name from the utility type, and nothing does that any
+;;; more: every label pass writes to the ONE annotation layer PF-ANNO.  They are
+;;; kept, unreferenced, so that reverting to per-type layers is a one-line change
+;;; at each call site rather than a rebuild.  pf:align-layer already had no
+;;; callers before this.  Expect pf-verify's dead-code gate to name all three.
 
 (defun pf:sym-layer  (file) (strcat (pf:type-of file) *pfx-layer-suffix*))
 (defun pf:text-layer (file) (strcat (pf:type-of file) *pfx-text-layer-suffix*))
@@ -1363,7 +1383,7 @@
 
 ;; (pf:verts-hash verts) -> "a-b-n" | nil    ORDER-SENSITIVE shape hash.
 ;;   WHY THIS EXISTS: the membership pre-filter's fingerprint used to be the
-;;   bounding box plus the vertex COUNT (pflabel:lines-sig).  Drag one interior
+;;   bounding box plus the vertex COUNT (pfa:lines-sig).  Drag one interior
 ;;   PI of a drawn centerline parallel to the box and neither value moves -- so
 ;;   the shape reads unchanged while the corridor it defines has shifted, and a
 ;;   structure can fall outside it with nothing to say so.  That is the exact

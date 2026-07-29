@@ -7,8 +7,12 @@
 
 (vl-load-com)
 
-;; (pfd:ensure-layer name noplot) -> nil   (creates the layer if missing)
-(defun pfd:ensure-layer (name noplot)
+;; (pfd:ensure-layer-c name noplot color) -> nil   (creates the layer if missing)
+;;   CREATE-ONLY, and deliberately so: an existing layer is never recoloured, so
+;;   a drawing where someone has set this layer by hand keeps that colour.  The
+;;   consequence is that COLOR only ever reaches a drawing that has never
+;;   carried the layer -- changing it here does not repaint old drawings.
+(defun pfd:ensure-layer-c (name noplot color)
   (if (null (tblsearch "LAYER" name))
     (progn
       (entmake (append
@@ -17,11 +21,24 @@
                        '(100 . "AcDbLayerTableRecord")
                        (cons 2 name)
                        '(70 . 0)
-                       '(62 . 7)
+                       (cons 62 color)
                        (cons 6 "Continuous"))
                  (if noplot '((290 . 0)) '())))
       (prompt (strcat "\nCreated layer '" name "'"
                       (if noplot " (no-plot)." "."))))))
+
+;; (pfd:ensure-layer name noplot) -> nil   (creates the layer if missing, colour 7)
+(defun pfd:ensure-layer (name noplot)
+  (pfd:ensure-layer-c name noplot 7))
+
+;; (pfd:anno-layer) -> "PF-ANNO"   ensures the layer, then names it
+;;   THE annotation layer for every label pass.  The one place the suite decides
+;;   where a label goes -- callers ask for it, they do not build a layer name.
+;;   Create-only per pfd:ensure-layer-c above: a drawing that already carries
+;;   PF-ANNO keeps its own colour and plot flag.
+(defun pfd:anno-layer ()
+  (pfd:ensure-layer-c *pf-anno-layer* T *pf-anno-layer-color*)
+  *pf-anno-layer*)
 
 ;; (pfd:style-or-fallback style) -> a style that exists in this drawing
 (defun pfd:style-or-fallback (style)
@@ -106,12 +123,11 @@
 ;;   Row 1 (lower) = NN" MATERIAL, row 2 (upper) = the standard line label.
 ;;   mat is the SOURCE profile's material (resolved by the caller; may be "").
 (defun pfd:label-pipe (x y file size mat sf ht style / la dx dy gap e ents)
-  (setq la   (pf:text-layer file)
+  (setq la   (pfd:anno-layer)
         dx   (* *pfx-text-dx* sf)
         dy   (* *pfx-row1-dy* sf)
         gap  (* *pfx-row-gap* sf)
         ents '())
-  (pfd:ensure-layer la nil)
   (if size
     (progn
       (setq e (pfd:text (list (+ x dx) (+ y dy) 0.0)

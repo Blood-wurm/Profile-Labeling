@@ -220,8 +220,9 @@ accessor; `pf:pro-verts` parses the file).
 - [ ] 6.3 **No-drop structure:** I.I = I.O = the through invert; both rows
       still drawn.
 - [ ] 6.4 **Junction:** lateral gets a bare `I.I <elev>` row + a bare pipe
-      block at its true elevation on the station X; block on the lateral's
-      `<TYPE>_P` layer; correct size block (or circle + warning).
+      block at its true elevation on the station X; block on **PF-ANNO**
+      (was the lateral's `<TYPE>_P` layer before 2026-07-29); correct size
+      block (or circle + warning).
 - [ ] 6.5 Column geometry: base Y = **lowest** invert present − 5.0 world
       units (measure it); rows fan left/right straddling the station X.
 - [ ] 6.6 **MR direction (decides everything):** the stack hangs DOWNWARD
@@ -434,6 +435,41 @@ and a re-run of `PFLABEL` must produce the same labels as before the change.
       re-walking every inlet. If the shift is missing or lands on the wrong
       structure, `'pend` is not reaching the context.
 - [ ] 11.3 Time both against a pre-change run if you have one.
+
+## 12. PF-ANNO — the global label layer (2026-07-29, NEVER run in CAD)
+
+In a drawing that has **never** carried a PF-ANNO layer:
+
+- [ ] 12.1 First label pass creates `PF-ANNO`: colour **green, index 80**,
+      **plot flag OFF**. Check the layer properties, not just the colour on
+      screen. Console says `Created layer 'PF-ANNO' (no-plot).` once.
+- [ ] 12.2 `PFLABEL` → All: every row AND the station line land on PF-ANNO.
+      Nothing new appears on `STORM-TEXT_P` or any other `<TYPE>-TEXT_P`.
+- [ ] 12.3 `PFINVERT` → All: invert stacks on PF-ANNO, **and the lateral pipe
+      blocks too** — the blocks are the easiest thing to miss, they used to
+      go to `<TYPE>_P`.
+- [ ] 12.4 `PFXLABEL` → Label Outstanding: station TEXT, crossing pipe block
+      and its size/material rows on PF-ANNO — but the **station LINE is still
+      on `PF-XING`**. This split is the whole risk of the change.
+- [ ] 12.5 **Recon still works** (this is the one that matters): re-run
+      `PFXLABEL` on the same target. Already-labeled crossings must read
+      labeled, not outstanding. If everything reads outstanding, the station
+      line moved off PF-XING and `pfa:station-line-tops` has gone blind.
+- [ ] 12.6 Plot preview / `PLOT`: no label text appears. That is intended —
+      PF-ANNO is no-plot by design. Confirm it is what you want on a real
+      sheet before this ships to anyone else.
+- [ ] 12.7 Settings → "Use current layer" ON: output goes to CLAYER, not
+      PF-ANNO, and the pass records as `LABEL-CLAYER` / `INVERT-CLAYER` with
+      no handles (unchanged behaviour).
+- [ ] 12.8 `PFLABEL` → All a SECOND time: the previous pass is erased by
+      handle and redrawn. Then repeat in a drawing labeled BEFORE this change
+      — the old `<TYPE>-TEXT_P` entities must still be erased by handle and
+      come back on PF-ANNO.
+- [ ] 12.9 `PFREMOVE`: clears passes regardless of which layer they landed
+      on (erase-by-handle, untouched by this change).
+- [ ] 12.10 In a drawing that ALREADY has a PF-ANNO layer in some other
+      colour / plotting: it is **left alone** (`pfd:ensure-layer-c` is
+      create-only). Labels still go there. Expected, not a bug.
 
 ---
 

@@ -4,10 +4,11 @@
 ;;; Loads by FULL path in dependency order.  Each file may only depend on
 ;;; files above it (the V4 guardrail):
 ;;;
-;;;   cfg -> lib -> draw -> anchor -> settings -> setup -> label -> xlabel
-;;;   -> invert -> report  (pfinvert reuses pflabel's walk + pfxlabel's
-;;;   registry resolution; pfreport reuses all three, so it loads after them
-;;;   and before the palette)
+;;;   cfg -> lib -> draw -> anchor -> settings -> setup -> pro -> label ->
+;;;   xlabel -> invert -> report  (pfpro needs only lib + anchor + settings and
+;;;   nothing draws it, so it sits above the label engines; pfinvert reuses
+;;;   pflabel's walk + pfxlabel's registry resolution; pfreport reuses all
+;;;   three, so it loads after them and before the palette)
 ;;;
 ;;; SET *pftools-dir* below to the pfsuite ROOT (each .lsp lives in its own
 ;;; subfolder with a README.md beside it; the loader adds the subfolder
@@ -33,6 +34,7 @@
   (load (strcat *pftools-dir* "pfanchor/pfanchor.lsp"))         ; record + registry
   (load (strcat *pftools-dir* "pfsettings/pfsettings.lsp"))     ; user state + NOD
   (load (strcat *pftools-dir* "pfsetup/pfsetup.lsp"))           ; C:PFSETUP
+  (load (strcat *pftools-dir* "pfpro/pfpro.lsp"))               ; C:PFPROINV/TOP
   (load (strcat *pftools-dir* "pflabel/pflabel.lsp"))           ; C:PFLABEL
   (load (strcat *pftools-dir* "pfxlabel/pfxlabel.lsp"))         ; C:PFXLABEL
   (load (strcat *pftools-dir* "pfinvert/pfinvert.lsp"))         ; C:PFINVERT
@@ -41,6 +43,7 @@
   (princ "\n----------------------------------------------")
   (princ "\nPFTools V5 loaded.")
   (princ "\n  Grid records:      PFSETUP (register/edit), PFREMOVE (teardown)")
+  (princ "\n  Cut a .pro:        PFPROINV / PFPROTOP  -- one polyline pick")
   (princ "\n  Structure labels:  PFLABEL  (alias PFL)")
   (princ "\n  Crossings:         PFXLABEL (alias PFX)")
   (princ "\n  Inverts:           PFINVERT (alias PFI)")

@@ -132,6 +132,10 @@
 ;;; --------------------------------------------------------------------------
 ;;; Utility-type derived layers & templates
 ;;; --------------------------------------------------------------------------
+;;; RETIRED 2026-07-29 -- see *pf-anno-layer*.  Every label pass now writes to
+;;; the ONE annotation layer, so nothing derives a layer from the utility type
+;;; any more.  Kept (with pf:sym-layer / pf:text-layer) so a per-type revert is
+;;; a one-line change rather than an archaeology exercise.
 (setq *pfx-layer-suffix*      "_P")
 (setq *pfx-text-layer-suffix* "-TEXT_P")
 (setq *pfx-align-layers*
@@ -158,8 +162,9 @@
 (setq *pfx-row-gap*   3.20)             ; pipe-label row gap
 (setq *pfx-line-ext*  30.0)             ; station line extension below the grid
 (setq *pfx-tick-layer* "PF-TEMP")       ; invert ticks + elev text; NEVER erased
-(setq *pfx-xing-text-layer* "PF-XING-TEXT") ; RETIRED -- station text now goes on
-                                        ; PF-XING (recon selects LWPOLYLINE only); kept for compatibility
+(setq *pfx-xing-text-layer* "PF-XING-TEXT") ; RETIRED -- crossing station text
+                                        ; went to PF-XING, and as of 2026-07-29 goes to PF-ANNO with
+                                        ; every other label; kept for compatibility
 (setq *pf-zoom-pause* 1.5)              ; DURATION of the verification pause, seconds.
                                         ; The ON/OFF switch is per run: each engine's
                                         ; pf:zoom-resolve call (PFXLABEL on by default,
@@ -171,6 +176,21 @@
                                         ; pf:zoom-item never frames tighter than this,
                                         ; so a short label stack still shows its grid
                                         ; context.  60 x sf ~= a full grid panel at H:20.
+
+;;; --------------------------------------------------------------------------
+;;; Console volume
+;;; --------------------------------------------------------------------------
+;;; *pf-quiet* suppresses PROGRESS ONLY -- the running commentary a command
+;;; owes the user while it works ("Loaded line 'A' ...").  It is bound T around
+;;; palette READS, where the same gather path runs on every tree click and the
+;;; commentary is pure noise: one click can otherwise emit a line per line in
+;;; the gather set plus two DRIFT blocks.
+;;;
+;;; IT NEVER SILENCES A FINDING.  Errors, refusals, skip reports and anything
+;;; from *error* / pf:run-error print regardless -- route those through
+;;; (prompt) directly, never through pf:progress.  A palette that hides a
+;;; failure is worse than a palette that chatters.
+(setq *pf-quiet* nil)
 
 ;;; --------------------------------------------------------------------------
 ;;; Plan-geometry sampling  (crossing discovery)
@@ -202,6 +222,15 @@
 ;;; endpoint vertex is a terminus (single invert).
 (setq *pfi-struct-width-max* 15.0)  ; ft -- max gap for a vertex pair to be ONE structure
 
+;;; PFINVERT row spacing.  Its own factor, NOT *pf-gap-rest-factor*: PFLABEL's
+;;; stack straddles pfd:station-line (row 0 left of the station X, the rest
+;;; right, with the wide 2 x offset gap giving the line room), while PFINVERT
+;;; draws no station line and centres its whole fan on the station X with one
+;;; uniform gap throughout.  Gap = this x text height, so at H:50 (height 4.0)
+;;; a factor of 2.0 leaves a 4.0 gutter between 4.0-wide rotated rows -- one
+;;; clear text height between columns.  TUNE HERE; nothing else reads it.
+(setq *pfi-row-gap-factor* 2.0)   ; centre-to-centre row gap, x text height
+
 ;;; Junction detection: a lateral that TERMINATES at a structure sits at its own
 ;;; endpoint, beyond the tight on-line membership tolerances (built for
 ;;; pass-through hits).  PFINVERT adds any same-type registered line whose
@@ -216,7 +245,7 @@
 ;;; --------------------------------------------------------------------------
 ;;; Anchor & ledger  (pfanchor.lsp)
 ;;; --------------------------------------------------------------------------
-;;; The anchor block is the hand-authored PF-ANCHOR (color 146): a small fixed
+;;; The anchor block is the hand-authored PF-ANCHOR (color 152): a small fixed
 ;;; ICON snapped to the datum, NOT a frame spanning the grid.  Same string as
 ;;; *pfa-layer* below; block and layer live in separate symbol tables, so the
 ;;; collision is legal and intentional.  pfa:ensure-anchor-block entmakes a
@@ -232,6 +261,26 @@
 ;;; see pfa:extents.
 (setq *pfa-block-names* "PF-ANCHOR,PF-GRIDANCHOR")
 (setq *pfa-layer*       "PF-ANCHOR")      ; created NO-PLOT, unlocked
+;;; Colour the PF-ANCHOR layer is BORN at (pfd:ensure-layer-c is create-only, so
+;;; a drawing that already carries the layer keeps whatever colour it has -- this
+;;; does not repaint anything already anchored).  The icon geometry is all
+;;; ByLayer on layer "0" inside the block, so this one number colours the whole
+;;; symbol except the white triangle.  152 matches the hand-authored artwork.
+(setq *pfa-layer-color* 152)
+;;; THE annotation layer: EVERY label pass writes here -- PFLABEL's stacks and
+;;; station lines, PFINVERT's stacks and lateral pipe blocks, PFXLABEL's station
+;;; text, crossing pipe block and pipe labels.  Replaces the per-utility-type
+;;; derived layers (<TYPE>-TEXT_P / <TYPE>_P) as of 2026-07-29.
+;;;
+;;; NO-PLOT is deliberate and is the whole point of the layer: labels are review
+;;; output here, not plotted sheet annotation.
+;;;
+;;; Same create-only caveat as *pfa-layer-color* above -- pfd:ensure-layer-c
+;;; never recolours a layer that already exists, so a drawing already carrying
+;;; PF-ANNO keeps its colour AND its plot flag.  Only fresh drawings are born
+;;; green no-plot.
+(setq *pf-anno-layer*       "PF-ANNO")
+(setq *pf-anno-layer-color* 80)          ; green
 ;;; THE LEDGER dictionary, hung off an entity's extension dictionary.  Owner is
 ;;; whatever entity carries it: an ANCHOR holds META/FILES/STATUS_*/SCOPE/PASS_*
 ;;; /X_*, a STRUCTURE holds MEMB.  pfa:ledger-dict is owner-agnostic and always

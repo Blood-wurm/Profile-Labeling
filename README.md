@@ -57,16 +57,27 @@ pfsuite/
 ├── pfanchor/      pfanchor.lsp     + README.md      4  record + registry + pf:run-command
 ├── pfsettings/    pfsettings.lsp   + README.md      5  user state + shared dialogs
 ├── pfsetup/       pfsetup.lsp      + README.md      6  C:PFSETUP
-├── pflabel/       pflabel.lsp      + README.md      7  C:PFLABEL
-├── pfxlabel/      pfxlabel.lsp     + README.md      8  C:PFXLABEL
-├── pfinvert/      pfinvert.lsp     + README.md      9  C:PFINVERT
-├── pfreport/      pfreport.lsp     + README.md     10  C:PFREPORT
-└── pfpalette/     pfpalette.lsp    + README.md     11  C:PFPALETTE
+├── pfpro/         pfpro.lsp        + README.md      7  C:PFPROINV / C:PFPROTOP
+├── pflabel/       pflabel.lsp      + README.md      8  C:PFLABEL
+├── pfxlabel/      pfxlabel.lsp     + README.md      9  C:PFXLABEL
+├── pfinvert/      pfinvert.lsp     + README.md     10  C:PFINVERT
+├── pfreport/      pfreport.lsp     + README.md     11  C:PFREPORT
+└── pfpalette/     pfpalette.lsp    + README.md     12  C:PFPALETTE
 ```
 
-Load order: cfg → lib → draw → anchor → settings → setup → label → xlabel →
-invert → **report** → palette; a file may only depend on files that load
+Load order: cfg → lib → draw → anchor → settings → setup → **pro** → label →
+xlabel → invert → report → palette; a file may only depend on files that load
 before it.
+
+**`pfpro` (2026-07-29, untested in CAD)** is the only command that WRITES a
+`.pro` — everywhere else in the suite a profile is authored data that is read
+and never drawn. It cuts `Type_Name_INV.pro` / `_TOP.pro` from a polyline the
+drafter drew in a profile grid, using the anchor's own transform inverted
+(`pf:profile-x->station`, `pf:y->elev`), so the file cannot disagree with the
+grid its labels are drawn against. One polyline pick, no dialog: `STA0`,
+`DATUM`, `HPLOT` and `VPLOT` come off the anchor, and the anchor itself
+resolves from where the polyline sits. Nothing in the suite calls into it.
+Details and the CAD gates are in [pfpro/README.md](pfpro/README.md).
 
 **`pfreport` (2026-07-26, untested in CAD)** is the first command that is
 SYSTEM-scoped rather than target-scoped, and the first that is read-only on

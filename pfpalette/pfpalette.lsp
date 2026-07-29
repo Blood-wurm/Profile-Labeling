@@ -96,11 +96,26 @@
 ;;   pfa:nod-dict), so it is modeless-legal.  The read is error-guarded: a
 ;;   hostile drawing must never stop the palette from opening or docking.
 (defun pfp:refresh ( / res)
+  ;; The tree is rebuilt from scratch, so the remembered selection (SECTION 8)
+  ;; is stale by definition -- its state may have flipped, or its anchor may be
+  ;; gone.  Dropping it here is what stops a verb firing against yesterday's
+  ;; row after a placement.
+  (setq *pfp-sel* nil *pfp-tar-sel* nil)
   (setq res (vl-catch-all-apply
               '(lambda ( / reg)
                  (setq reg (pfa:registry))
                  (pfp:seed-labels reg)
-                 (pfp:fill-tree reg))
+                 (setq *pfp-tree-map*
+                         (pfp:fill-tree pfsuite/pfsPalette/tvwLines reg)
+                       *pfp-tar-map*
+                         (pfp:fill-tree pfsuite/pfsPalette/tarLines reg))
+                 ;; the Commands panel starts empty -- SelectItem on a Type
+                 ;; parent fires no child selection, so nothing has asked for
+                 ;; counts yet
+                 (pfp:fill-details nil)
+                 ;; grey the unwired Tools group and default optRun to the
+                 ;; non-destructive item (SECTION 9)
+                 (pfp:cmd-init))
               '()))
   (if (vl-catch-all-error-p res)
     (prompt (strcat "\nPFPALETTE: registry read failed -- "
@@ -174,6 +189,11 @@
     (list (list "Property" 0 110) (list "Value" 0 410)))
   (dcl-ListView-AddColumns pfsuite/pfsPalette/lvwLinkage
     (list (list "Item" 0 90) (list "File" 0 440)))
+  ;; detailsList is a per-target SUMMARY, not an item list -- same two-column
+  ;; Property/Value shape as metaList, and for the same reason: the Commands
+  ;; tab answers "what is on this line" before a command is chosen.
+  (dcl-ListView-AddColumns pfsuite/pfsPalette/detailsList
+    (list (list "Property" 0 150) (list "Value" 0 370)))
   (princ))
 
 ;; (pfp:caption ctrl label text) -> T | nil
@@ -214,24 +234,28 @@
             (itoa (- n anchored)) " registered)"))
   (princ))
 
-;; (pfp:fill-tree reg) -> nil
+;; (pfp:fill-tree ctrl reg) -> map     ((childKey . reg-row) ...)
 ;;   Two levels: distinct utility Type as parents, Line as children.  The
 ;;   registry arrives sorted by "TYPE NAME", so a type break is a new parent.
-;;   Records (childKey . reg-row) in *pfp-tree-map* for OnSelChanged.
-(defun pfp:fill-tree (reg / cur-type pkey ckey first r)
-  (dcl-Tree-Clear pfsuite/pfsPalette/tvwLines)
-  (setq *pfp-tree-map* '() cur-type nil pkey nil first nil)
+;;
+;;   TAKES THE CONTROL AND RETURNS THE MAP (2026-07-29) rather than writing a
+;;   global.  There are now TWO trees over the same registry -- tvwLines on
+;;   Registry and tarLines on Commands -- and one shared *pfp-tree-map* would
+;;   make pfp:sel-row answer with the other tree's row, because the child keys
+;;   are per-control.  Returning it keeps each caller owning its own map, and
+;;   avoids `set` on a quoted symbol.
+(defun pfp:fill-tree (ctrl reg / cur-type pkey ckey first r map)
+  (dcl-Tree-Clear ctrl)
+  (setq map '() cur-type nil pkey nil first nil)
   (foreach r reg
     (if (not (equal (car r) cur-type))
       (setq cur-type (car r)
-            pkey (dcl-Tree-AddParent pfsuite/pfsPalette/tvwLines
-                                     cur-type -1 -1 -1)))
+            pkey (dcl-Tree-AddParent ctrl cur-type -1 -1 -1)))
     (if (null first) (setq first pkey))     ; remember the first parent
-    (setq ckey (dcl-Tree-AddChild pfsuite/pfsPalette/tvwLines
-                                  pkey (cadr r) -1 -1 -1)
-          *pfp-tree-map* (cons (cons ckey r) *pfp-tree-map*)))
-  (if first (dcl-Tree-SelectItem pfsuite/pfsPalette/tvwLines first))
-  (princ))
+    (setq ckey (dcl-Tree-AddChild ctrl pkey (cadr r) -1 -1 -1)
+          map  (cons (cons ckey r) map)))
+  (if first (dcl-Tree-SelectItem ctrl first))
+  map)
 
 
 ;;; ==========================================================================
@@ -241,8 +265,10 @@
 ;;; lines read from the stub row.  UI vocabulary is "Anchored" / "Registered"
 ;;; -- never "placed" / "stub".
 
-;; (pfp:sel-row Key) -> reg-row | nil   (nil when Key is a Type parent)
-(defun pfp:sel-row (key) (cdr (assoc key *pfp-tree-map*)))
+;; (pfp:sel-row Key map) -> reg-row | nil   (nil when Key is a Type parent)
+;;   Takes the map since 2026-07-29 -- child keys are per-control, so the
+;;   Commands tree must be looked up in its own map (see pfp:fill-tree).
+(defun pfp:sel-row (key map) (cdr (assoc key map)))
 
 ;; (pfp:status-cell anchor) -> "PASSING" | "STALE (LABEL, XING)" | ...
 ;;   The ROLL-UP, worked out here and never stored: nothing would update a saved
@@ -307,12 +333,304 @@
           (list "DESIGN_* .tin"    -1 (pfp:file-cell (nth 4 f)) -1)))
   (princ))
 
-(defun c:pfsuite/pfsPalette/tvwLines#OnSelChanged (Label Key / row)
-  (setq row (pfp:sel-row Key))
-  ;; A Type parent has no row -- clear both panels; a Line fills them.
+;; (pfp:route-sel Key) -> nil
+;;   THE SELECTION ROUTER.  Both trees' OnSelChanged arrive here, because they
+;;   cannot be told apart by the handler they land in.
+;;
+;;   MEASURED 2026-07-29: clicking the COMMANDS tree fires
+;;   tvwLines#OnSelChanged carrying a key that resolves in *pfp-tar-map* and
+;;   NOT in *pfp-tree-map*.  The two symbols report different rects, so they
+;;   are different controls -- but the Commands tree's event dispatches under
+;;   the Registry tree's name.  Consistent with it having been duplicated from
+;;   tvwLines in Studio and keeping the source's handler binding.  PFPDIAG
+;;   cannot see this: both names resolve, so nothing reads as missing.
+;;
+;;   So: route on WHICH MAP OWNS THE KEY, never on which handler fired.  That
+;;   is the stronger rule regardless -- the key is the identity, the control
+;;   name has proven not to be -- and it keeps working unchanged if the .odcl
+;;   is ever rebuilt with correct wiring.
+;;   QUIET: the fill paths run the same gather code the label commands run, and
+;;   that code narrates itself (pfa:build-lines' per-line "Loaded line ...",
+;;   pfa:status-for's DRIFT block -- twice, LABEL and INVERT).  Fine for a
+;;   command, noise on every click.  *pf-quiet* suppresses PROGRESS ONLY; every
+;;   error, refusal and *error*-handler message still prints.
+;;
+;;   The flag is cleared OUTSIDE the fills, not inside one, because
+;;   pfp:fill-details catches its own errors and an escape route that skipped
+;;   the reset would leave the whole suite mute for the rest of the session.
+(defun pfp:route-sel (Key / reg tar res)
+  (setq reg (pfp:sel-row Key *pfp-tree-map*)
+        tar (pfp:sel-row Key *pfp-tar-map*)
+        *pf-quiet* T
+        res (vl-catch-all-apply
+              '(lambda ()
+                 (cond
+                   (reg (pfp:show-registry reg))
+                   (tar (pfp:show-commands tar))
+                   ;; A Type parent belongs to neither map.  Clear both panels:
+                   ;; we cannot tell which tree it came from, and the next
+                   ;; child click repopulates.
+                   (T (pfp:show-registry nil) (pfp:show-commands nil))))
+              '()))
+  ;; ALWAYS, including on a throw.  A skipped reset would leave *pf-quiet* T
+  ;; for the rest of the session and mute every command's progress output --
+  ;; a far worse bug than the noise this is fixing, and a silent one.
+  (setq *pf-quiet* nil)
+  (if (vl-catch-all-error-p res)
+    (prompt (strcat "\nPFPALETTE: selection fill failed -- "
+                    (vl-catch-all-error-message res))))
+  (princ))
+
+;; (pfp:show-registry row) -> nil    Registry tab panels
+(defun pfp:show-registry (row)
   (dcl-ListView-FillList pfsuite/pfsPalette/metaList
     (if row (pfp:meta-rows row) '()))
   (pfp:fill-linkage row)
+  ;; SECTION 8 reads this.  A plain setq -- the selection is the only state
+  ;; the verbs need, and nothing about remembering it touches the drawing.
+  (setq *pfp-sel* row)
+  (princ))
+
+;; (pfp:show-commands row) -> nil    Commands tab panel
+(defun pfp:show-commands (row)
+  (pfp:fill-details row)
+  (setq *pfp-tar-sel* row)
+  (princ))
+
+;; BOTH trees land here -- see pfp:route-sel.  The handler does no work of its
+;; own beyond the trace; routing is by key ownership.
+(defun c:pfsuite/pfsPalette/tvwLines#OnSelChanged (Label Key / )
+  (pfp:trace-sel "TVW" Label Key)
+  (pfp:route-sel Key)
+  (princ))
+
+;; (pfp:trace-sel tag Label Key) -> nil   PFPTAR's instrumentation.
+;;   Reports the key against BOTH maps, which is the measurement that found
+;;   the crossed wiring in the first place.
+(defun pfp:trace-sel (tag Label Key / reg tar)
+  (if *pfp-trace*
+    (progn
+      (setq reg (pfp:sel-row Key *pfp-tree-map*)
+            tar (pfp:sel-row Key *pfp-tar-map*))
+      (prompt (strcat "\n" tag "#OnSelChanged  Label=" (if Label Label "nil")
+                      "\n    tree-map: "
+                      (if reg (strcat "YES -> " (car reg) " " (cadr reg)) "no")
+                      "   tar-map: "
+                      (if tar (strcat "YES -> " (car tar) " " (cadr tar)) "no")
+                      "   -> routed to "
+                      (cond (reg "Registry") (tar "Commands") (T "cleared"))))))
+  (princ))
+
+
+;;; ==========================================================================
+;;; SECTION 5b  --  tarLines selection -> fill detailsList  (Commands tab)
+;;; ==========================================================================
+;;; detailsList is a per-target SUMMARY, not a list of items: pick a target,
+;;; see what is on it, THEN choose the command to run.  So the counts must be
+;;; on screen before the radio is touched, which is why all three passes are
+;;; shown at once rather than only the selected one.
+;;;
+;;; Every number comes from pfa:target-counts -- one pend walk shared by both
+;;; label passes, plus the crossing ledger.  All pure reads, so this handler
+;;; is modeless-legal.
+;;;
+;;; Section 5 is deliberately untouched: the Registry tab's handler keeps its
+;;; own map and its own panels.
+
+(if (not (boundp '*pfp-tar-map*)) (setq *pfp-tar-map* '()))
+(if (not (boundp '*pfp-tar-sel*)) (setq *pfp-tar-sel* nil))
+
+;; (pfp:count-cell done out) -> "8 labeled, 4 outstanding"
+;;   One cell rather than two rows: the pair reads as one fact, and splitting
+;;   it doubled the row count for no gain.
+(defun pfp:count-cell (done out)
+  (strcat (itoa done) " labeled, " (itoa out) " outstanding"))
+
+;; (pfp:drift-cell n) -> "-" | "2 stale label(s) -- something moved"
+(defun pfp:drift-cell (n)
+  (if (or (null n) (= n 0))
+    "-"
+    (strcat (itoa n) " stale label(s) -- something moved")))
+
+;; (pfp:detail-rows row) -> list of (prop -1 value -1) rows for detailsList
+;;   Three shapes, because 0 and "unknowable" are different answers:
+;;     no row    -- a Type parent, or nothing picked yet
+;;     STUB      -- registered but not anchored: no xform, no ledger, no pass
+;;                  entities, so every count is undefined rather than zero
+;;     ANCHORED  -- the real thing; nil from target-counts means no .cl bound
+(defun pfp:detail-rows (row / c)
+  (cond
+    ((null row) '())
+    ((not (eq (caddr row) 'ANCHORED))
+     (list (list "Type"   -1 (car row)  -1)
+           (list "Line"   -1 (cadr row) -1)
+           (list "State"  -1 "Registered" -1)
+           (list "Counts" -1 "anchor this line to see counts" -1)))
+    ((null (setq c (pfa:target-counts (nth 3 row))))
+     (list (list "Type"   -1 (car row)  -1)
+           (list "Line"   -1 (cadr row) -1)
+           (list "State"  -1 "Anchored" -1)
+           (list "Counts" -1 "no .cl on record -- run PFSETUP (edit)" -1)))
+    (T
+     (list (list "Type"  -1 (car row)  -1)
+           (list "Line"  -1 (cadr row) -1)
+           (list "State" -1 "Anchored" -1)
+           (list "Lines in gather set" -1
+                 (itoa (cdr (assoc 'lines c))) -1)
+           (list "Structures on line" -1
+                 (itoa (cdr (assoc 'structures c))) -1)
+           (list "Structure labels" -1
+                 (pfp:count-cell (cdr (assoc 'label-done c))
+                                 (cdr (assoc 'label-out  c))) -1)
+           (list "Invert labels" -1
+                 (pfp:count-cell (cdr (assoc 'invert-done c))
+                                 (cdr (assoc 'invert-out  c))) -1)
+           ;; "on record" and not "found": pfxl:discover is a WRITER, so the
+           ;; palette can only ever see already-merged crossings.  A line that
+           ;; has never had PFXLABEL run reads 0, and 0 here means "none
+           ;; discovered yet", not "none exist".
+           (list "Crossings on record" -1
+                 (itoa (cdr (assoc 'crossings c))) -1)
+           (list "Crossing labels" -1
+                 (pfp:count-cell (cdr (assoc 'xing-done c))
+                                 (cdr (assoc 'xing-out  c))) -1)
+           (list "Drift" -1 (pfp:drift-cell (cdr (assoc 'drift c))) -1)))))
+
+;; (pfp:fill-details row) -> nil
+;;   GUARDED, unlike Section 5's fill.  That one reads attributes and
+;;   dictionaries and cannot realistically throw; this one reaches file I/O
+;;   and the Road API through pfa:target-counts, and an escaping error inside
+;;   a modeless OpenDCL handler is worth not having.  A failure shows in the
+;;   panel AND on the command line, rather than silently blanking.
+(defun pfp:fill-details (row / rows res)
+  ;; THE ROAD API IS NOT LOADED IN A HANDLER.  pf:run-command calls
+  ;; pf:load-apis at every command prologue, so anything reached from the
+  ;; command line has eworks by the time it reads a centerline -- but a
+  ;; modeless fill never goes through that wrapper, and pfa:target-counts
+  ;; reaches cl_location_at_pt.  In a session where no PFTools command had run
+  ;; yet, clicking a line on the Commands tab died with "bad function:
+  ;; CF:ROAD_API" (field report 2026-07-29).  Exactly the failure pfanchor
+  ;; SECTION 6 records for btnAnchor, and it read as working for the same
+  ;; reason: testing the palette almost always follows a command-line run that
+  ;; already scloaded eworks.
+  ;;   Legal here -- pf:load-apis is two catch-wrapped scload calls, no
+  ;; (command), no prompt, no drawing write.  Idempotent, so the repeat cost
+  ;; per click is a no-op.  HERE and not in pfp:route-sel because all three
+  ;; callers of this fill need it: the handler, pfp:refresh, and C:PFPDETAIL.
+  (pf:load-apis)
+  (setq res (vl-catch-all-apply 'pfp:detail-rows (list row)))
+  (setq rows (if (vl-catch-all-error-p res)
+               (progn
+                 (prompt (strcat "\nPFPALETTE: target counts failed -- "
+                                 (vl-catch-all-error-message res)))
+                 (list (list "Error" -1
+                             (vl-catch-all-error-message res) -1)))
+               res))
+  (dcl-ListView-FillList pfsuite/pfsPalette/detailsList rows)
+  (princ))
+
+;; Set by C:PFPTAR.  Off by default -- a handler that chatters on every click
+;; is worse than no handler.
+(if (not (boundp '*pfp-trace*)) (setq *pfp-trace* nil))
+
+;; Defined and routed identically to the Registry handler.  On this .odcl it
+;; never fires -- the Commands tree dispatches under tvwLines -- but it costs
+;; nothing and starts working the moment the wiring is rebuilt in Studio,
+;; without any other change.
+(defun c:pfsuite/pfsPalette/tarLines#OnSelChanged (Label Key / )
+  (pfp:trace-sel "TAR" Label Key)
+  (pfp:route-sel Key)
+  (princ))
+
+;; (pfp:live-keys map) -> how many entries carry a non-nil key
+(defun pfp:live-keys (map / n c)
+  (setq n 0)
+  (foreach c map (if (car c) (setq n (1+ n))))
+  n)
+
+;; C:PFPTREES -- where do the two trees actually sit?
+;;   SETTLED BY MEASUREMENT 2026-07-29: clicking the tree on the COMMANDS tab
+;;   fires tvwLines#OnSelChanged, not tarLines#.  Both symbols are bound and
+;;   both maps hold real keys, so tarLines exists and was populated -- it is
+;;   simply not the control receiving the click.
+;;
+;;   The reading that fits: tvwLines is not parented INSIDE the Registry tab
+;;   page, so it renders across every tab and covers tarLines.  Whichever
+;;   control is on top gets the mouse, and the handler that fires names it.
+;;
+;;   Overlapping rects confirm it.  Disjoint rects refute it, and then the
+;;   question becomes which control is where the cursor was.
+(defun c:PFPTREES ( / )
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPTREES: run PFPALETTE first."))
+    (T
+     (prompt "\n=== PFPTREES -- runtime rects ===")
+     (foreach pair (list (cons "tvwLines" pfsuite/pfsPalette/tvwLines)
+                         (cons "tarLines" pfsuite/pfsPalette/tarLines)
+                         (cons "detailsList" pfsuite/pfsPalette/detailsList))
+       (prompt (strcat "\n  " (car pair) ":"))
+       (if (null (cdr pair))
+         (prompt "  NIL -- not defined in the loaded project")
+         (foreach g '("GetLeft" "GetTop" "GetWidth" "GetHeight" "GetVisible")
+           (prompt (strcat "  " (substr g 4) "="
+                           (pfp:ask (strcat "dcl-Control-" g)
+                                    (list (cdr pair))))))))
+     (prompt (strcat "\n  Overlapping tvwLines/tarLines rects => tvwLines is"
+                     " covering the Commands tab and taking the clicks."))))
+  (princ))
+
+;; C:PFPTAR -- why is the Commands panel empty when PFPDETAIL fills it?
+;;   PFPDETAIL proved the fill works, so the break is upstream of it: either
+;;   the handler never runs, or it runs and resolves no row.  Those need
+;;   different fixes and look identical on screen.
+;;
+;;   Turns the handler trace ON and dumps the state it depends on.  Then click
+;;   a LINE (a child, not a Type parent) and read the command line:
+;;     nothing printed        -> the event is not reaching the handler
+;;     printed, row=NIL       -> the key is not in the map (map= says whether
+;;                               the map is even populated)
+;;     printed, row=TYPE NAME -> the handler is fine; the fill is the problem
+;;   A TOGGLE.  The flag is boundp-guarded, so neither a PFPALETTE re-toggle
+;;   nor reloading the suite clears it -- an earlier version said otherwise and
+;;   left the trace chattering on every click with no obvious way off.
+(defun c:PFPTAR ( / )
+  (cond
+    (*pfp-trace*
+     (setq *pfp-trace* nil)
+     (prompt "\nPFPTAR: trace OFF.  Run PFPTAR again to turn it back on.")
+     (princ))
+    (T (pfp:tar-report))))
+
+(defun pfp:tar-report ( / )
+  (setq *pfp-trace* T)
+  (prompt "\n=== PFPTAR ===")
+  (prompt (strcat "\n  tarLines control symbol: "
+                  (if pfsuite/pfsPalette/tarLines
+                    "bound"
+                    "NIL -- the project never defined it; check (Name) in Studio")))
+  (prompt (strcat "\n  detailsList control symbol: "
+                  (if pfsuite/pfsPalette/detailsList
+                    "bound"
+                    "NIL -- the project never defined it; check (Name) in Studio")))
+  ;; COUNT THE KEYS, NOT THE ENTRIES.  pfp:fill-tree conses (ckey . row) for
+  ;; every registry row regardless of what dcl-Tree-AddChild returned, so a
+  ;; length of 66 is consistent with 66 SUCCESSFUL adds and with 66 silent
+  ;; no-ops against a control that is not a TreeView.  Only the non-nil key
+  ;; count tells them apart -- and a lookup can only ever succeed on a real key.
+  (prompt (strcat "\n  *pfp-tar-map*:  " (itoa (length *pfp-tar-map*))
+                  " entries, " (itoa (pfp:live-keys *pfp-tar-map*))
+                  " with a real key"))
+  (prompt (strcat "\n  *pfp-tree-map*: " (itoa (length *pfp-tree-map*))
+                  " entries, " (itoa (pfp:live-keys *pfp-tree-map*))
+                  " with a real key   (the working tree, for comparison)"))
+  (if (= 0 (pfp:live-keys *pfp-tar-map*))
+    (prompt (strcat "\n  >> EVERY tarLines key is nil: the Tree calls did"
+                    " nothing.  The control is named and bound but is not"
+                    " accepting TreeView calls -- check its TYPE in Studio"
+                    " against tvwLines.")))
+  (prompt "\n  Trace is ON.  Click a LINE in the Commands tree now.")
+  (prompt "\n  Run PFPTAR again to turn it OFF.")
   (princ))
 
 
@@ -511,6 +829,50 @@
      (pfp:read-ctrl "tabMain    (suspect)" pfsuite/pfsPalette/tabMain)
      (prompt "\n=== end of PFPREAD ===")
      (prompt "\n  Run this DOCKED and FLOATING, then diff the two dumps.")))
+  (princ))
+
+;; C:PFPDETAIL -- fill detailsList WITHOUT the event, to bisect an empty panel.
+;;   An empty Commands panel has two very different causes that look identical
+;;   from the outside:
+;;     1. tarLines#OnSelChanged never fires.  OpenDCL events are OPT-IN PER
+;;        CONTROL (PALETTE-LAYOUT 7 -- "currently ticked: Close, Initialize,
+;;        Size"), and an unticked event calls nothing and says nothing.  This
+;;        is exactly how OnDocActivated went missing on 2026-07-27.
+;;     2. The handler fires but pfa:target-counts yields nothing for that row.
+;;   Calling the fill directly on the first ANCHORED row separates them:
+;;   panel fills -> the code is sound, go tick the event in Studio.
+;;   panel stays empty -> the fault is below the handler, and the row count
+;;   printed here says how far it got.
+(defun c:PFPDETAIL ( / reg row rows cnt)
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPDETAIL: run PFPALETTE first."))
+    ((null (setq reg (pfa:registry)))
+     (prompt "\nPFPDETAIL: the registry is empty -- nothing to summarise."))
+    ((null (setq row (car (vl-remove-if-not
+                            '(lambda (r) (eq (caddr r) 'ANCHORED)) reg))))
+     (prompt (strcat "\nPFPDETAIL: no ANCHORED line in the registry -- every"
+                     " row is a stub, so every count is unknowable by design.")))
+    (T
+     (prompt (strcat "\nPFPDETAIL: filling from " (car row) " '" (cadr row) "'"))
+     (setq cnt (vl-catch-all-apply 'pfa:target-counts (list (nth 3 row))))
+     (cond
+       ((vl-catch-all-error-p cnt)
+        (prompt (strcat "\n  pfa:target-counts THREW: "
+                        (vl-catch-all-error-message cnt))))
+       ((null cnt)
+        (prompt "\n  pfa:target-counts returned nil -- no xform, or no .cl bound."))
+       (T
+        (prompt (strcat "\n  counts ok: "
+                        (itoa (cdr (assoc 'structures cnt))) " structure(s), "
+                        (itoa (cdr (assoc 'crossings  cnt))) " crossing(s)"))))
+     (setq rows (pfp:detail-rows row))
+     (prompt (strcat "\n  rows built: " (itoa (length rows))))
+     (pfp:fill-details row)
+     (prompt (strcat "\n  Panel populated now?  YES -> the code is fine and"
+                     " tarLines#OnSelChanged is not ticked in Studio."
+                     "\n                        NO  -> the fault is the fill"
+                     " itself; report the row count above."))))
   (princ))
 
 ;; C:PFPNUDGE -- find the repaint kick, if a repaint kick is what this needs.
@@ -1077,12 +1439,672 @@
   (princ))
 
 
+;;; ==========================================================================
+;;; SECTION 8  --  Phase 3: the registry verbs  (one ticket, one dispatcher)
+;;; ==========================================================================
+;;; A modeless handler may not write, so no button acts.  Each one records
+;;; WHAT to do in *pfp-verb* and queues ONE command through pfp:defer;
+;;; C:PFPVERB picks the ticket up in a real command context and runs it under
+;;; pf:run-command, which is what installs the error hook and the echo
+;;; save/restore.  One dispatcher rather than five commands because the
+;;; CMDACTIVE gate, the ticket discipline and the refresh belong in one place
+;;; (PALETTE-LAYOUT 9, Phase 3 -- decided).
+;;;
+;;; Anchor and Edit need NO typed fields: identity and the .cl come from the
+;;; registry row, and scales + datum are prompted by pfsetup at the command
+;;; line.  That is why this section needs nothing from the Edit/New tabs.
+
+(if (not (boundp '*pfp-verb*)) (setq *pfp-verb* nil))  ; (verb . reg-row)
+(if (not (boundp '*pfp-sel*))  (setq *pfp-sel*  nil))  ; the tree selection
+
+;; (pfp:fire verb row) -> T | nil
+;;   THE only path from a button to a write.  The ticket is dropped again if
+;;   the defer is refused: a ticket left behind after a refusal would fire on
+;;   the NEXT verb, running yesterday's row.
+(defun pfp:fire (verb row)
+  (setq *pfp-verb* (cons verb row))
+  (cond ((pfp:defer "PFPVERB") T)
+        (T (setq *pfp-verb* nil) nil)))
+
+;; (pfp:need-row row state) -> reg-row | nil
+;;   Guard every verb shares: something selected, and in the right state.
+;;   state 'ANCHORED | 'STUB | nil (either).  Reports rather than no-ops --
+;;   a button that does nothing silently is the palette's worst failure mode.
+;;   TAKES THE ROW since 2026-07-29: the Commands tab (SECTION 9) needs the
+;;   identical guard against its own selection, and the two tabs remember
+;;   their selections separately (*pfp-sel* / *pfp-tar-sel*).
+(defun pfp:need-row (row state)
+  (cond
+    ((null row) (prompt "\nPFPALETTE: select a line first.") nil)
+    ((and (eq state 'ANCHORED) (not (eq (caddr row) 'ANCHORED)))
+     (prompt (strcat "\nPFPALETTE: '" (cadr row)
+                     "' is Registered, not Anchored -- use Anchor."))
+     nil)
+    ((and (eq state 'STUB) (eq (caddr row) 'ANCHORED))
+     (prompt (strcat "\nPFPALETTE: '" (cadr row)
+                     "' is already Anchored -- use Edit."))
+     nil)
+    (T row)))
+
+;; (pfp:need-sel state) -> reg-row | nil   The Registry tab's selection.
+(defun pfp:need-sel (state) (pfp:need-row *pfp-sel* state))
+
+;; (pfp:row->res row) -> placement record   (Registered row -> Anchor)
+;;   Type, Line and the file bindings come straight off the registry row, which
+;;   is why Anchor needs no typed fields.  hs, vs and datum are DELIBERATELY
+;;   ABSENT: a record missing them is what makes pfsetup prompt at the command
+;;   line instead of opening the modal (pfs:complete-res).  Material seeds from
+;;   the per-type memory -- the same default the dialog would have shown.
+(defun pfp:row->res (row / stub ty mat pro)
+  (setq stub (nth 4 row)
+        ty   (car row)
+        mat  (cdr (assoc (strcase ty) *pfs-mat-last*))
+        pro  '())
+  (if (and (nth 3 stub) (/= (nth 3 stub) ""))
+    (setq pro (append pro (list (nth 3 stub)))))
+  (if (and (nth 4 stub) (/= (nth 4 stub) ""))
+    (setq pro (append pro (list (nth 4 stub)))))
+  (list (cons 'type ty)
+        (cons 'name (cadr row))
+        (cons 'cl   (nth 2 stub))
+        (cons 'pro  pro)
+        (cons 'tin  '())
+        (cons 'material (if mat mat ""))
+        (cons 'repick nil)))
+
+;; EDIT DOES NOT BUILD A RECORD, and that is the decision, not an omission.
+;; Anchor can be promptable because everything it needs is already ON the
+;; registry row -- identity, the .cl, the .pro pair AUTO bound -- so the only
+;; missing pieces are three numbers.  Edit is the opposite: it exists to change
+;; what is BOUND (material, the _INV/_TOP pair, the two surfaces), and there is
+;; no prompt-shaped equivalent of a file picker with role validation.  So Edit
+;; sends no preset and pfsetup opens pfsetup_main, seeded from the stored
+;; record by pfs:anchor-init.
+
+;; (pfp:zoom-anchor anchor) -> nil   Frame one grid.  COMMAND CONTEXT ONLY --
+;;   pf:zoom-cwh issues ZOOM, so this is reachable from C:PFPVERB and nowhere
+;;   else.  Falls back to the current view height when the record carries no
+;;   extents (a legacy anchor).
+(defun pfp:zoom-anchor (anchor / ins ext w h)
+  (setq ins (cdr (assoc 10 (entget anchor)))
+        ext (pfa:extents anchor)
+        w   (car ext)
+        h   (cadr ext))
+  (if (and h (> h 0.0))
+    (pf:zoom-cwh (list (+ (car ins) (* 0.5 (if w w 0.0)))
+                       (+ (cadr ins) (* 0.5 h))
+                       0.0)
+                 (* 1.15 h))
+    (progn
+      (prompt "\n  No extents on record (legacy anchor) -- centering only.")
+      (pf:zoom-cwh (list (car ins) (cadr ins) 0.0) (getvar "VIEWSIZE"))))
+  (princ))
+
+;; (pfp:verb-run) -> nil   The dispatcher body, under pf:run-command.
+(defun pfp:verb-run ( / tkt verb row)
+  ;; READ ONCE, CLEARED -- one setq, no window.  A ticket that survived a
+  ;; failed run would re-fire on the next PFPVERB against a stale row.
+  (setq tkt        *pfp-verb*
+        *pfp-verb* nil
+        verb       (car tkt)
+        row        (cdr tkt))
+  (cond
+    ((null tkt) (prompt "\nPFPVERB: no pending action (run it from the palette)."))
+    ;; The preset is what suppresses the modal.  Set it IMMEDIATELY before the
+    ;; call that consumes it -- pfs:place-one / pfs:edit-one read and clear it
+    ;; in their first setq, so it is live for one statement.
+    ((eq verb 'anchor)
+     (setq *pfs-preset-res* (pfp:row->res row))
+     (pfs:place-one (nth 4 row)))
+    ;; Edit and New send NO preset, so pfsetup opens the modal.  That is the
+    ;; break-out path in both cases -- see the note above pfp:zoom-anchor.
+    ((eq verb 'edit)   (pfs:edit-one  (nth 3 row)))
+    ((eq verb 'new)    (pfs:place-one nil))
+    ((eq verb 'zoom)   (pfp:zoom-anchor (nth 3 row)))
+    (T (prompt (strcat "\nPFPVERB: unknown action " (vl-princ-to-string verb)))))
+  ;; Belt to the read-and-clear brace: if anything above died between the setq
+  ;; and the consumer, a live preset would reach the next COMMAND-LINE PFSETUP
+  ;; and place someone else's record.  Costs nothing on the normal path.
+  (setq *pfs-preset-res* nil)
+  ;; the registry moved (or did not) -- either way the panels are now stale
+  (pfp:refresh)
+  (princ))
+
+;; C:PFPVERB -- the ONE SendCommand target for every palette write.
+;;   Additional to the frozen entry points, never a replacement: PFSETUP and
+;;   PFREMOVE keep working untouched (PALETTE-LAYOUT 10).
+(defun c:PFPVERB ()
+  (pf:run-command "PFPVERB" nil 'pfp:verb-run))
+
+
+;;; ---- the button handlers -------------------------------------------------
+;;; Verbs defer.  btnRefresh is the ONE exception: pfp:refresh is a pure read,
+;;; so it runs inline (PALETTE-LAYOUT 9, Phase 3).
+
+(defun c:pfsuite/pfsPalette/btnAnchor#OnClicked ( / row)
+  (if (setq row (pfp:need-sel 'STUB)) (pfp:fire 'anchor row))
+  (princ))
+
+(defun c:pfsuite/pfsPalette/btnEdit#OnClicked ( / row)
+  (if (setq row (pfp:need-sel 'ANCHORED)) (pfp:fire 'edit row))
+  (princ))
+
+(defun c:pfsuite/pfsPalette/btnNew#OnClicked ()
+  ;; No selection needed, and no record: pfs:place-one with no preset opens
+  ;; the modal.  This IS the break-out-to-a-dialog path -- it has to be
+  ;; deferred like any other verb, because start_dialog needs a command
+  ;; context just as much as getpoint does.
+  (pfp:fire 'new nil)
+  (princ))
+
+(defun c:pfsuite/pfsPalette/btnZoom#OnClicked ( / row)
+  (if (setq row (pfp:need-sel 'ANCHORED)) (pfp:fire 'zoom row))
+  (princ))
+
+(defun c:pfsuite/pfsPalette/btnRefresh#OnClicked ()
+  (pfp:refresh)
+  (princ))
+
+
+;;; ==========================================================================
+;;; SECTION 9  --  Phase 4: the Commands tab  (one ticket, one dispatcher)
+;;; ==========================================================================
+;;; Twin of SECTION 8, deliberately.  btnRun cannot write, so it records WHAT
+;;; to run in *pfp-order* and queues ONE command through pfp:defer; C:PFPRUN
+;;; picks the ticket up in a real command context and hands it to the engine's
+;;; documented entry point -- pflabel:run / pfi:run / pfxl:run, each of which
+;;; already says in its header that the palette's deferred command is a caller.
+;;;
+;;; THE GATHER IS HERE, NOT IN THE HANDLER.  PALETTE-LAYOUT 6 put it in the
+;;; click handler, which forced the Crossings special case: pfxl:discover is a
+;;; writer and can never run modeless.  Gathering inside the dispatcher is
+;;; already in a command context, so Crossings stops being special, and the
+;;; numbers are read at RUN time rather than at click time.
+;;;
+;;; NO *pf-preset-target* GRAFT.  The dispatcher calls the engines directly
+;;; with the anchor off the registry row, so it never enters pflabel:cmd and
+;;; never reaches pfs:choose-or-place -- the function that graft existed to
+;;; bypass.  A Registered row is refused outright instead (pfp:need-row
+;;; 'ANCHORED), which closes the same accidental-placement hole with no edit to
+;;; shared code.  PALETTE-LAYOUT 10 permits that graft; this path does not
+;;; need it, so it stays unspent.
+;;;
+;;; TOOLS IS NOT WIRED.  frmTools/optTools are greyed and Label is permanently
+;;; the active group, so SECTION 6's Label/Tools state machine does not exist
+;;; yet.  It becomes real the day a Carlson command name lands here.
+
+(if (not (boundp '*pfp-order*)) (setq *pfp-order* nil))   ; the RUN ticket
+
+;;; ---- reading the radios and the check box --------------------------------
+;;; NO Option List or Check Box has ever been READ in this suite, and neither
+;;; getter is attested in the samples that ship with Studio -- PFPDIAG only
+;;; ever probed control NAMES, and SECTION 7 only ever SET properties.  Calling
+;;; a guessed name bare would raise an OpenDCL error inside a modeless handler,
+;;; and PALETTE-TESTING 2.x records dcl-Control-GetText doing exactly that
+;;; MODALLY, which locks the palette until the dialog is dismissed.
+;;; So: try the candidates in order, take the first that answers, NAME the miss.
+;;; C:PFPCTL prints the same table on demand -- one CAD run settles which name
+;;; is real, and then the losers can be deleted from these lists.
+
+;; SETTLED BY PFPCTL 2026-07-29: all eight per-class candidates missed.  The
+;; accessor is GENERIC -- dcl_Control_GetValue, used on any control that
+;; carries a value (Opendcl_Reference/AUBlockTool_Final.lsp:33-36 reads four
+;; Slider Bars with it; :139/:147 write them back with SetValue).  There is no
+;; dcl-OptionList-* or dcl-CheckBox-* family at all.  Hyphens first because
+;; that is the spelling this build answers to everywhere else in the file; the
+;; underscore form is what the vendor samples are written in and is kept as the
+;; fallback rather than a guess.
+;; CHECK BOX ONLY.  There is no Option List getter list any more, and adding
+;; one back is a bug: dcl-Control-GetValue on an Option List raises the modal
+;; "Property <Value> not found" AND returns nil to LISP.  That combination is
+;; why it looked safe -- the first PFPCTL run printed six tidy nils, and every
+;; one of them had put a dialog on screen first (field report 2026-07-29).
+;; A Check Box does carry Value: chkbxZoom answers 0 unticked, no dialog.
+(setq *pfp-chk-getters* '("dcl-Control-GetValue" "dcl_Control_GetValue"))
+
+;; What an Option List calls its first item.  Still unconfirmed -- see
+;; *pfp-opt-vals* below; the first observed event settles it, and C:PFPCTL
+;; prints what came back.
+(if (not (boundp '*pfp-opt-base*)) (setq *pfp-opt-base* 0))
+
+;;; ---- Option Lists are read from their EVENT, not by a getter -------------
+;;; MEASURED BY PFPCTL 2026-07-29: dcl-Control-GetValue answers 0 on chkbxZoom
+;;; but nil on optLabel, optRun AND optTools.  It is real, and it does not
+;;; apply to an Option List in this build.
+;;;
+;;; The vendor's own idiom is the answer.  Opendcl_Reference/AUBlockTool_Final
+;;; .lsp:101 reads a Check Box as
+;;;     (defun c:..._chkScaleRand_OnClicked (nValue /) (if (= nValue 0) ...))
+;;; -- OpenDCL PASSES THE VALUE INTO THE HANDLER.  So the palette remembers what
+;;; the control last reported, exactly as it already remembers tree selections
+;;; in *pfp-sel* / *pfp-tar-sel*.  A plain setq; remembering touches nothing.
+;;;
+;;; STARTS EMPTY, AND AN UNOBSERVED GROUP REFUSES TO RUN.  Seeding it with "0 =
+;;; Structures, whatever the .odcl shows" would be a guess about which pass to
+;;; fire, and that is the one error this tab must never make -- it does not
+;;; fail loudly, it labels the wrong thing.  One click on the radio costs a
+;;; second and is exact.
+(if (not (boundp '*pfp-opt-vals*)) (setq *pfp-opt-vals* '()))
+
+;; (pfp:opt-remember nm Label Key) -> nil     stores (nm Label . Key)
+;;   Keeps BOTH halves of what the event handed over.  Label is what actually
+;;   dispatches (see *pfp-opt-captions*); Key is kept because it is the thing
+;;   that would matter if a caption is ever renamed, and because PFPCTL showing
+;;   both is what turns "it does not work" into one line of diagnosis.
+(defun pfp:opt-remember (nm Label Key / cell)
+  (setq *pfp-opt-vals*
+          (if (setq cell (assoc nm *pfp-opt-vals*))
+            (subst (list nm Label Key) cell *pfp-opt-vals*)
+            (cons (list nm Label Key) *pfp-opt-vals*)))
+  (princ))
+
+;; WHICH ITEM IS WHICH, BY CAPTION -- not by index.
+;;   The index base (0 or 1) was never established and cannot fail loudly: read
+;;   wrong, it runs the wrong pass.  The caption cannot be read wrong.  Patterns
+;;   rather than equality because the .odcl's captions are not trustworthy to
+;;   the character -- btnClear's reads "CLear" -- and a wildcard survives a
+;;   typo, a case change and a re-word that an (= s "Structures") would not.
+(setq *pfp-opt-captions*
+  '(("optLabel" ("*STRUCT*"   . 0) ("*INVERT*" . 1) ("*CROSS*" . 2))
+    ("optRun"   ("*OUTSTAND*" . 1) ("*ALL*"    . 0) ("*SEL*"   . 2))))
+
+;; SelChanged, confirmed in Studio 2026-07-29 -- an Option List offers NO
+;; Clicked event, so the Check Box's OnClicked(nValue) shape is a precedent for
+;; the value-in-the-handler idea and not for the name.
+;;
+;; ARITY IS THE RISK, not the name.  tvwLines#OnSelChanged in this same file
+;; takes TWO arguments (Label Key), and a handler whose argument list does not
+;; match what OpenDCL calls it with fails before its body runs -- so it would
+;; record nothing and look exactly like an unticked event.  These take the one
+;; argument an Option List should carry; if Studio's template shows a different
+;; list, THIS is the line to correct, and pfp:opt-remember stores whatever
+;; arrives so PFPCTL can show what it really was.
+(defun c:pfsuite/pfsPalette/optLabel#OnSelChanged (nValue / )
+  (pfp:opt-remember "optLabel" nValue) (princ))
+(defun c:pfsuite/pfsPalette/optRun#OnSelChanged (nValue / )
+  (pfp:opt-remember "optRun" nValue) (princ))
+
+;; (pfp:first-callable cands args) -> (fname . value) | nil
+;;   Returns the NAME as well as the value: that is what makes PFPCTL able to
+;;   report which accessor won without a second pass.
+(defun pfp:first-callable (cands args / out r f)
+  (setq out nil)
+  (foreach f cands
+    (if (and (null out) (pfp:callable-p f))
+      (progn
+        (setq r (vl-catch-all-apply (read f) args))
+        (if (not (vl-catch-all-error-p r)) (setq out (cons f r))))))
+  out)
+
+;; (pfp:opt-item ctrl label) -> item index, normalised to 0-based | nil
+;;   READS NOTHING FROM THE CONTROL.  An earlier version tried GetValue first
+;;   "in case a build answers it", which put a modal dialog on screen on every
+;;   press of RUN.  The event value is the ONLY source; see *pfp-opt-vals*.
+;;   ctrl is still taken, and still checked, because a control missing from the
+;;   loaded project is a different fault with a different fix.
+(defun pfp:opt-item (ctrl label / v)
+  (cond
+    ((null ctrl)
+     (prompt (strcat "\nPFPALETTE: control \"" label "\" is not in the loaded"
+                     " project -- check its (Name) in Studio."))
+     nil)
+    ((numberp (setq v (cdr (assoc label *pfp-opt-vals*))))
+     (- (fix v) *pfp-opt-base*))
+    (T
+     (prompt (strcat "\nPFPALETTE: nothing has reported \"" label "\" yet."
+                     "\n  This build's Option Lists do not answer GetValue, so the"
+                     " palette learns the\n  selection from the control's own"
+                     " event.  CLICK ONE ITEM in that group and\n  try RUN again."
+                     "  (If clicking changes nothing, the event is not ticked in"
+                     "\n  Studio -- see PFPAPI.)"))
+     nil)))
+
+;; (pfp:chk-on-p ctrl label) -> T | nil
+;;   NOT (if v T nil).  GetValue is the generic numeric accessor, so an unticked
+;;   box answers 0 -- and in AutoLISP 0 is TRUE.  Written the obvious way this
+;;   reads every check box as ON, which for chkbxZoom means a zoom parade after
+;;   every single run with no way to turn it off.  Compare against 0 explicitly.
+;;   An unreadable box reads as OFF rather than refusing the run: Zoom To is a
+;;   convenience, and killing a labeling pass because the palette cannot tell
+;;   whether to parade afterwards is the wrong trade.  It says so once.
+(defun pfp:chk-on-p (ctrl label / hit v)
+  (cond
+    ((null ctrl) nil)
+    ((null (setq hit (pfp:first-callable *pfp-chk-getters* (list ctrl))))
+     (prompt (strcat "\nPFPALETTE: cannot read \"" label "\" -- assuming Zoom"
+                     " To is off.  Run PFPCTL."))
+     nil)
+    ((null (setq v (cdr hit))) nil)
+    ((numberp v) (/= 0 (fix v)))
+    (T T)))
+
+;;; ---- the ticket ----------------------------------------------------------
+
+;; optLabel's item order is fixed in the .odcl: Structures / Inverts / Crossings.
+(setq *pfp-cmd-map* '((0 . LABEL) (1 . INVERT) (2 . XING)))
+
+;; (pfp:order-mode cmd) -> "All" | "Out" | nil
+;;   optRun is Label All / Label Outstanding / Label Selected, in that order.
+;;   Selected is REFUSED rather than silently coerced to All: the palette has
+;;   no item list to select from (detailsList is a per-target summary, SECTION
+;;   5b), and quietly running a different pass than the one the operator picked
+;;   is worse than sending them to the modal.
+;;   Crossings ignores optRun entirely -- pfxl:run has no mode, and its own
+;;   All already means "every crossing not yet labeled" (pfxlabel.lsp:432).
+(defun pfp:order-mode (cmd / i)
+  (cond
+    ((eq cmd 'XING) "All")
+    ((null (setq i (pfp:opt-item pfsuite/pfsPalette/optRun "optRun"))) nil)
+    ((= i 0) "All")
+    ((= i 1) "Out")
+    (T
+     (prompt (strcat "\nPFPALETTE: Label Selected is not wired to the palette."
+                     "  Run PFLABEL or PFINVERT from the command line to pick"
+                     " structures from the list."))
+     nil)))
+
+;; (pfp:order-fire) -> T | nil
+;;   THE only path from btnRun to a write.  The ticket is dropped again if the
+;;   defer is refused -- a ticket left behind after a refusal would fire on the
+;;   NEXT run, against the row that was selected yesterday.  Same discipline as
+;;   pfp:fire; same reason.
+(defun pfp:order-fire ( / row i cmd mode)
+  (cond
+    ((null (setq row (pfp:need-row *pfp-tar-sel* 'ANCHORED))) nil)
+    ((null (setq i (pfp:opt-item pfsuite/pfsPalette/optLabel "optLabel"))) nil)
+    ((null (setq cmd (cdr (assoc i *pfp-cmd-map*))))
+     (prompt (strcat "\nPFPALETTE: optLabel returned item " (itoa i)
+                     " -- expected 0, 1 or 2.  Check the .odcl item list."))
+     nil)
+    ((null (setq mode (pfp:order-mode cmd))) nil)
+    (T
+     (setq *pfp-order*
+             (list (cons 'cmd  cmd)
+                   (cons 'row  row)
+                   (cons 'mode mode)
+                   (cons 'zoom (pfp:chk-on-p pfsuite/pfsPalette/chkbxZoom
+                                             "chkbxZoom"))))
+     (cond ((pfp:defer "PFPRUN") T)
+           (T (setq *pfp-order* nil) nil)))))
+
+;;; ---- the dispatcher ------------------------------------------------------
+
+;; (pfp:order-gather anchor pass) -> (lines inlets pend status) | nil
+;;   pflabel:run-dialog's gather (pflabel.lsp:257-264) minus the dialog.  Every
+;;   call in it is a read, but it runs in a command context anyway, so the
+;;   write-free constraint does not apply here -- unlike the SECTION 5b fill.
+(defun pfp:order-gather (anchor pass / xf cl prim pairs lines inlets g)
+  (setq xf (pfa:anchor->xform anchor))
+  (cond
+    ((null xf)
+     (prompt "\nPFPRUN: target grid record unreadable -- cannot label.") nil)
+    ((null (setq cl (pf:xf-get 'clfile xf)))
+     (prompt "\nPFPRUN: no .cl on record for this target -- run PFSETUP (edit).")
+     nil)
+    (T
+     (setq prim   (pf:xf-get 'name xf)
+           pairs  (pf:dedupe-pairs (cons (cons cl prim) (pfa:registry-pairs cl)))
+           lines  (pfa:build-lines pairs)
+           inlets (pfa:gather-inlets)
+           g      (pfa:gather-compute anchor pass prim lines inlets))
+     (cond
+       ((null g)
+        (prompt (strcat "\nPFPRUN: centerline for '" prim
+                        "' could not be read -- nothing to label."))
+        nil)
+       (T (list lines inlets (car g) (cadr g)))))))
+
+;; (pfp:outstanding pend status) -> the subset of pend carrying no label yet
+;;   status is a list of booleans PARALLEL to pend (pfa:status-for), not an
+;;   alist, so the two are walked together by index.
+(defun pfp:outstanding (pend status / out i)
+  (setq out '() i 0)
+  (foreach p pend
+    (if (not (nth i status)) (setq out (cons p out)))
+    (setq i (1+ i)))
+  (reverse out))
+
+;; (pfp:run-labels cmd row mode) -> nil    Structures and Inverts
+;;   Both engines take the identical ticket and both read the SAME 'sel key --
+;;   mode only decides whether the previous pass is erased first
+;;   (pflabel.lsp:573).  So Outstanding is mode "Sel" over the unlabeled subset,
+;;   which is why it needed no engine edit.
+(defun pfp:run-labels (cmd row mode / anchor pass g lines inlets pend status sel)
+  (setq anchor (nth 3 row)
+        pass   (if (eq cmd 'INVERT) *pfi-pass-name* "LABEL")
+        g      (pfp:order-gather anchor pass))
+  (if g
+    (progn
+      (setq lines  (car g)   inlets (cadr g)
+            pend   (caddr g) status (cadddr g)
+            sel    (if (= mode "All") pend (pfp:outstanding pend status)))
+      (cond
+        ((null pend)
+         (prompt "\nPFPRUN: no structures on this line -- nothing to label."))
+        ((null sel)
+         (prompt (strcat "\nPFPRUN: every structure on this line already carries"
+                         " a " pass " label -- nothing outstanding.")))
+        (T
+         (prompt (strcat "\nPFPRUN: " (if (= mode "All") "Label All" "Outstanding")
+                         " -- " (itoa (length sel)) " of " (itoa (length pend))
+                         " structure(s)."))
+         (setq sel (list (cons 'mode   (if (= mode "All") "All" "Sel"))
+                         (cons 'sel    sel)
+                         (cons 'lines  lines)
+                         (cons 'inlets inlets)))
+         (if (eq cmd 'INVERT)
+           (pfi:run anchor sel)
+           (pflabel:run anchor sel))))))
+  (princ))
+
+;; (pfp:run-xings row) -> nil    Crossings
+;;   C:PFXLABEL's body (pfxlabel.lsp:412-435) minus the target pick and the
+;;   dialog.  Its All branch already means "every crossing not yet labeled", so
+;;   there is no Outstanding variant to build and no relabel confirm to answer
+;;   -- the already-labeled ones are filtered out rather than duplicated.
+;;   The undo group is opened HERE because pfxl:discover writes before pfxl:run
+;;   is reached; pflabel:run and pfi:run open their own, so pfp:run-labels
+;;   must not double-wrap.
+(defun pfp:run-xings (row / anchor xf work recon sel)
+  (setq anchor (nth 3 row))
+  (if (null (setq xf (pfa:anchor->xform anchor)))
+    (prompt "\nPFPRUN: target grid record unreadable -- cannot label.")
+    (progn
+      (pf:undo-begin '*pfxl-undo-open*)
+      (pfxl:discover anchor)
+      (setq work  (pfa:xing-list anchor)
+            recon (pfa:recon xf work)
+            sel   (vl-remove-if
+                    '(lambda (x) (cdr (assoc (pfa:xr-key x) recon)))
+                    work))
+      (cond
+        ((null work) (prompt "\nPFPRUN: no crossings found for this target."))
+        ((null sel)
+         (prompt "\nPFPRUN: all crossings already labeled -- nothing to do."))
+        (T
+         (prompt (strcat "\nPFPRUN: " (itoa (length sel)) " of "
+                         (itoa (length work)) " crossing(s) outstanding."))
+         (pfxl:run anchor xf sel)))
+      (if *pfxl-undo-open* (pf:undo-end '*pfxl-undo-open*))))
+  (princ))
+
+;; (pfp:order-run) -> nil    The body, run under pf:run-command.
+(defun pfp:order-run ( / ord cmd row mode)
+  ;; READ AND CLEARED IN ONE setq -- the graft rule, PALETTE-LAYOUT 10.  A
+  ;; ticket left behind would re-fire on a bare PFPRUN typed at the command
+  ;; line, running yesterday's row against today's drawing.
+  (setq ord        *pfp-order*
+        *pfp-order* nil
+        cmd        (cdr (assoc 'cmd  ord))
+        row        (cdr (assoc 'row  ord))
+        mode       (cdr (assoc 'mode ord)))
+  ;; The Zoom To override rides the existing one-shot channel rather than the
+  ;; ticket: pf:zoom-resolve reads AND clears it at the top of every engine run
+  ;; (pftools-lib.lsp:1449), which is the same read-once discipline the ticket
+  ;; would have to reimplement.  Routing it through rd instead would mean
+  ;; editing all three engines; PALETTE-LAYOUT 6 wants that eventually.
+  (setq *pf-zoom-to* (if (cdr (assoc 'zoom ord)) 'ON 'OFF))
+  (if (eq cmd 'XING)
+    (pfp:run-xings row)
+    (pfp:run-labels cmd row mode))
+  ;; Counts only -- NOT pfp:refresh.  A labeling pass cannot change the
+  ;; registry, so rebuilding both trees would be wasted work AND would clear
+  ;; *pfp-tar-sel*, blanking the panel the operator is reading their result
+  ;; from.  The registry-changing verbs (SECTION 8) still take the full
+  ;; refresh; these do not.
+  (if *pfp-tar-sel* (pfp:fill-details *pfp-tar-sel*))
+  (princ))
+
+(defun pfp:order-flush ( / cmd)
+  (setq cmd (cdr (assoc 'cmd *pfp-order*)))
+  (cond ((eq cmd 'LABEL)  'pflabel:flush-pass)
+        ((eq cmd 'INVERT) 'pfi:flush-pass)
+        (T                'pfxl:flush-pass)))
+
+;; C:PFPRUN -- the Commands tab's one deferred entry point.
+(defun c:PFPRUN ()
+  (if (null *pfp-order*)
+    (progn
+      (prompt (strcat "\nPFPRUN: no order ticket -- use RUN on the palette's"
+                      " Commands tab."))
+      (princ))
+    (pf:run-command "PFPRUN" (pfp:order-flush) 'pfp:order-run)))
+
+;;; ---- panel state + the button handlers -----------------------------------
+
+;; (pfp:clear-target) -> nil    btnClear
+;;   Inline, not deferred: this touches the palette and nothing else.  The TREE
+;;   selection is left where it is -- OpenDCL Trees have no attested "select
+;;   nothing" call, and dropping the remembered row is what actually stops RUN
+;;   firing, which is the point of the button.
+(defun pfp:clear-target ()
+  (setq *pfp-tar-sel* nil)
+  (pfp:fill-details nil)
+  (prompt "\nPFPALETTE: target cleared -- pick a line on the Commands tab.")
+  (princ))
+
+;; (pfp:cmd-init) -> nil
+;;   Called from pfp:refresh and NOT from OnInitialize: that event fires before
+;;   the window is realized and this file already carries the scar of writing
+;;   there (SECTION 4).  Idempotent, unlike AddColumns, so a per-refresh call
+;;   is free.
+;;   IT DOES NOT TOUCH optRun.  An earlier version tried to nudge it to Label
+;;   Outstanding with dcl-Control-SetValue, which raised a MODAL "Property
+;;   <Value> not found" dialog on every palette open (field report 2026-07-29).
+;;   An Option List has no Value property to write any more than it has one to
+;;   read, and -- the part worth remembering -- **vl-catch-all-apply does NOT
+;;   suppress an OpenDCL argument-validation error.** It is raised by the ARX
+;;   as a modal box before LISP ever sees a return value, so wrapping a probe
+;;   in a catch does not make it safe.  Getters degrade quietly to nil; setters
+;;   do not degrade at all.  Discover with C:PFPAPI (a symbol-table read, no
+;;   call) rather than by trial-calling anything against a live control.
+;;   optRun's default item is therefore a STUDIO setting: set it to Label
+;;   Outstanding there, because Label All ERASES this pass's previous output
+;;   before redrawing (pflabel.lsp:573) and on the palette that is one click
+;;   with no dialog in front of it.
+(defun pfp:cmd-init ( / c)
+  (foreach c (list (cons "frmTools" pfsuite/pfsPalette/frmTools)
+                   (cons "optTools" pfsuite/pfsPalette/optTools))
+    (if (cdr c)
+      (vl-catch-all-apply 'dcl-Control-SetEnabled (list (cdr c) nil))))
+  (princ))
+
+(defun c:pfsuite/pfsPalette/btnRun#OnClicked ()
+  (pfp:order-fire)
+  (princ))
+
+(defun c:pfsuite/pfsPalette/btnClear#OnClicked ()
+  (pfp:clear-target)
+  (princ))
+
+;; C:PFPCTL -- what do the Commands tab's value controls actually return?
+;;   The accessor NAME is settled (dcl_Control_GetValue, generic).  What is not
+;;   settled is the Option List INDEX BASE, and that one cannot fail loudly: a
+;;   1-based list read as 0-based runs Inverts when Structures is selected.
+;;
+;;   SO READ THE VALUES, not just the names.  Select Structures on the Commands
+;;   tab, tick Zoom To, then run this:
+;;     optLabel 0, chkbxZoom non-zero -> *pfp-opt-base* 0 is right, nothing to do
+;;     optLabel 1                     -> set *pfp-opt-base* to 1
+;;     optLabel "" or nil             -> GetValue is not the accessor after all
+;; (pfp:api-names pat) -> sorted names of every registered dcl* symbol matching
+;;   pat.  atoms-family 0 is the whole symbol table, so this is the DEFINITIVE
+;;   answer to "what is this accessor called" -- no more candidate lists.
+;;   AutoLISP folds symbol names to upper case, so pat must be upper case too.
+(defun pfp:api-names (pat / out s nm)
+  (setq out '())
+  (foreach s (atoms-family 0)
+    (setq nm (vl-symbol-name s))
+    (if (and (wcmatch nm "DCL*") (wcmatch nm pat)) (setq out (cons nm out))))
+  (if out (acad_strlsort out) '()))
+
+;; C:PFPAPI -- list the OpenDCL functions this build actually registers.
+;;   Written after four rounds of guessing accessor names cost four CAD runs.
+;;
+;;   NO PROMPT.  The first version asked for a filter with getstring and was
+;;   cancelled mid-read by a palette click -- a MODELESS FORM CAN INTERRUPT A
+;;   COMMAND-LINE READ, and "Function cancelled" is what that looks like from
+;;   the outside.  Nothing that prompts is safe while the palette is open.
+;;   So it dumps the groups the Commands tab actually needs; for anything else,
+;;   call the helper straight from the command line:
+;;       (pfp:api-names "*TREE*")
+(defun c:PFPAPI ( / pat names nm)
+  (prompt (strcat "\n=== PFPAPI -- " (itoa (length (pfp:api-names "*")))
+                  " dcl* functions registered in this build ==="))
+  (foreach pat '("*OPTION*" "*RADIO*" "*CHECK*" "*VALUE*" "*CURSEL*" "*GETCUR*")
+    (setq names (pfp:api-names pat))
+    (prompt (strcat "\n  " pat "  (" (itoa (length names)) ")"))
+    (foreach nm names (prompt (strcat "\n      " nm))))
+  (prompt "\n  Anything else:  (pfp:api-names \"*TREE*\")  at the command line.")
+  (princ))
+
+;;   IT NO LONGER PROBES THE OPTION LISTS.  Doing so was the diagnostic causing
+;;   the fault it was meant to diagnose: six GetValue calls, six modal dialogs,
+;;   six tidy nils in the report.  Option Lists are reported from what their
+;;   events have said; only the Check Box is actually read.
+(defun c:PFPCTL ( / f nm v)
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPCTL: run PFPALETTE first."))
+    (T
+     (prompt "\n=== PFPCTL -- Commands tab value controls ===")
+     (prompt "\n  Option Lists (from their events -- NEVER read with GetValue):")
+     (foreach nm '("optLabel" "optRun")
+       (setq v (cdr (assoc nm *pfp-opt-vals*)))
+       (prompt (strcat "\n    " nm " -> "
+                       (cond
+                         ((numberp v)
+                          (strcat (itoa v) "  = item "
+                                  (itoa (- (fix v) *pfp-opt-base*))
+                                  " (base " (itoa *pfp-opt-base*) ")"))
+                         ;; fired, but handed something that is not an index --
+                         ;; the handler's argument list does not match the event
+                         (v (strcat (vl-princ-to-string v)
+                                    "  <-- NOT A NUMBER: the #OnSelChanged"
+                                    " argument list is wrong"))
+                         (T "NOTHING REPORTED YET -- click an item in that group")))))
+     (prompt "\n  Check Box (Value is a real property here):")
+     (foreach f *pfp-chk-getters*
+       (prompt (strcat "\n    " f " -> "
+                       (if (pfp:callable-p f)
+                         (pfp:ask f (list pfsuite/pfsPalette/chkbxZoom))
+                         "no such function"))))
+     (if (null *pfp-opt-vals*)
+       (prompt (strcat "\n  -> No event has fired.  Tick optLabel/optRun's event"
+                       " in Studio, PFPRELOAD,\n     then click an item."))
+       (prompt (strcat "\n  -> Events ARE firing.  If the item number looks off"
+                       " by one, set *pfp-opt-base*.")))))
+  (princ))
+
+
 (princ "\npfpalette.lsp loaded (V5 palette, milestone 2).  Command: PFPALETTE.")
 (princ "\n  AFTER EVERY STUDIO SAVE:  PFPRELOAD   (else the .odcl is not re-read)")
 (princ "\n  Diagnostics: PFPDIAG (names), PFPPROBE (setters), PFPREAD (rects),")
 (princ "\n               PFPMOVE (clipping),")
 (princ "\n               PFPNUDGE (repaint), PFPDBMOD (writes).")
 (princ "\n  Native look: PFPTHEME (re-skin after a COLORTHEME flip), PFPSCALE.")
+(princ "\n  Commands tab: PFPRUN (the RUN ticket), PFPCTL (control values),")
+(princ "\n                PFPAPI (what dcl* functions this build registers).")
 (princ)
 ;;; ==========================================================================
 ;;; end of pfpalette.lsp

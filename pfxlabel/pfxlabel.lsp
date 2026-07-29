@@ -189,22 +189,26 @@
            (setq ybot (- (pf:xf-basey xf) (* *pfx-line-ext* sf))
                  ents '())
            (pfd:ensure-layer *pfa-xing-layer* nil)
-           (pfd:ensure-layer (pf:sym-layer srcfile) nil)
-           ;; station line (LWPOLYLINE on PF-XING -- recon scans this)
+           ;; station line (LWPOLYLINE on PF-XING -- recon scans this).  THE
+           ;; one piece of label output that does NOT go to PF-ANNO: this layer
+           ;; is a data channel, not styling.  pfa:station-line-tops finds a
+           ;; crossing's "labeled" mark by scanning PF-XING BY NAME, so the line
+           ;; has to stay where that scan looks.
            (if (setq en (pfd:station-line x ybot gtop *pfa-xing-layer*))
              (setq ents (cons en ents)))
-           ;; vertical station text on PF-XING (recon selects LWPOLYLINE only,
-           ;; so text on this layer is never mistaken for a station line)
+           ;; vertical station text -- PF-ANNO like every other label (moved off
+           ;; PF-XING 2026-07-29).  Recon never read it: that scan filters
+           ;; (0 . "LWPOLYLINE"), so text was invisible to it on either layer.
            (if (setq en (pfd:text (list x ybot 0.0)
                                   (strcat (pf:fmt-station tsta) " "
                                           (pf:cross-desc srcfile))
-                                  *pfa-xing-layer* style ht
+                                  (pfd:anno-layer) style ht
                                   (/ pi 2.0) 'MR))
              (setq ents (cons en ents)))
            ;; the crossing pipe at its invert elevation
            (setq y (pf:elev->profile-y inv xf))
            (if (setq en (pfd:insert-pipe (list x y) size
-                                         (pf:sym-layer srcfile)
+                                         (pfd:anno-layer)
                                          (pf:xf-vscale xf) sf))
              (setq ents (cons en ents)))
            ;; size + material + standard line label
@@ -369,6 +373,10 @@
   ;; append this pass's handles to the crossing pass ledger
   (if *pfxl-run-newh*
     (progn
+      ;; The pass now SPANS two layers -- station lines on PF-XING, everything
+      ;; else on PF-ANNO -- and the record holds one DXF 8.  It stays PF-XING:
+      ;; the field is informational (erase is by handle, always was), and the
+      ;; station line is what identifies a crossing pass.
       (setq oldh (pfa:pass-handles anchor *pfxl-pass-name*)
             lay  *pfa-xing-layer*)
       (pfa:pass-put anchor *pfxl-pass-name* lay nil
@@ -393,7 +401,6 @@
 ;; (pfxl:cmd) -> nil   The command body, run under pf:run-command.
 (defun pfxl:cmd ( / anchor xf work recon act ndup allmode sel)
   (setq *pfxl-undo-open* nil)
-  (pf:load-apis)
   (setq anchor (pfxl:resolve-target))
   (if (null anchor)
     (prompt "\nNo target -- cancelled.")

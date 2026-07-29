@@ -21,7 +21,11 @@
     (cons "gl_pre"  "G.L.")
     (cons "gl_val"  "[elev]")
     (cons "gl_suf"  "")
-    (cons "layer"      "STORM-TEXT_P")
+    ;; RETIRED 2026-07-29: no engine reads this -- all label output goes to
+    ;; PF-ANNO (or CLAYER when use_clayer is on).  The tile is still shown and
+    ;; harvested; the default is kept truthful so the dialog does not display a
+    ;; layer nothing writes to.
+    (cons "layer"      "PF-ANNO")
     (cons "use_clayer" "0")
     (cons "style"      "L080")
     (cons "hscale"  "20.0")

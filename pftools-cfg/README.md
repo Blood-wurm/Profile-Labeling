@@ -1,6 +1,6 @@
 # pftools-cfg.lsp — configuration (the FIRM'S constants)
 
-**Load position:** 1 of 10 (first; every other file reads these).
+**Load position:** 1 of 12 (first; every other file reads these).
 **May depend on:** nothing.
 **Depended on by:** every other file in the suite.
 

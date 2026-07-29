@@ -1,6 +1,6 @@
 # pftools-lib.lsp — shared engine (PURE)
 
-**Load position:** 2 of 10 (after pftools-cfg, before pfdraw).
+**Load position:** 2 of 12 (after pftools-cfg, before pfdraw).
 **May depend on:** pftools-cfg. *Runtime-only exception:* `pf:cl-geom` calls
 `pfa:geom-get` / `pfa:geom-put` (pfanchor, loads later) — the GEOM cache
 seam; resolved at call time, load order unaffected.
@@ -21,7 +21,10 @@ verification parade.
 Functions other files call (writers marked; everything else is a pure read).
 
 **Carlson wrappers + echo (§1):**
-- `pf:load-apis` — scload tri4/eworks, silent.
+- `pf:load-apis` — scload tri4/eworks, silent. **Called by `pf:run-command`
+  (pfanchor), not by command bodies** — moved there 2026-07-29 after
+  `C:PFPVERB` reached a centerline read without it and died on
+  `bad function: CF:ROAD_API`. Idempotent; never call it from a body again.
 - `pf:echo-off` / `pf:echo-on` — CMDECHO save/restore, SAVE-ONCE: a nested
   call can never clobber the user's saved value. Called by `pf:run-command`
   / `pf:run-error` (pfanchor).
@@ -94,8 +97,17 @@ drawn at — what lets an orphaned label name its station).
 `pf:subst-token`, `pf:index-of`, `pf:cl-id` (canonical file identity — the
 single source for GEOM/TWIN keys and pair dedup), `pf:dedupe-pairs`,
 `pf:type-of` / `pf:name-of` / `pf:parse-pro-name` / `pf:tin-role` (the
-naming convention), `pf:sym-layer` / `pf:text-layer`, `pf:std-label`,
-`pf:cross-desc`, `pf:nearest-size`, `pf:size-blockname`, `pf:size-rowtext`.
+naming convention), `pf:std-label`, `pf:cross-desc`, `pf:nearest-size`,
+`pf:size-blockname`, `pf:size-rowtext`.
+
+`pf:sym-layer` / `pf:text-layer` / `pf:align-layer` are **RETIRED** (2026-07-29)
+and have no callers: label output no longer derives a layer from the utility
+type, it goes to `PF-ANNO` via `pfd:anno-layer`. They are kept, with
+`*pfx-layer-suffix*` / `*pfx-text-layer-suffix*`, so a revert to per-type
+layers is a one-line change at each call site. pf-verify's dead-code gate names
+`pf:text-layer` and `pf:align-layer`; that is expected, not drift. `pf:sym-layer`
+stays off the list only because `pf:align-layer`'s fallback branch still calls
+it — both are dead in practice.
 
 **Rules + composition (§8–10):** `pf:rule-for`, `pf:rule-size`,
 `pf:fmt-station`, `pf:combine-id`, `pf:build-label-rows`, `pf:text-length`,
@@ -141,8 +153,19 @@ one frame rule for all three commands), `pf:zoom-end`, `pf:zoom-onerror`
 (*error*-safe restore: CMDACTIVE-gated, echo-silent, catch-wrapped). View
 ops only — never an entity write.
 
+**Console volume:** `pf:progress s` — THE seam for suppressible output.
+Prints unless `*pf-quiet*` (pftools-cfg) is bound T, which the palette does
+around its tree-click reads because they run the same gather path the label
+commands run and it narrates itself. **Progress only.** Errors, refusals, skip
+reports and `*error*` output call `prompt` directly and always print — silence
+the narration, never the news.
+
 ## Invariants
 
+- **A finding never routes through `pf:progress`.** If a message tells the
+  user something is WRONG, it is a `prompt`. The palette suppressing its own
+  chatter must never be able to suppress a failure — a hidden refusal on a
+  modeless click is undiagnosable.
 - This file may NEVER know what an anchor is, read a record, or reference a
   dialog. Nothing here writes the drawing (the §15 ZOOM/DELAY calls are
   view ops; `pf:cl-geom` files only through the pfa: seam when write-p).

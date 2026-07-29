@@ -13,6 +13,46 @@ numbers on a plan sheet are the worst outcome.
 
 ## PFINVERT
 
+- ~~**[wrong-output — CRITICAL] Direction is wrong at every terminus and at
+  every shared structure.**~~ **FIXED-PENDING-CAD 2026-07-29.** Field report:
+  five structures on line 'B', console said all five labeled, two labels on
+  the sheet, and the uppermost structure read `I.I.` where `I.O.` belongs.
+  Six defects, one theme — direction was assumed where it should have been
+  derived:
+  1. **Terminus classification inverted** (`pfi:invert-bracket`). The
+     interior pair rule (lower = outgoing) was carried over to single-vertex
+     ends, where it does not hold: the vertex is the end of a whole pipe, not
+     one side of a structure. Now the HIGH end of the run is the upstream
+     head (pipe leaves → I.O) and the LOW end the downstream terminus (pipe
+     arrives → I.I). Compared against the far END of the profile, so it does
+     not care which way the line is stationed.
+  2. **Shared lines were all labeled `I.I.`** and sampled with `pf:pipe-at`.
+     They now bracket their own `_INV.pro` (`pfi:lateral-info` returns
+     `(clfile (role elev size) ...)`), so a line that leaves reads I.O and a
+     pass-through yields both rows. Sampling also died at the `.pro`'s
+     station-range boundary — exactly where a junction sits — and the row
+     silently vanished.
+  3. **Columns were positional, not role-based.** `I.O. | shared | I.I.`
+     only held when the primary owned an I.O.; at a downstream terminus the
+     left column sat empty and two `I.I.` rows printed at a structure with a
+     pipe visibly running out of it. Row 0 now goes to whatever LEAVES.
+  4. **`pfi:nearest-vert` had no distance guard** — it returned the closest
+     vertex at any distance, so a structure with no vertex in the `.pro`
+     silently inherited its neighbour's invert to the penny. Past
+     `*pfi-struct-width-max*` it is now a printed skip.
+  5. **Junction station came from the drawn twin's vertex order**
+     (`pfi:endpoint-hits`), which is drafting direction, not stationing — a
+     line drawn against its stationing was read at its far end. The twin is
+     now a proximity pre-filter only; the station comes from
+     `pf:cl-endpoints`, station-ordered by construction.
+  6. **Shared structures drafted as two blocks drew two identical stacks**
+     at one station X and one base Y, superimposed — the "5 structures, 2
+     labels" symptom. `pfi:merge-nodes` merges within `*pfr-node-tol*`,
+     `pfi:node-hits` unions the blocks' memberships so no line is dropped.
+  **CAD gate:** on the 'B' profile, the head structure reads `I.O. 770.74`,
+  the downstream shared structure reads `I.O. <continuing line> | I.I. 765.00`
+  in that left-to-right order, five distinct stacks appear, and the console
+  reports the merge as "N merged into shared structures".
 - ~~**[wrong-output — CRITICAL] I.I / I.O are swapped and collapsed.**~~
   **FIXED .** Root cause was the sample-and-detect bracket
   (`pfi:break-scan`): 0.5-ft sampling read the break ~half a step past the true
@@ -79,12 +119,12 @@ numbers on a plan sheet are the worst outcome.
 
 ## PFSETUP
 
-- **[ux] "Place All" dialog parade.** Place All fires one unskippable dialog
-  per profile, one after another, with no way to pause and navigate to the next
-  profile. Current per-placement flow (Place → dialog → elevation → extents
-  pick → back to main dialog) leaves no way to move to the next profile without
-  closing and reopening the manager. Wants a pausable/navigable flow.
-  *(field notes 250, 251)*
+- ~~**[ux] "Place All" dialog parade.**~~ **CLOSED 2026-07-28 — REMOVED, not
+  fixed.** Every grid needs its own scales, datum and two corner picks, so a
+  batch could never be anything but a parade; there was no pausable flow to
+  design. Anchor All is gone from the registry dialog (`reg_all`, `pfs:rd-all`,
+  the `'place-all` verb). Anchor one profile at a time, from the dialog or the
+  palette. *(field notes 250, 251)*
 - **[ux] Dialog box size.** Setup dialogs should be larger. *(field note 252)*
 - **[feature] Discover crossings & shared stations at PFSETUP.** Currently
   crossing discovery only runs in PFXLABEL; the ask is to find `.cl` crossings
@@ -97,6 +137,24 @@ numbers on a plan sheet are the worst outcome.
 ---
 
 ## Shared / cross-cutting
+
+- ~~**[crash — palette] `bad function: CF:ROAD_API` from `C:PFPVERB`.**~~
+  **FIXED-PENDING-CAD 2026-07-29.** `pf:load-apis` (the `scload` of
+  tri4/eworks that defines `cf:road_api`) was the first line of each command
+  BODY. Six of the nine entry points had it; `pfp:verb-run`, `pfrem:cmd` and
+  the `pfp-proof` harness did not. The palette's anchor verb calls
+  `pfs:place-one` **directly** rather than `pfs:cmd`, so btnAnchor prompted
+  for scales and datum and then died on the first centerline read — in any
+  session where no command-line PFTools command had run yet. It read as
+  working since the verb channel shipped (PALETTE-LAYOUT 2026-07-28) because
+  testing a palette button almost always follows a command-line run that
+  already loaded the API. **Fix:** `pf:load-apis` moved into
+  `pf:run-command`'s prologue, after `pf:echo-off` so the load chatter is
+  suppressed; all six body-level calls removed. Same consolidation as
+  audit #9 below, and the same root cause it was meant to end — what every
+  entry point needs belongs to the ONE wrapper. **CAD gate:** in a FRESH
+  drawing with no prior PFTools command, the palette's Anchor button
+  completes a placement; so do PFREMOVE and PFPVERB's other verbs.
 
 - ~~**[scope] Same-type membership** (PFLABEL + PFINVERT).~~ **FIXED
   2026-07-21** — one fix in the shared builders (`pflabel:registry-pairs` +
@@ -207,6 +265,45 @@ Shakedown results and the full test matrix live in
 [`../pfsuite-odcl/PALETTE-TESTING.md`](../pfsuite-odcl/PALETTE-TESTING.md).
 Only unresolved items are listed here.
 
+- **[ux] Every tree click fires `OnSelChanged` TWICE, and each dispatch
+  prints `*Cancel*`.** Parked 2026-07-29 — diagnosed, not fixed. Do not
+  re-derive any of this:
+  - **Measured** with `PFPTAR` trace on: one click on the Registry tree
+    produces **two** `TVW#OnSelChanged` dispatches carrying the **same**
+    `Label`, both routing correctly (`tree-map: YES`, `tar-map: no`). So the
+    routing is right and the *dispatch* is doubled, not the work.
+  - `*Cancel*` is emitted by **OpenDCL**, once per dispatch into LISP, before
+    our handler runs. Nothing written in a handler can prevent it.
+  - **RULED OUT — do not retry.** `CMDECHO 0`: no effect. `MENUECHO 3`:
+    silences the trace but **not** the cancels, and it is **disqualified as a
+    fix regardless** — it suppresses `prompt` output from modeless handlers,
+    which is precisely the error and refusal messages that must always print.
+    Our read path: traced end to end (`pfa:read-attribs`, `pfa:meta-get`,
+    `pfa:files-get`, `pfa:status-roll`, `pfp:file-cell`) — pure entget and
+    dictionary reads, no `command`, no Road API.
+  - **Leading theory:** the Commands tree was duplicated from `tvwLines` in
+    Studio and kept the source's event binding, so the project holds two
+    registrations naming `tvwLines#OnSelChanged` and OpenDCL invokes the
+    handler once per registration. Consistent with the 07-29 finding that the
+    Commands tree dispatches under `tvwLines`. **Still doubled as of
+    2026-07-29** — the theory is unconfirmed and the Studio checks tried so
+    far have not cleared it.
+  - **Real cost beyond the noise:** the second dispatch re-runs the fill. On
+    the Commands tab that is a second `pfa:target-counts` per click, with its
+    file I/O and Road API calls. An idempotence guard (return early when
+    `Key` matches the row already showing) would halve the work while leaving
+    the cancels — **designed, deliberately not built**, because it guards a
+    condition that should not exist.
+  - `pfp:route-sel` routes on **which map owns the key**, never on which
+    handler fired, so it stays correct however this resolves.
+- **The five pick buttons do not exist on the current `.odcl`.** Open prints
+  `control is nil -- btnPickCL / INV / TOP / DESIGN / EXIST` (2026-07-29),
+  five lines every time, because `*pfp-controls*` and PALETTE-LAYOUT §5 still
+  list them. Open question: deleted with the Edit/New tab work, or renamed
+  onto those tabs? Roster and §5 stay wrong until answered.
+- **`dcl-Form-SetBackColor` does not exist in this OpenDCL build.** Reported
+  on every open. §7's `'font` skin mode therefore cannot paint the form
+  background. Gate the call behind `pfp:callable-p` like the other probes.
 - **Palette persists across drawings — NOT intentional, and the fix is
   blocked.** (Answers the original question.) The palette is owned by the
   OpenDCL ARX runtime, so it outlives any document and sits on the start

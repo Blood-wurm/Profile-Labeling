@@ -329,7 +329,7 @@
         verts   (pf:pro-verts inv)
         grps    (if verts (pfr:groups verts))
         band    (pfr:band-texts texts xf)
-        pending (pflabel:pending inlets lines name)
+        pending (pfa:pending inlets lines name)
         allstas (mapcar 'car pending))
   (cond
     ((null verts)
@@ -841,7 +841,7 @@
               ty    (pf:type-of cl))
         (if (not (member ty seen))
           (setq seen  (cons ty seen)
-                pairs (append (reverse (pflabel:registry-pairs cl)) pairs))))))
+                pairs (append (reverse (pfa:registry-pairs cl)) pairs))))))
   (pfa:build-lines (pf:dedupe-pairs (reverse pairs))))
 
 ;; (pfr:default-path sel) -> the save dialog's starting path
@@ -917,7 +917,6 @@
 
 ;; (pfr:cmd) -> nil   The command body, run under pf:run-command.
 (defun pfr:cmd ( / rows sel)
-  (pf:load-apis)
   (setq rows (pfr:candidates))
   (if (null rows)
     (prompt (strcat "\nNo profile is ready to export.  PFREPORT needs an ANCHORED "

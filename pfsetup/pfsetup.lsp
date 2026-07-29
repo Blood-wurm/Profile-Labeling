@@ -10,6 +10,12 @@
 (if (not (boundp '*pfs-undo-open*))  (setq *pfs-undo-open* nil))
 (if (not (boundp '*pfs-datum-last*)) (setq *pfs-datum-last* nil))
 (if (not (boundp '*pfs-mat-last*))   (setq *pfs-mat-last* '())) ; (TYPE . material)
+;; *pfs-preset-res* -- a placement record supplied by a caller INSTEAD of the
+;; modal (the palette's Edit/New tabs).  nil on every command-line run, and
+;; READ AND CLEARED IN ONE setq at the top of pfs:place-one / pfs:edit-one:
+;; a ticket that survived a failed run would silently place the NEXT
+;; command-line record with someone else's input.  See PALETTE-LAYOUT.md §10.
+(if (not (boundp '*pfs-preset-res*)) (setq *pfs-preset-res* nil))
 ;; Error handling lives in pf:run-command (pfanchor); PFSETUP has no pass
 ;; ledger to flush, so its hook is nil.  An Esc inside a group (AUTO scan or
 ;; a placement -- including one nested under a label command) is closed by
@@ -17,10 +23,17 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 1  --  Dialog wiring  (pfsetup_main)
+;;; SECTION 1  --  The placement record  (seeds / validate / remember /
+;;;                prompts) + the pfsetup_main dialog wiring
 ;;; ==========================================================================
 ;;; d-cl / d-pro / d-tin / d-res live in pfs:show-dialog and are reached by
 ;;; the action callbacks via dynamic scope while start_dialog runs.
+;;;
+;;; The record (the `res` alist) is the unit every writer below consumes, and
+;;; the modal is only ONE way to build one.  Everything that used to be a side
+;;; effect of the dialog -- the seed chain, the refusal cascade, the session
+;;; memory -- lives out here so a record built anywhere else gets the same
+;;; treatment.  pfs:show-dialog fills a record; it no longer decides anything.
 
 (defun pfs:file-display (f)
   (strcat (vl-filename-base f) (vl-filename-extension f)))
@@ -126,61 +139,106 @@
 ;; OK: validate everything the dialog CAN validate.  Name is the identity
 ;; key -- picked files VALIDATE against it, they never resolve it.  The
 ;; slots already guarantee roles; what remains is pairing + name match.
-(defun pfs:ok ( / nm hs vs ty datum msgs mlist mat)
+;; (pfs:seed-hs init) -> scale string   |   (pfs:seed-vs init) -> scale string
+;;   Stored value (Edit) wins; else the NATIVE sv:sm / sv:vs; else the
+;;   last-used setting.  ONE chain, read by the dialog tiles AND by the
+;;   command-line prompts, so the value Enter accepts is the value the modal
+;;   would have shown.
+(defun pfs:seed-hs (init)
+  (cond ((assoc 'hs init) (rtos (cdr (assoc 'hs init)) 2 2))
+        ((pfset:native-scale 'sv:sm))
+        (T (cdr (assoc "hscale" (pfset:settings))))))
+
+(defun pfs:seed-vs (init)
+  (cond ((assoc 'vs init) (rtos (cdr (assoc 'vs init)) 2 2))
+        ((pfset:native-scale 'sv:vs))
+        (T (cdr (assoc "vscale" (pfset:settings))))))
+
+;; (pfs:seed-datum init) -> elevation string | nil
+;;   Stored value (Edit), else the session's last-typed.  nil = no seed, and
+;;   the caller must require a value.
+(defun pfs:seed-datum (init)
+  (cond ((cdr (assoc 'datum init)) (rtos (cdr (assoc 'datum init)) 2 2))
+        (*pfs-datum-last* (rtos *pfs-datum-last* 2 2))))
+
+;; (pfs:validate res) -> refusal message | nil
+;;   THE refusal cascade for a placement record, in the order the modal has
+;;   always reported them.  Both input sources land here -- so a record built
+;;   without the dialog cannot skip a check the dialog would have made.
+;;
+;;   The two NUMERIC clauses are checked only when their key is PRESENT.  The
+;;   dialog always supplies hs / vs / datum (parsed from tiles, possibly nil,
+;;   which is exactly the failure these clauses catch); a caller that leaves
+;;   them out is declaring they will be prompted for later, where initget
+;;   enforces the same rule at the point of entry.
+;;
+;;   Roles come from the FILE NAMES, never from list position: an init-shaped
+;;   'pro list holds whichever of the pair exists, in either slot.
+(defun pfs:validate (res / nm cl inv top tine tind r)
+  (setq nm (cdr (assoc 'name res))
+        cl (cdr (assoc 'cl res)))
+  (foreach r (cdr (assoc 'pro res))
+    (if (= (cdr (pf:parse-pro-name r)) "INV") (setq inv r) (setq top r)))
+  (foreach r (cdr (assoc 'tin res))
+    (if (eq (pf:tin-role r) 'DESIGN) (setq tind r) (setq tine r)))
+  (cond
+    ((or (null cl) (= cl ""))
+     "Select the .cl file -- station comes from it.")
+    ((or (null nm) (= nm "")) "Line name is empty.")
+    ((and (assoc 'hs res)
+          (not (and (cdr (assoc 'hs res)) (cdr (assoc 'vs res))
+                    (> (cdr (assoc 'hs res)) 0.0)
+                    (> (cdr (assoc 'vs res)) 0.0))))
+     "Plot scales must be positive numbers (e.g. 20 and 2).")
+    ((and (assoc 'datum res) (null (cdr (assoc 'datum res))))
+     "Type the datum elevation (the lower-left grid corner).")
+    ;; ---- .pro pair: both or neither, both names matching Name ------------
+    ((and inv (null top))
+     "Crown _TOP .pro missing -- bind both .pro files or neither.")
+    ((and top (null inv))
+     "Invert _INV .pro missing -- bind both .pro files or neither.")
+    ((and inv (/= (car (pf:parse-pro-name inv)) nm))
+     (strcat "INV .pro is for '" (car (pf:parse-pro-name inv))
+             "' but Name says '" nm "'."))
+    ((and top (/= (car (pf:parse-pro-name top)) nm))
+     (strcat "TOP .pro is for '" (car (pf:parse-pro-name top))
+             "' but Name says '" nm "'."))
+    ;; ---- .tin pair: both or neither (roles guaranteed by the slots) ------
+    ((and tine (null tind))
+     "DESIGN_* surface missing -- bind both surfaces or neither.")
+    ((and tind (null tine))
+     "Existing surface missing -- bind both surfaces or neither.")))
+
+(defun pfs:ok ( / ty mlist mat res msgs)
   ;; distof MODE 2 pinned: without it the parse follows the drawing's LUNITS,
   ;; and an Architectural/Fractional drawing rejects plain decimals.  Every
   ;; other numeric read in the suite pins mode 2 -- these three now match.
-  (setq nm    (strcase (pf:trim (get_tile "s_name")))
-        hs    (distof (get_tile "s_hs") 2)
-        vs    (distof (get_tile "s_vs") 2)
-        datum (distof (get_tile "s_datum") 2)
-        ty    (nth (atoi (get_tile "s_type")) *pf-types*)
-        msgs  nil)
-  (cond
-    ((or (null d-cl) (= d-cl ""))
-     (setq msgs "Select the .cl file -- station comes from it."))
-    ((= nm "") (setq msgs "Line name is empty."))
-    ((not (and hs vs (> hs 0.0) (> vs 0.0)))
-     (setq msgs "Plot scales must be positive numbers (e.g. 20 and 2)."))
-    ((null datum)
-     (setq msgs "Type the datum elevation (the lower-left grid corner)."))
-    ;; ---- .pro pair: both or neither, both names matching Name ------------
-    ((and d-inv (null d-top))
-     (setq msgs "Crown _TOP .pro missing -- bind both .pro files or neither."))
-    ((and d-top (null d-inv))
-     (setq msgs "Invert _INV .pro missing -- bind both .pro files or neither."))
-    ((and d-inv (/= (car (pf:parse-pro-name d-inv)) nm))
-     (setq msgs (strcat "INV .pro is for '" (car (pf:parse-pro-name d-inv))
-                        "' but Name says '" nm "'.")))
-    ((and d-top (/= (car (pf:parse-pro-name d-top)) nm))
-     (setq msgs (strcat "TOP .pro is for '" (car (pf:parse-pro-name d-top))
-                        "' but Name says '" nm "'.")))
-    ;; ---- .tin pair: both or neither (roles guaranteed by the slots) ------
-    ((and d-tine (null d-tind))
-     (setq msgs "DESIGN_* surface missing -- bind both surfaces or neither."))
-    ((and d-tind (null d-tine))
-     (setq msgs "Existing surface missing -- bind both surfaces or neither.")))
+  (setq ty    (nth (atoi (get_tile "s_type")) *pf-types*)
+        mlist (pfs:mat-list ty)
+        mat   (if mlist (nth (atoi (get_tile "s_mat")) mlist) "")
+        res   (list (cons 'type ty)
+                    (cons 'name (strcase (pf:trim (get_tile "s_name"))))
+                    (cons 'hs (distof (get_tile "s_hs") 2))
+                    (cons 'vs (distof (get_tile "s_vs") 2))
+                    (cons 'cl d-cl)
+                    ;; compacted: validation is what guarantees both-or-neither,
+                    ;; so a half-filled pair must survive long enough to be
+                    ;; REPORTED rather than being dropped on the way in
+                    (cons 'pro (vl-remove nil (list d-inv d-top)))
+                    (cons 'tin (vl-remove nil (list d-tine d-tind)))
+                    (cons 'material mat)
+                    (cons 'datum (distof (get_tile "s_datum") 2))
+                    (cons 'repick (= (get_tile "s_repick") "1")))
+        msgs  (pfs:validate res))
   (if msgs
     (set_tile "error" msgs)
-    (progn
-      (setq mlist (pfs:mat-list ty)
-            mat   (if mlist (nth (atoi (get_tile "s_mat")) mlist) "")
-            *pfs-datum-last* datum)
-      (setq d-res (list (cons 'type ty) (cons 'name nm)
-                        (cons 'hs hs) (cons 'vs vs)
-                        (cons 'cl d-cl)
-                        (cons 'pro (if d-inv (list d-inv d-top) '()))
-                        (cons 'tin (if d-tine (list d-tine d-tind) '()))
-                        (cons 'material mat)
-                        (cons 'datum datum)
-                        (cons 'repick (= (get_tile "s_repick") "1"))))
-      (done_dialog 1))))
+    (progn (setq d-res res) (done_dialog 1))))
 
 ;; (pfs:show-dialog init) -> result alist | nil
 ;;   init: same keys as the result, prefills the tiles (nil = blank form).
 ;;   'edit enables the re-pick toggle; 'datum prefills (else session-last).
 (defun pfs:show-dialog (init / dcl_id d-cl d-inv d-top d-tine d-tind d-res
-                        s idx result ity imat f)
+                        idx result ity imat f v)
   (setq dcl_id (load_dialog (pfset:dcl-file)))
   (if (< dcl_id 0)
     (progn (prompt "\nCould not load pfdialog.dcl.") nil)
@@ -188,8 +246,7 @@
       (progn (unload_dialog dcl_id)
              (prompt "\nCould not open the PFSETUP dialog.") nil)
       (progn
-        (setq s     (pfset:settings)
-              d-cl  (cdr (assoc 'cl init))
+        (setq d-cl  (cdr (assoc 'cl init))
               d-res nil)
         ;; route the init .pro / .tin lists into their role slots
         (foreach f (cdr (assoc 'pro init))
@@ -210,27 +267,17 @@
                      (cdr (assoc (strcase ity) *pfs-mat-last*))))
         (pfs:fill-materials ity imat)
         (set_tile "s_name" (if (assoc 'name init) (cdr (assoc 'name init)) ""))
-        ;; scale seed: stored value (Edit) wins; else NATIVE sv:sm/sv:vs; else
-        ;; the last-used setting.  The field stays editable either way.
-        (set_tile "s_hs"
-          (cond ((assoc 'hs init) (rtos (cdr (assoc 'hs init)) 2 2))
-                ((pfset:native-scale 'sv:sm))
-                (T (cdr (assoc "hscale" s)))))
-        (set_tile "s_vs"
-          (cond ((assoc 'vs init) (rtos (cdr (assoc 'vs init)) 2 2))
-                ((pfset:native-scale 'sv:vs))
-                (T (cdr (assoc "vscale" s)))))
+        ;; scale seed: pfs:seed-hs/vs -- the same chain the prompts use.
+        ;; The field stays editable either way.
+        (set_tile "s_hs" (pfs:seed-hs init))
+        (set_tile "s_vs" (pfs:seed-vs init))
         (if d-cl   (set_tile "s_cl"   (pfs:file-display d-cl)))
         (if d-inv  (set_tile "s_inv"  (pfs:file-display d-inv)))
         (if d-top  (set_tile "s_top"  (pfs:file-display d-top)))
         (if d-tine (set_tile "s_tine" (pfs:file-display d-tine)))
         (if d-tind (set_tile "s_tind" (pfs:file-display d-tind)))
         ;; datum: stored value (edit) or the session's last-typed
-        (cond
-          ((cdr (assoc 'datum init))
-           (set_tile "s_datum" (rtos (cdr (assoc 'datum init)) 2 2)))
-          (*pfs-datum-last*
-           (set_tile "s_datum" (rtos *pfs-datum-last* 2 2))))
+        (if (setq v (pfs:seed-datum init)) (set_tile "s_datum" v))
         ;; the re-pick toggle only means something on Edit
         (set_tile "s_repick" "0")
         (if (not (assoc 'edit init)) (mode_tile "s_repick" 1))
@@ -260,23 +307,88 @@
            (prompt (strcat "\nDialog error: "
                            (vl-catch-all-error-message result)))
            nil)
-          ((= result 1)
-           ;; the scales the user confirmed become the new defaults
-           (pfset:put-setting "hscale" (rtos (cdr (assoc 'hs d-res)) 2 2))
-           (pfset:put-setting "vscale" (rtos (cdr (assoc 'vs d-res)) 2 2))
-           ;; remember the material per type for the next placement of that type
-           (if (and (cdr (assoc 'material d-res))
-                    (/= (cdr (assoc 'material d-res)) ""))
-             (setq *pfs-mat-last*
-                   (cons (cons (strcase (cdr (assoc 'type d-res)))
-                               (cdr (assoc 'material d-res)))
-                         (vl-remove-if
-                           '(lambda (p)
-                              (= (car p) (strcase (cdr (assoc 'type d-res)))))
-                           *pfs-mat-last*))))
-           (pfset:save-auto)
-           d-res)
+          ;; The record, and nothing else.  The session memory that used to be
+          ;; updated here now lives in pfs:remember, which BOTH input sources
+          ;; reach -- see the note there.
+          ((= result 1) d-res)
           (T nil))))))
+
+
+;; (pfs:remember res) -> nil
+;;   The three session-memory effects of a CONFIRMED record: the scales become
+;;   the next placement's defaults, the material is remembered per type, and
+;;   the datum seeds the next prompt.
+;;
+;;   These were side effects of the modal closing.  That was invisible while
+;;   the modal was the only way in -- but a record built anywhere else would
+;;   have stopped updating them SILENTLY, leaving every default frozen at the
+;;   last time someone used the dialog.  Called from pfs:complete-res, at the
+;;   same point in the flow the dialog used to do it: input confirmed, before
+;;   the extent picks.
+(defun pfs:remember (res / ty mat)
+  (setq ty  (strcase (cdr (assoc 'type res)))
+        mat (cdr (assoc 'material res)))
+  (pfset:put-setting "hscale" (rtos (cdr (assoc 'hs res)) 2 2))
+  (pfset:put-setting "vscale" (rtos (cdr (assoc 'vs res)) 2 2))
+  (setq *pfs-datum-last* (cdr (assoc 'datum res)))
+  (if (and mat (/= mat ""))
+    (setq *pfs-mat-last*
+          (cons (cons ty mat)
+                (vl-remove-if '(lambda (p) (= (car p) ty)) *pfs-mat-last*))))
+  (pfset:save-auto)
+  nil)
+
+;; (pfs:ask-number label default positive-p) -> real
+;;   Enter takes the default; with no default a value is REQUIRED.  Esc is not
+;;   handled here -- it unwinds to pf:run-error like every other command-line
+;;   step, and nothing is written until after the picks that follow.
+(defun pfs:ask-number (label default positive-p / v)
+  (initget (+ (if default 0 1) (if positive-p 6 0)))
+  (setq v (getreal (strcat label
+                           (if default (strcat " <" (rtos default 2 2) ">") "")
+                           ": ")))
+  (if v v default))
+
+;; (pfs:ask-scales res init) -> res carrying 'hs and 'vs
+;;   getreal, not getdist: a plot scale is a RATIO, so it is unit-free and the
+;;   Architectural/Fractional parse hazard that pins distof mode 2 on the tiles
+;;   cannot arise.  initget 6 enforces the positive-number refusal at the point
+;;   of entry, which is why pfs:validate skips it for a prompted record.
+(defun pfs:ask-scales (res init / v hs vs)
+  (setq v  (pfs:seed-hs init)
+        hs (pfs:ask-number "\nHorizontal plot scale" (if v (distof v 2)) T)
+        v  (pfs:seed-vs init)
+        vs (pfs:ask-number "\nVertical plot scale"   (if v (distof v 2)) T))
+  (cons (cons 'hs hs) (cons (cons 'vs vs) res)))
+
+;; (pfs:ask-datum res init) -> res carrying 'datum
+;;   RESTORED 2026-07-28.  It was deleted when the datum moved into the modal
+;;   (the tombstone stood in SECTION 3).  The palette carries no numeric entry
+;;   by decision, so the typed datum comes back to the command line -- one
+;;   prompt immediately before the two extent picks, which is where the user is
+;;   already looking at the grid.  Zero and negative are legal elevations, so
+;;   only a null is refused.
+(defun pfs:ask-datum (res init / v)
+  (setq v (pfs:seed-datum init))
+  (cons (cons 'datum
+              (pfs:ask-number "\nDatum elevation (lower-left grid corner)"
+                              (if v (distof v 2)) nil))
+        res))
+
+;; (pfs:complete-res res init) -> res | nil
+;;   THE finalize step both input sources land on.  Prompt for whatever the
+;;   record is missing -- a preset carries no numbers -- then remember what was
+;;   confirmed.  Runs BEFORE the extent picks, so the modal's timing is
+;;   unchanged: a record accepted and then abandoned at the picks still leaves
+;;   its scales behind as the next default, exactly as it always has.
+(defun pfs:complete-res (res init)
+  (cond
+    ((null res) nil)
+    (T
+     (if (null (assoc 'hs res))    (setq res (pfs:ask-scales res init)))
+     (if (null (assoc 'datum res)) (setq res (pfs:ask-datum res init)))
+     (pfs:remember res)
+     res)))
 
 
 ;;; ==========================================================================
@@ -507,8 +619,9 @@
         nil)
        (T (list ll tr))))))
 
-;; (pfs:ask-datum is GONE -- the datum is typed in the pfsetup_main dialog;
-;;  the only command-line steps left are the two extent picks.)
+;; (pfs:ask-datum came BACK on 2026-07-28 and now lives in SECTION 1 beside
+;;  the other record builders.  The modal still types its datum; a record that
+;;  did not come from the modal is prompted for it here, just before the picks.)
 
 ;; (pfs:bind-files anchor res) -> list of notes
 ;;   FILES record + checksums from the dialog result.
@@ -539,11 +652,12 @@
   (pf:xf-put 'rightx (car tr) xf))
 
 ;; (pfs:place-one stub) -> anchor | nil
-;;   stub = (type name cl inv top) | nil (blank form).  Dialog -> picks ->
-;;   typed datum -> write, ONE undo group.  Promotion deletes the stub
-;;   under its ORIGINAL key, so a dialog override re-keys cleanly.
-(defun pfs:place-one (stub / init pro res ty nm cl rng pts ll tr datum xf
-                       anchor notes r)
+;;   stub = (type name cl inv top) | nil (blank form).  Record -> prompts ->
+;;   picks -> write, ONE undo group.  The record comes from the modal, or from
+;;   *pfs-preset-res* when a caller supplied one.  Promotion deletes the stub
+;;   under its ORIGINAL key, so an identity override re-keys cleanly.
+(defun pfs:place-one (stub / init pro preset vmsg res ty nm cl rng pts ll tr
+                       datum xf anchor notes r)
   (setq init '())
   (if stub
     (progn
@@ -556,9 +670,17 @@
       (if (and (nth 4 stub) (/= (nth 4 stub) ""))
         (setq pro (append pro (list (nth 4 stub)))))
       (if pro (setq init (cons (cons 'pro pro) init)))))
-  (setq res (pfs:show-dialog init))
+  ;; READ ONCE, CLEARED -- the pf:zoom-resolve pattern (pftools-lib.lsp).  One
+  ;; setq, no window: a preset that outlived a failed run would place the NEXT
+  ;; command-line record with stale input, silently.
+  (setq preset           *pfs-preset-res*
+        *pfs-preset-res* nil
+        vmsg             (if preset (pfs:validate preset)))
   (cond
-    ((null res) (prompt "\nPlacement cancelled.") nil)
+    (vmsg (prompt (strcat "\nREFUSED -- " vmsg)) nil)
+    ((null (setq res (pfs:complete-res
+                       (if preset preset (pfs:show-dialog init)) init)))
+     (prompt "\nPlacement cancelled.") nil)
     (T
      (setq ty (cdr (assoc 'type res))
            nm (cdr (assoc 'name res))
@@ -574,7 +696,7 @@
         nil)
        ((null (setq pts (pfs:pick-extents))) nil)
        (T
-        (setq datum (cdr (assoc 'datum res))    ; typed in the dialog
+        (setq datum (cdr (assoc 'datum res))    ; typed in the dialog, or asked
               ll    (car pts)
               tr    (cadr pts))
         (pf:undo-begin '*pfs-undo-open*)
@@ -673,14 +795,22 @@
   init)
 
 ;; (pfs:edit-one anchor) -> nil
-(defun pfs:edit-one (anchor / init res at old-cl rm pts ed ins ext xs ys datum
-                      xf notes touched r)
+(defun pfs:edit-one (anchor / init preset vmsg res at old-cl rm pts ed ins ext
+                      xs ys datum xf notes touched r)
   (prompt (strcat "\nEditing " (pfa:anchor-title anchor) "."))
   (foreach r (pfa:corner-check anchor)
     (prompt (strcat "\n  DRIFT: " r)))
-  (setq init (pfs:anchor-init anchor)
-        res  (pfs:show-dialog init))
+  ;; read once, cleared -- see the note in pfs:place-one
+  (setq init             (pfs:anchor-init anchor)
+        preset           *pfs-preset-res*
+        *pfs-preset-res* nil
+        vmsg             (if preset (pfs:validate preset))
+        res              (if vmsg
+                           nil
+                           (pfs:complete-res
+                             (if preset preset (pfs:show-dialog init)) init)))
   (cond
+    (vmsg (prompt (strcat "\nREFUSED -- " vmsg)))
     ((null res) (prompt "\nEdit cancelled -- nothing written."))
     (T
      (setq at (pfa:read-attribs anchor))
@@ -711,7 +841,7 @@
                       (/= (strcase old-cl)
                           (strcase (cdr (assoc 'cl res)))))
                (prompt "\n  NOTE: old .cl unreadable -- range match not verified.")))
-           ;; extents: the dialog's re-pick toggle, or rebuild from the
+           ;; extents: the record's re-pick flag, or rebuild from the
            ;; stored relative geometry
            (if (cdr (assoc 'repick res))
              (setq pts (pfs:pick-extents))
@@ -728,7 +858,7 @@
                  (progn
                    (prompt "\n  No width on record (legacy anchor) -- re-picking.")
                    (setq pts (pfs:pick-extents))))))
-           (setq datum (cdr (assoc 'datum res)))   ; typed in the dialog
+           (setq datum (cdr (assoc 'datum res)))   ; typed in the dialog, or asked
            (cond
              ((null pts) (prompt "\nEdit cancelled -- nothing written."))
              (T
@@ -813,10 +943,10 @@
      (set_tile "error" "Not ANCHORED yet -- use Anchor."))
     (T (setq r-idx i) (done_dialog 4))))
 
-(defun pfs:rd-all ()
-  (if (vl-member-if '(lambda (r) (eq (caddr r) 'STUB)) r-reg)
-    (done_dialog 3)
-    (set_tile "error" "Nothing left to anchor.")))
+;; Anchor All was REMOVED 2026-07-28.  Every grid needs its own scales, datum
+;; and two picks, so a batch was always a dialog parade with no way to pause --
+;; the open issue it carried is closed as removed, not fixed.  Anchor one at a
+;; time, from here or from the palette.
 
 ;; Double-click is the smart verb: anchor a registered row, edit an anchored one.
 (defun pfs:rd-dbl ( / i)
@@ -826,7 +956,7 @@
       (done_dialog (if (eq (caddr (nth i r-reg)) 'ANCHORED) 4 2)))))
 
 ;; (pfs:registry-dialog r-reg) -> (verb . idx) | nil (Close)
-;;   verbs: 'place 'place-all 'edit 'new 'refresh; idx 0-based (or nil).
+;;   verbs: 'place 'edit 'new 'refresh; idx 0-based (or nil).
 (defun pfs:registry-dialog (r-reg / dcl_id r-idx code r)
   (setq dcl_id (load_dialog (pfset:dcl-file)))
   (if (< dcl_id 0)
@@ -841,11 +971,9 @@
         (if r-reg
           (set_tile "reg_list" "0")
           (progn (mode_tile "reg_place" 1)
-                 (mode_tile "reg_all"   1)
                  (mode_tile "reg_edit"  1)))
         (action_tile "reg_list"  "(if (= $reason 4) (pfs:rd-dbl))")
         (action_tile "reg_place" "(pfs:rd-place)")
-        (action_tile "reg_all"   "(pfs:rd-all)")
         (action_tile "reg_edit"  "(pfs:rd-edit)")
         (action_tile "reg_new"   "(done_dialog 5)")
         (action_tile "reg_scan"  "(done_dialog 6)")
@@ -854,9 +982,8 @@
           (strcat "(pfset:help \"The registry is every profile this drawing "
                   "knows: AUTO-named stubs and anchored profiles.\\n\\n"
                   "Anchor      anchor a registered profile's grid (dialog, two "
-                  "corner picks).\\nAnchor All  every registered profile in "
-                  "turn.\\nEdit        rebind files / scales / datum on an "
-                  "anchored grid.\\nNew         a profile the sheet scan "
+                  "corner picks).\\nEdit        rebind files / scales / datum "
+                  "on an anchored grid.\\nNew         a profile the sheet scan "
                   "missed.\\nRefresh     re-scan the sheet's PF-NAME text, and "
                   "re-check every registered line for .pro files that "
                   "appeared since (empty slots only -- an existing binding "
@@ -865,17 +992,15 @@
         (unload_dialog dcl_id)
         (cond
           ((= code 2) (cons 'place r-idx))
-          ((= code 3) (cons 'place-all nil))
           ((= code 4) (cons 'edit r-idx))
           ((= code 5) (cons 'new nil))
           ((= code 6) (cons 'refresh nil))
           (T nil))))))
 
 ;; (pfs:cmd) -> nil   The command body, run under pf:run-command.
-(defun pfs:cmd ( / rootDir reg going act r)
+(defun pfs:cmd ( / rootDir reg going act)
   (setq *pfs-undo-open* nil)
-  (pf:load-apis)
-  
+
   ;; Project root is NATIVE (Carlson tmpdir$).  Only when there's no active
   ;; project does the one-shot browse seed a session fallback.
   (setq rootDir (pfset:root-get))
@@ -903,12 +1028,6 @@
       ((null act) (setq going nil))
       ((eq (car act) 'refresh) (pfs:auto))
       ((eq (car act) 'new)     (pfs:place-one nil))
-      ((eq (car act) 'place-all)
-       (foreach r reg
-         (if (eq (caddr r) 'STUB)
-           (progn
-             (prompt (strcat "\n== " (car r) " '" (cadr r) "' =="))
-             (pfs:place-one (nth 4 r))))))
       ((eq (car act) 'place)
        (pfs:place-one (nth 4 (nth (cdr act) reg))))
       ((eq (car act) 'edit)

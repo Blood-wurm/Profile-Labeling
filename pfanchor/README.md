@@ -1,6 +1,6 @@
 # pfanchor.lsp — record + registry
 
-**Load position:** 4 of 10 (after pfdraw, before pfsettings).
+**Load position:** 4 of 12 (after pfdraw, before pfsettings).
 **May depend on:** pftools-cfg, pftools-lib, pfdraw. *Runtime-only
 exceptions:* `pfa:choose-anchor` uses `pfset:pick-index` and PFREMOVE uses
 `pfset:confirm` (pfsettings, loads later) — resolved at call time.
@@ -123,6 +123,48 @@ Reads are modeless-safe (the palette contract): `pfa:nod-dict` /
 `pfa:stub-put` **W**, `pfa:stub-del` **W**, `pfa:twin-put` **W**,
 `pfa:geom-put` **W**.
 
+**The gather (§4c — moved down from pflabel 2026-07-29).** All pure reads,
+all modeless-safe. Completes the migration begun 2026-07-27 with
+`pfa:build-lines` / `pfa:gather-inlets`: every one of these was
+membership-and-ledger knowledge sitting in the labeling module by history, and
+none of them called anything in pflabel. The forcing reason is the palette —
+pfpalette at position 11 needs per-target counts, and this file at 4 could not
+serve them while the gather lived at 7. Now the three label commands, pfreport
+and the palette all resolve membership through one path.
+
+- `pfa:registry-pairs primary-cl` → `(path . name)*` — THE registry builder:
+  thin filter over `pfa:registry`, resolved via `pfa:entry-cl`, self dropped
+  by `pf:cl-id`, same-type only.
+- `pfa:line-table anchor` → `(primary lines)` | nil — THE target → line-set
+  resolution, one home. Four call sites used to build this by hand.
+- `pfa:pending inlets lines primary` → sorted `(sta ename blkname)*`.
+- `pfa:pend-for primary lines inlets` → the same, memoised — **the expensive
+  half**, and the only thing `*pfa-gather-memo*` holds. Keyed on exactly what
+  `pending` reads: primary, inlet signature, line signature. **Not** keyed on
+  anchor or pass name; `pending` consults neither. Split out so ONE
+  `inlets × lines` walk serves MANY passes, which is what the Commands tab
+  needs showing Structure and Invert counts side by side.
+- `pfa:status-for anchor passname pend xform` → `(status orphans)` — **the
+  cheap half**: a handle walk plus arithmetic. Deliberately not memoised —
+  status describes what is DRAWN RIGHT NOW. Because the pass ordinates left
+  the memo key, **drawing a label no longer discards the expensive walk** it
+  never invalidated.
+- `pfa:gather-compute anchor passname primary lines inlets` →
+  `(pend status orphans)` | nil — **THE one gather-compute**, shared by PFLABEL
+  and PFINVERT, now composed from the two above. Signature and return shape
+  unchanged across the move, so `rd-compute` / `pfi:rd-compute` needed no edit
+  beyond the rename.
+- `pfa:target-counts anchor` → alist | nil — **the per-target roll-up the
+  palette's Commands tab reads.** Keys: `primary lines structures label-done
+  label-out invert-done invert-out crossings xing-done xing-out drift`. Worked
+  out on read and never stored, for the same reason `pfa:status-roll` is.
+  Crossings are ledger-only by construction (`pfxl:discover` is a writer), so
+  `crossings` means "on record", and 0 means "none discovered yet" rather than
+  "none exist".
+- `pfa:line-loaded-p`, `pfa:pass-xs`, `pfa:labeled-x-p`, `pfa:cluster-xs`,
+  `pfa:orphan-xs` (the drift detector), `pfa:inlet-sig`, `pfa:lines-sig`,
+  `pfa:memo-get`, `pfa:memo-put`, `pfa:count-t`.
+
 **Record reads:** `pfa:meta-get`, `pfa:files-get`, `pfa:status-get pass`,
 `pfa:status-label`, `pfa:status-check`, `pfa:status-roll`,
 `pfa:status-rank`, `pfa:status-key`, `pfa:scope-get`, `pfa:stub-get`,
@@ -178,8 +220,15 @@ elevations preserved; key drift renames), `pfa:xing-put-elevs` **W**,
 
 **The command wrapper (§6, audit #9):**
 - `pf:run-command name flush work` — THE shared prologue/epilogue: *error*
-  save/install, echo-off/on, error-path teardown. `flush` = the command's
-  Esc ledger-flush hook (quoted symbol | nil); `work` = the command body.
+  save/install, echo-off/on, **`pf:load-apis`**, error-path teardown.
+  `flush` = the command's Esc ledger-flush hook (quoted symbol | nil);
+  `work` = the command body.
+  API loading joined the prologue 2026-07-29: it had been the first line of
+  each command BODY, and six of the nine entry points remembered it —
+  `C:PFPVERB` did not, so the palette's anchor button died on
+  `bad function: CF:ROAD_API` in any session that had not already run a
+  command-line PFTools command. A command body must never call
+  `pf:load-apis` itself; the wrapper owns it.
 - `pf:run-error msg` — the one *error* handler. Error-path order (locked):
   ledger-flush hook → close undo group → `pf:zoom-onerror` → restore
   `*error*`.
@@ -204,6 +253,12 @@ elevations preserved; key drift renames), `pfa:xing-put-elevs` **W**,
 ## Invariants
 
 - Reads are pure. Writes happen only inside caller-opened undo groups.
+- **The gather path's narration is suppressible; its findings are not.**
+  `pfa:build-lines`' per-line "Loaded line …" and `pfa:status-for`'s DRIFT
+  block go through `pf:progress`, because the palette runs this same path on
+  every tree click (`pfa:target-counts` alone calls `status-for` twice). The
+  "could not read a station range" error beside them stays a `prompt` and
+  always prints. New output here picks a side deliberately.
 - NO layer-scoped erases. Erase happens BY HANDLE only.
 - All state hangs off the anchor block; erase the anchor and the ledger
   dies with it (hard owner). No reactors, no background execution.

@@ -1,6 +1,6 @@
 # pfsettings.lsp — user-state layer + shared dialogs
 
-**Load position:** 5 of 10 (after pfanchor, before pfsetup).
+**Load position:** 5 of 12 (after pfanchor, before pfsetup).
 **May depend on:** pftools-cfg, pftools-lib, pfanchor (the NOD helpers reuse
 pfanchor's generic xrecord machinery).
 **Depended on by:** pfsetup, pflabel, pfxlabel, pfinvert, pfpalette

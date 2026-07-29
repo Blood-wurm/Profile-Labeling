@@ -1,6 +1,6 @@
 # pfreport.lsp — C:PFREPORT, Hydraflow Storm Sewers `.stm` export
 
-**Load position:** 10 of 11 (after pfinvert, before pfpalette).
+**Load position:** 11 of 12 (after pfinvert, before pfpalette).
 **May depend on:** pftools-cfg, pftools-lib, pfanchor, pfsettings, pflabel
 (line table, structure walk, station index), pfxlabel (`pfxl:src-files`).
 Does **not** depend on pfdraw or pfsetup — it draws nothing and registers

@@ -1,6 +1,6 @@
 # pfdraw.lsp — drawing boundary
 
-**Load position:** 3 of 10 (after pftools-lib, before pfanchor).
+**Load position:** 3 of 12 (after pftools-lib, before pfanchor).
 **May depend on:** pftools-cfg, pftools-lib.
 **Depended on by:** pfanchor, pflabel, pfxlabel, pfinvert.
 
@@ -18,7 +18,18 @@ All WRITERS (they entmake); every function returns the ename(s) it created
 what makes the erase-by-handle contract possible. Callers must hold an
 open undo group.
 
-- `pfd:ensure-layer name noplot` → nil — creates the layer if missing.
+- `pfd:ensure-layer-c name noplot color` → nil — creates the layer if
+  missing, born at `color`. **CREATE-ONLY**: an existing layer is never
+  recoloured, so a hand-set colour survives — and equally, changing a
+  caller's colour does not repaint drawings that already carry the layer.
+- `pfd:ensure-layer name noplot` → nil — the above at colour 7.
+- `pfd:anno-layer` → `"PF-ANNO"` — ensures THE annotation layer (no-plot,
+  green 80) and returns its name. **Every label pass writes here**, and this
+  is the only place the suite decides that: callers ask for the layer, they
+  never build a layer name. Create-only, so a drawing that already carries
+  PF-ANNO keeps its own colour and plot flag. The one exception in the suite
+  is PFXLABEL's crossing station LINE, which stays on `PF-XING` because
+  `pfa:station-line-tops` scans that layer by name.
 - `pfd:style-or-fallback style` → a style that exists (firm default →
   Standard → ""). Pure read; used internally by `pfd:text`.
 - `pfd:text pt str layer style ht rot just` → ename | nil — just `'ML` =

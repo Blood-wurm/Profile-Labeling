@@ -44,6 +44,13 @@ Handlers are named by path:
 (defun c:pfsuite/pfsPalette/tvwLines#OnSelChanged (Label Key)  ...)
 ```
 
+> **The roster below is behind the `.odcl` as of 2026-07-28.** Edit and New tab
+> surfaces were added in Studio after this section was written, and the file was
+> re-saved at 10:57. The `.odcl` is compressed — string extraction returns
+> nothing, so the new control names **cannot be recovered from the file**.
+> Run `PFPRELOAD` then `PFPDIAG` with the palette open and record the names in
+> §4/§5 before wiring anything to them; a mistyped name is silent (below).
+
 ### A wrong `(Name)` fails silently — check it, don't trust it
 
 An OpenDCL control symbol that the loaded project never defined evaluates to
@@ -108,7 +115,7 @@ Derived from `tarLines`: Left 10 + Width 876 + Right From Right 10 = 896; Top 40
 | Property | Value | |
 |---|---|---|
 | Width × Height | `900 × 670` | design size |
-| Min Width | ~~`570`~~ → ≥ `900` | fixed (confirmed by 1.6a); now load-bearing — see below |
+| Min Width | ~~`570`~~ → ~~≥ `900`~~ → `390` | lowered 2026-07-28; the Registry tab was rebuilt in Studio to hold together at 390 — see below |
 | Min Height | ~~`700`~~ → ≤ `670` | **unconfirmed** — 1.1 was never signed off; read the actual value in Studio |
 | Max Width / Max Height | `0` / `0` | no ceiling |
 | Allow Resizing | True | |
@@ -141,14 +148,26 @@ The two values also look transposed. **Fix: `Min Width` ≥ 900, `Min Height`
 > **2026-07-27 — §8 closed BY CONSTRUCTION.** With `Min Width` ≥ 900 the form
 > cannot narrow at all, so nothing can compute a negative x and the resize test
 > passes trivially (PALETTE-TESTING 1.6a). Consistent with the theory; not a
-> test of it. **The 900px floor is now load-bearing — lowering it re-opens §8.**
+> test of it. **The 900px floor was load-bearing until 2026-07-28.**
 >
 > **The cost:** `Dockable Sides` is Left + Right because this palette is meant
 > to be a vertical strip, and a strip with a hard 900px floor is a wide one.
-> The floor is forced by the five fixed-width Registry button rows (§3 — no
+> The floor was forced by the five fixed-width Registry button rows (§3 — no
 > layout flow, so a fixed row can't redistribute). A genuinely narrow palette
 > needs those rows reflowed: icon buttons, two stacked rows, or a toolbar.
-> That is a redesign, deliberately not scheduled.
+>
+> **2026-07-28 — the floor came down to 390, by Studio rework.** The Registry
+> tab was rebuilt so the rows and the three panes hold together at 390:
+> `tvwLines` narrowed to roughly half its width with `metaList`/`lvwLinkage`
+> moved across, and the two button rows re-spaced to stay visible at the new
+> floor. A runtime `#OnSize` layout pass was written and then removed the same
+> day — geometry stays entirely Studio's.
+>
+> **§8 is therefore no longer closed by construction.** 900 is reachable no
+> more; 390 is, and the guarantee is now the rects and anchors themselves.
+> That is the stronger claim, and an **untested** one until the resize is run
+> in CAD. Re-run PALETTE-TESTING 1.6a at 390 before treating §8 as shut, and
+> check the two rules in §3 against every right-referenced control.
 
 ---
 
@@ -163,12 +182,34 @@ from**:
 
 Vertical is identical with `Use Top From Bottom` / `Use Bottom From Bottom`.
 
-| Pair | Meaning | Behavior |
-|---|---|---|
-| `0 / 0` | both edges from the left | fixed size, pinned left |
-| `1 / 1` | both edges from the right | fixed size, pinned right |
-| `0 / 1` | left from left, right from right | **stretches** |
-| `1 / 0` | left from right, right from left | inverted — the mixed pair is always wrong |
+| Pair | Meaning | Behavior | How it fails as the form narrows |
+|---|---|---|---|
+| `0 / 0` | both edges from the left | fixed size, pinned left | **cannot vanish** — `Left` is a constant. The right edge runs past the form edge, so it clips |
+| `1 / 1` | both edges from the right | fixed size, pinned right | **vanishes off the LEFT** once `Left From Right` exceeds the client width |
+| `0 / 1` | left from left, right from right | **stretches** | width goes ≤ 0 once `Left + Right From Right` exceeds the client width |
+| `1 / 0` | left from right, right from left | inverted — the mixed pair is always wrong | — |
+
+### The two rules that keep a control on screen
+
+`Left From Right` is the control's left edge measured **from the parent's right
+edge**, so the real left is derived from the *current* width every time the form
+resizes. Narrow the form far enough and that computed left goes negative — the
+control isn't clipped, it has walked off the left side. That is the §8
+vanishing-buttons mechanism, and it is why the pair matters more than the rect.
+
+With a `Min Width` of **390** (client ≈ 386):
+
+1. **Every `1/1` control needs `Left From Right` < ~386.**
+2. **Every `0/1` stretcher needs `Left + Right From Right` < ~386.**
+
+`0/0` is the only pair that cannot vanish; it clips instead, which is a visible
+failure rather than a mystery. Check rule 1 on `btnClear`/`btnRun` and
+`btnRefresh`/`btnHelp`, and rule 2 on `tabMain`, `metaList`, `lvwLinkage`,
+`detailsList` and `tarLines` — the hand-moved stretchers are where rule 2 gets
+broken.
+
+`Closest Inside` / `Closest Outside` appear in the geometry property list but
+are **Splitter-only** — nothing to do with anchoring. Don't chase them.
 
 ### Form level
 
@@ -182,7 +223,7 @@ Vertical is identical with `Use Top From Bottom` / `Use Bottom From Bottom`.
 
 | Control | H | V | |
 |---|---|---|---|
-| `tvwLines` | 0/0 | 0/1 | fixed width, full height — **shipped state disagrees, see below** |
+| `tvwLines` | 0/0 | 0/1 | fixed width, full height; `Bottom From Bottom` **equal to `lvwLinkage`'s** so the two bottoms stay aligned at every height |
 | `metaList` | 0/1 | 0/0 | width tracks, height fixed at top |
 | `lvwLinkage` | 0/1 | 0/1 | the stretcher |
 | `btnPickCL` … `btnPickEXIST` | 0/0 | 1/1 | bottom-pinned row |
@@ -200,7 +241,14 @@ Vertical is identical with `Use Top From Bottom` / `Use Bottom From Bottom`.
 | `chkbxZoom` | 0/0 | 1/1 | bottom |
 | `btnClear` `btnRun` | 1/1 | 1/1 | bottom-right |
 
-### `tvwLines` — open finding, 2026-07-27
+### `tvwLines` — open finding, 2026-07-27 · **fix specified 2026-07-28**
+
+**The fix, to apply in Studio:** `Use Top From Bottom` = **0**,
+`Use Bottom From Bottom` = **1**, and `Bottom From Bottom` set **equal to
+`lvwLinkage`'s**. The first flag closes the growing-gap symptom below; the
+other two make the tree's bottom edge track `lvwLinkage`'s at every height,
+which is the requested "shrink to the bottom of `lvwLinkage`" holding at all
+sizes rather than at one. Pure anchoring — no code.
 
 Two symptoms from the field test, one likely cause:
 
@@ -236,8 +284,7 @@ Registry rows span the full panel width, so gluing their left edge to
 `metaList`'s left edge preserves the column structure, while `btnClear`/`btnRun`
 is a two-button cluster already hugging the right edge. OpenDCL has no layout
 flow, so a fixed-width row can't redistribute; pinning one side is the only
-choice and the gap opens on the other. It only appears on a *widen*, which is
-why `Min Width` must be ≥ 900.
+choice and the gap opens on the other.
 
 ---
 
@@ -248,7 +295,7 @@ why `Min Width` must be ≥ 900.
 | `tabMain` | TabStrip | Container for the three tab surfaces. | n/a |
 | `lblProject` | Label | Project root. Captioned by `pfp:seed-labels`. | ⚠️ wired, **blank at runtime** |
 | `lblCounts` | Label | Registry tallies. Captioned by `pfp:seed-labels`. | ⚠️ wired, **blank at runtime** |
-| `btnRefresh` | Button | Calls `pfp:refresh` — **direct call, no defer** (pure read). | ❌ |
+| `btnRefresh` | Button | Calls `pfp:refresh` — **direct call, no defer** (pure read). | ⚠️ wired 2026-07-28, **unverified in CAD** |
 | `btnHelp` | Button | TBD. | ❌ |
 
 ---
@@ -265,7 +312,20 @@ why `Min Width` must be ≥ 900.
 | `btnPickTOP` | Button | `TOP.pro` | ❌ |
 | `btnPickDESIGN` | Button | `DESIGN .tin` | ❌ |
 | `btnPickEXIST` | Button | `EXIST .tin` | ❌ |
-| `btnAnchor` `btnEdit` `btnNew` `btnRemove` `btnZoom` | Button ×5 | Registry verbs. | ❌ |
+| `btnAnchor` | Button | → `pfp:fire` → `C:PFPVERB` with a preset record, so pfsetup **prompts** for scales + datum instead of opening the modal. | ✅ wired 2026-07-28, **works in CAD** |
+| `btnEdit` `btnNew` | Button ×2 | Deferred, **no preset → the modal**. Editing is where bindings change (material, `.pro` pair, surfaces), which has no prompt-shaped equivalent. Decided 2026-07-28. | ✅ wired 2026-07-28 |
+| `btnZoom` | Button | Deferred → `pfp:zoom-anchor`. | ✅ wired 2026-07-28 |
+| `btnRemove` | Button | PFREMOVE. | ❌ — see below |
+
+**`btnRemove` is deliberately not wired.** `pfrem:cmd` picks its own anchor
+(`pfa:pick-anchor`, then `pfa:choose-anchor`), so a palette Remove would re-ask
+for a target the user already selected. Passing one needs a **third graft** into
+`pfrem:cmd`, and §10 allows two. Decide the graft first; it is four lines when
+approved.
+
+**The pick buttons wait on the Edit/New tabs.** A pick has nowhere to put its
+result until there is a pending record to hold it, and writing straight to the
+drawing from a modeless handler is the one thing §3 forbids.
 
 ### Pick-button order vs. linkage-row order — fix before wiring
 
@@ -296,17 +356,33 @@ registry reads the commands use, because those paths are provably write-free
 
 | Control | Type | Purpose | Wired |
 |---|---|---|---|
-| `tarLines` | TreeView | Target line. Capped height, not a stretcher. | ❌ |
+| `tarLines` | TreeView | Target line. Capped height, not a stretcher. | ✅ |
 | `frmLabel` | Frame | Groups `optLabel`. | n/a |
-| `optLabel` | RadioGroup | `Structures` / `Inverts` / `Crossings` → PFLABEL / PFINVERT / PFXLABEL. | ❌ |
-| `frmTools` | Frame | Groups `optTools`. | n/a |
-| `optTools` | RadioGroup | `Quick Profile` / `Profile from 2dPL` / `Export .stm` — native Carlson. | ❌ |
+| `optLabel` | RadioGroup | `Structures` / `Inverts` / `Crossings` → PFLABEL / PFINVERT / PFXLABEL. | ✅ |
+| `frmTools` | Frame | Groups `optTools`. | greyed |
+| `optTools` | RadioGroup | `Quick Profile` / `Profile from 2dPL` / `Export .stm` — native Carlson. | greyed |
 | `frmOptions` | Frame | Groups `optRun`. | n/a |
-| `optRun` | RadioGroup | `Label All` / `Label Outstanding` / `Label Selected` → ticket `mode`. | ❌ |
-| `detailsList` | ListView (Report) | Items on the target with a `Status` column. The stretcher. | ❌ |
-| `chkbxZoom` | CheckBox | `Zoom To` → ticket `(zoom . T\|nil)`. | ❌ |
-| `btnClear` | Button | Clears the selection. Caption reads `CLear` — typo. | ❌ |
-| `btnRun` | Button | Fires the selected command. | ❌ |
+| `optRun` | RadioGroup | `Label All` / `Label Outstanding` / `Label Selected` → ticket `mode`. | ✅ (Selected refused) |
+| `detailsList` | ListView (Report) | **Per-target SUMMARY, not an item list** — see below. The stretcher. | ✅ |
+| `chkbxZoom` | CheckBox | `Zoom To` → `*pf-zoom-to*` `'ON`/`'OFF`. | ✅ |
+| `btnClear` | Button | Clears the selection. Caption reads `CLear` — typo. | ✅ |
+| `btnRun` | Button | Fires the selected command. | ✅ |
+
+> **2026-07-29 — BUILT, static-clean, unverified in CAD.** `*pfp-order*` +
+> `C:PFPRUN` (pfpalette §9). Contract, rationale and the four decisions that
+> departed from this section live in `../pfpalette/README.md`; they are not
+> repeated here. Events for `btnRun` / `btnClear` still need ticking in Studio,
+> and `optRun`'s default item should be set to `Label Outstanding` there as
+> well — `pfp:cmd-init` nudges it at runtime, but only if the setter name is
+> real. `C:PFPCTL` reports whether it is.
+
+**`detailsList` is a summary, not an item list.** This section originally
+specified "items on the target with a `Status` column", feeding
+`(sel . <items>)`. The shipped control does the opposite, by decision: pick a
+target, see what is on it across all three passes, *then* choose the command.
+The counts must be on screen **before** the radio is touched, which an item
+list for one pass cannot do. Consequence: `Label Selected` has nothing to
+select from and is refused — the modal run dialogs keep that job.
 
 `optLabel`, `optTools` and `optRun` are each **one** control holding three items.
 
@@ -379,12 +455,21 @@ write-free by contract.
 
 ### Still missing
 
-- **`Status` column** on `detailsList` — runtime `AddColumns`, once, in
-  `OnInitialize`. Data source exists in every gather-compute (pflabel's
-  `[LABELED]`, pfinvert's `id-status`, pfxlabel's `recon`), all reads.
+- **`optTools`** — the three Carlson command names are unknown, so the group is
+  greyed and Label is permanently active. Until they land, §6's Label/Tools
+  state machine does not exist in code.
+- **`Label Selected`** — needs an item list to select from, which the summary
+  shape of `detailsList` deliberately isn't. Refused for now; the modal run
+  dialogs keep the job.
 - **`allow relabeling`** for Crossings — replaces the mid-run `pfset:confirm`.
-- **Crossings reshape** — `detailsList` becomes `Source | Target Sta | Source Sta
-  | Status`.
+  Not reachable from the palette today: `C:PFPRUN` takes the All branch, which
+  filters already-labeled crossings out rather than offering to duplicate them.
+- **`chkbxZoom` into the ticket**, deleting `*pf-zoom-to*` — safe (it is always
+  nil on a command-line run) but it edits all three engines, so it is a
+  separate change from wiring the button.
+
+~~**`Status` column** on `detailsList`~~ and ~~**Crossings reshape**~~ are moot:
+both assumed the item-list shape this section no longer specifies.
 
 ---
 
@@ -400,6 +485,19 @@ MouseEntered · MouseMovedOff · Move · Size · Timer
 Currently ticked: **Close, Initialize, Size**. Only `OnInitialize` has a handler
 in `pfpalette.lsp` — either confirm a ticked event with no `defun` is harmless,
 or untick `Close` and `Size` until they're implemented.
+
+> **2026-07-29 — an event dispatch is not free, and it is not silent.**
+> OpenDCL prints `*Cancel*` to the command line **once per dispatch into
+> LISP**, before the handler runs. A tree click currently dispatches
+> `OnSelChanged` twice and so prints two. Neither `CMDECHO` nor `MENUECHO`
+> suppresses it (and `MENUECHO` is disqualified — it hides our own `prompt`
+> output from modeless handlers, errors included). **The only lever is the
+> number of registrations**, which lives in the `.odcl`. Parked with the full
+> measurement in [OPEN-ISSUES.md](../pfsuite-md/OPEN-ISSUES.md) PFPALETTE.
+>
+> Consequence for §9 and anything wired later: **every extra ticked event is a
+> visible cancel and a re-run of whatever the handler does.** Tick only what
+> has a `defun`, and only once.
 
 | Event | Use | Why |
 |---|---|---|
@@ -649,6 +747,21 @@ palette-initiated path must not be able to trigger a placement.
 
 **Phase 3 — Registry verbs.**
 
+> **2026-07-28 — BUILT, static-clean, unverified in CAD.** `*pfp-verb*` +
+> `C:PFPVERB` (pfpalette §8) are in, with `btnAnchor` / `btnEdit` / `btnNew` /
+> `btnZoom` deferring through `pfp:fire` and `btnRefresh` calling `pfp:refresh`
+> inline. `btnRemove` and the five pick buttons are NOT wired — §5 says why.
+> `tvwLines#OnSelChanged` now also records `*pfp-sel*`, which `pfp:refresh`
+> clears, so a verb cannot fire against a row the last write invalidated.
+>
+> **The pfsetup side underneath it** is also built and static-clean.
+> The record layer was split out of the modal (`pfs:validate`, `pfs:remember`,
+> `pfs:seed-*`, `pfs:complete-res`), the `*pfs-preset-res*` graft is in with the
+> read-and-clear, scales and datum are prompted for a record that arrives
+> without them, and Anchor All is gone. No palette code was touched. The gate
+> before anything is wired to it: `C:PFSETUP` from the command line, behaving
+> exactly as it did — see `../pfsuite-md/TESTING.md`.
+
 | Button | Path |
 |---|---|
 | `btnRefresh` | direct call to `pfp:refresh` — the only verb that doesn't defer |
@@ -662,10 +775,19 @@ pfsetup internals to public API; gives one `SendCommand` target instead of five;
 and puts the `CMDACTIVE` gate, the undo mark, and the palette-disable in a single
 place rather than repeating them per button.
 
-**Phase 4 — Commands tab.** `detailsList` columns in `OnInitialize`; `tarLines`
-fill (parameterize `pfp:fill-tree` to take a control); the enable/disable state
-machine (§6); per-pass gather; `btnRun` → ticket → `SendCommand`; `btnClear`;
-the Crossings reshape.
+**Phase 4 — Commands tab. ✅ BUILT 2026-07-29, static-clean, UNVERIFIED IN CAD.**
+`detailsList` columns and `tarLines` fill landed with §5b; `btnRun` → ticket →
+`SendCommand`, `btnClear`, and the per-pass gather landed with §9. Not built:
+the enable/disable state machine (no `optTools` command names, so the group is
+simply greyed) and the Crossings reshape (moot — see §6 *Still missing*).
+
+**Phase 2 was folded into Phase 4 rather than built separately.** Its thin
+`C:PFLABELRUN` / `C:PFINVERTRUN` / `C:PFXLABELRUN` became one dispatcher,
+`C:PFPRUN`, for the same reason Phase 3 collapsed five verb commands into
+`C:PFPVERB`: one `SendCommand` target, one `CMDACTIVE` gate, one ticket
+discipline. The `*pf-preset-target*` graft it specified was **not needed** —
+the dispatcher calls the engines directly and never reaches
+`pfs:choose-or-place`. That permitted graft stays unspent; see §10.
 
 **Phase 5 — lifecycle.** `DocActivated` and `EnteringNoDocState` per §7.
 
@@ -693,11 +815,22 @@ absent.
   names alongside them, not replacements.
 - **Modals stay working** until the palette provably replaces each one, then are
   demoted to fallbacks for a session without OpenDCL — never deleted.
-- **Exactly one shared-code edit is permitted:** the `*pf-preset-target*` graft
-  into `pfs:choose-or-place`. With the global nil — every command-line run —
-  behaviour must be byte-identical to today's modal pick.
-- **`*pf-preset-target*` must be read and cleared in the SAME `setq`**, copying
-  `pf:zoom-resolve` (`pftools-lib.lsp:1030-1034`). Otherwise a palette run that
+- **Two shared-code edits are permitted, and no more.** Each is a *graft*: a
+  palette-only global that reaches into a path the command line also runs. With
+  the global nil — every command-line run — behaviour must be byte-identical.
+  1. `*pf-preset-target*` into `pfs:choose-or-place`, so a palette run does not
+     re-open `pf_pick` for a target it already knows. That function **may
+     write** (a registered pick anchors on the fly), so a palette path falling
+     through to the modal could trigger a placement nobody asked for.
+  2. `*pfs-preset-res*` into `pfs:place-one` / `pfs:edit-one` — **added
+     2026-07-28**, because the palette's Edit/New tabs build the placement
+     record the modal used to build. A preset is run through `pfs:validate`
+     before any prompt or pick, so the palette cannot skip a refusal the dialog
+     would have made.
+
+  A third graft needs a decision and a note here first, not a commit.
+- **Every graft must be read and cleared in the SAME `setq`**, copying
+  `pf:zoom-resolve` (`pftools-lib.lsp:1429-1435`). Otherwise a palette run that
   dies on Esc or a busy command line leaks a stale target into the next
   *command-line* run, which then silently labels the wrong profile instead of
   prompting. This is the single most likely way the palette breaks the

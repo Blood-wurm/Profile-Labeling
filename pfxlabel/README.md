@@ -1,6 +1,6 @@
 # pfxlabel.lsp — C:PFXLABEL, pipe-crossing discovery + labeling
 
-**Load position:** 8 of 10 (after pflabel, before pfinvert).
+**Load position:** 9 of 12 (after pflabel, before pfinvert).
 **May depend on:** pftools-cfg, pftools-lib, pfdraw, pfanchor, pfsettings,
 pfsetup (loads after pflabel but calls nothing in it).
 **Depended on by:** pfinvert (`pfxl:src-files`).
@@ -63,8 +63,17 @@ in-group; `pf:cl-geom` with write-p T files GEOM here), `pfxl:resolve-target`
 - One undo group wraps the whole pass (discovery + labels); Esc is unwound
   by `pf:run-error`, which first lets `pfxl:flush-pass` ledger what drew.
 - Erase-by-handle only; handles ledgered as pass "XING".
-- Station text goes ON PF-XING (recon selects LWPOLYLINE only, so text is
+- Station text goes on **PF-ANNO** as of 2026-07-29, with every other label.
+  It used to sit on PF-XING (recon selects LWPOLYLINE only, so text was
   never mistaken for a station line).
+- **The station LINE stays on `PF-XING`** — the one piece of label output in
+  the suite that does not go to PF-ANNO. That layer is a data channel, not
+  styling: `pfa:station-line-tops` finds a crossing's "labeled" mark by
+  scanning PF-XING by name. The crossing pipe block and its size/material
+  labels moved to PF-ANNO with the station text.
+- A crossing pass therefore SPANS two layers while its record holds one
+  DXF 8. That field stays `PF-XING` — it is informational (erase is by
+  handle, always was) and the station line is what identifies the pass.
 - PFXLABEL parades by default (`pf:zoom-resolve T`); a palette override
   wins.
 

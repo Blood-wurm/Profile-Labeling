@@ -1,6 +1,6 @@
 # pflabel.lsp — C:PFLABEL, top-of-grid structure labels
 
-**Load position:** 7 of 10 (after pfsetup, before pfxlabel).
+**Load position:** 8 of 12 (after pfpro, before pfxlabel).
 **May depend on:** pftools-cfg, pftools-lib, pfdraw, pfanchor, pfsettings,
 pfsetup.
 **Depended on by:** pfinvert (shared builders + the settings dialog).
@@ -18,9 +18,11 @@ pfsettings.
 
 - **Secondary .cl set = THE REGISTRY** (anchors AND stubs), same-utility-
   type only, via the ONE builder `pflabel:registry-pairs` (audit #12).
-- **Layer rule:** derived `<TYPE>-TEXT_P`, handle-tracked, erase-and-
-  replace on an All re-run; "Use current layer" draws on CLAYER untracked
-  (pass recorded with timestamp + layer, no handles).
+- **Layer rule:** `PF-ANNO` via `pfd:anno-layer` (no-plot, green 80),
+  handle-tracked, erase-and-replace on an All re-run; "Use current layer"
+  draws on CLAYER untracked (pass recorded with timestamp + layer, no
+  handles). Was a derived `<TYPE>-TEXT_P` until 2026-07-29 — old passes stay
+  on their old layer and an All re-run erases them by handle regardless.
 - **Label composition** (validated near-100%): STA rows primary first then
   alphabetical; combined ID alphabetical; const rows from
   `*pf-rule-table*`; elevation placeholder rows (HDWL drops it).
@@ -30,33 +32,24 @@ pfsettings.
 Shared with pfinvert (all pure reads — gather-path purity: callable before
 any undo group, one day from a modeless handler):
 
-- `pflabel:registry-pairs primary-cl` → `(path . name)*` — THE registry
-  builder: thin filter over `pfa:registry` (one merged, copy-excluding,
-  sorted walk), resolved via `pfa:entry-cl`, self dropped by `pf:cl-id`,
-  same-type only. Consumers: both setups, both run dialogs.
-- **The line-table builder and the inlet gather moved out**, 2026-07-27 —
-  they are now `pfa:build-lines` / `pfa:gather-inlets` in pfanchor §4b. Both
-  were always registry and selection knowledge rather than label knowledge,
-  and the membership-index writer at position 4 cannot reach up to this file
-  at 7. No alias left behind; same precedent as `pfa:entry-cl`. Their
-  contracts (three-deep vert fallback, write-free gather, model-space-only
-  selection) moved with them unchanged — see `pfanchor/README.md`.
-- `pflabel:pending inlets lines primary` → sorted `(sta ename blkname)*`.
-- `pflabel:gather-compute anchor passname primary lines inlets` →
-  `(pend status orphans)` | nil — **THE one gather-compute, shared with
-  PFINVERT.** Both commands ask the same question of the same data and only
-  the pass name differed; `.pro` never entered here (PFINVERT's profile work
-  is downstream in its engine). Dialog-blind and pure-read, so it is
-  callable from a modeless palette handler. The dialog FILLS stay local to
-  each command, because tile names belong to their own DCL dialog.
-- `pflabel:line-loaded-p name lines`, `pflabel:pass-xs anchor passname`,
-  `pflabel:labeled-x-p x xs eps`, `pflabel:index-stations`.
-- `pflabel:cluster-xs xs eps` → one representative X per eps-cluster. A
-  label STACK is many entities at one X (rows + station line), so counting
-  pass entities directly would report one moved structure as five.
-- `pflabel:orphan-xs pend xs eps xf` → pass X ordinates with no structure —
-  **the drift detector**, and the reverse of the `[LABELED]` test. See
-  Invariants.
+- **THE WHOLE GATHER MOVED OUT**, 2026-07-29 — `line-loaded-p`,
+  `registry-pairs`, `pending`, `pass-xs`, `labeled-x-p`, `cluster-xs`,
+  `orphan-xs`, `inlet-sig`, `lines-sig`, the memo pair, `pend-for`,
+  `status-for` and `gather-compute` are now `pfa:` in **pfanchor §4c**, with
+  the memo as `*pfa-gather-memo*`. Not one of them called anything in this
+  file; each was membership-and-ledger knowledge sitting in the labeling
+  module by history. The forcing reason was the palette: pfpalette at position
+  11 needs per-target counts, and pfanchor at 4 — which every module already
+  depends on — could not serve them from up here at 7. No aliases left behind.
+  This completes the migration begun 2026-07-27 with `pfa:build-lines` /
+  `pfa:gather-inlets`; same precedent as `pfa:entry-cl` out of pfxlabel.
+  Contracts moved unchanged — see `pfanchor/README.md`.
+- `pflabel:index-stations inlets line-table` → `(name . sorted-stations)*` —
+  **stayed**, because it is combined-ID RANKING rather than membership. Its
+  only consumers are this file and pfreport. Still the largest unmemoised
+  consumer of membership in the suite.
+- `pflabel:label-fmt settings util` — `[util]` token substitution for the four
+  affix keys.
 - `pflabel:show-dialog` — the PFLABELSET dialog (pfinvert's run dialog
   opens it via its `pi_set` action_tile).
 
@@ -78,7 +71,7 @@ Engine + wrapper hooks:
   the drawing (root README §5 contract).
 - Label Y = the top-of-grid probe at each structure's station, never the
   stored nominal top.
-- All-mode + derived layer REPLACES this command's previous tracked pass
+- All-mode + PF-ANNO (i.e. not CLAYER) REPLACES this command's previous tracked pass
   by handle; Sel appends; CLAYER output is never erased or counted.
 - `write-pass` validates the .cl checksum AFTER labeling and writes STATUS
   — labeling can never be older than its check.
