@@ -113,7 +113,17 @@ it — both are dead in practice.
 `pf:fmt-station`, `pf:combine-id`, `pf:build-label-rows`, `pf:text-length`,
 `pf:strip-trailing-eq`.
 
-**Crossing geometry (§11):** `pf:poly-x`, `pf:refine-x`, `pf:sta-at`.
+**Crossing geometry (§11):** `pf:poly-x`, `pf:refine-x`, `pf:sta-at`,
+`pf:sta-at-end-p`, `pf:shared-structure-p`.
+
+- `pf:shared-structure-p trng tsta srng ssta` → T when a hit sits within
+  `*pfx-terminus-tol*` of a terminus of **either** alignment — a junction
+  manhole or a branch tying into a main, not a pipe crossing. `pf:poly-x` is a
+  bounded `inters` test and cannot tell the two apart: endpoints that touch lie
+  on both segments. **Either, not both** — an end-to-end junction puts both
+  lines at a terminus, but a tee puts only the branch there. `pfa:xing-scan` is
+  the only caller and it reports its skips by name rather than dropping them,
+  which is what makes the "either" side of the trade safe.
 
 **Twin matching (§12):** `pf:cl-endpoints`, `pf:cl-twin-handle`,
 `pf:twin-verts` (LIVE read via handle — never cached stale).

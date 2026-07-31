@@ -161,6 +161,74 @@ and the palette all resolve membership through one path.
   Crossings are ledger-only by construction (`pfxl:discover` is a writer), so
   `crossings` means "on record", and 0 means "none discovered yet" rather than
   "none exist".
+- `pfa:xing-scan anchor write-p` → `(found newscope skips)` | nil — **the
+  crossing DISCOVERY scan, split out of `pfxl:discover` 2026-07-30.** `found` is
+  `((entry status existing-key) …)`; `newscope` feeds `pfa:scope-put`; `skips`
+  is `((sbase tsta ssta) …)`.
+  - **Shared structures are filtered HERE**, via `pf:shared-structure-p` —
+    an intersection at a terminus of either `.cl` is two lines meeting at a
+    structure, not a crossing, and `pf:poly-x` cannot tell them apart. It
+    belongs in the scan and not in `pfxl:discover` for the same reason the
+    split exists at all: a filter in the command alone would leave the palette
+    previewing tie-ins that running Crossings then refuses to file.
+  - `skips` is **returned, not discarded** — `pfxl:discover` names each one on
+    the command line, so a rejected crossing is distinguishable from a missed
+    one and `*pfx-terminus-tol*` can be argued with.
+  - **`write-p` threads straight to `pf:cl-geom` and decides nothing else.**
+    `nil` makes this a pure read, legal from a modeless handler; `T` is
+    discovery's own scan and files the GEOM cache. **Nothing here writes the
+    ledger either way** — classification is a read, merging is the caller's.
+  - **It lives here, not in pfxlabel**, for two reasons: load order (pfanchor
+    is position 4, pfxlabel 9, so `pfa:target-items` could never call upward),
+    and ownership — pfanchor already holds `xing-key`/`classify`/`merge`/`list`
+    and SCOPE, while every geometry helper is down in pftools-lib.
+  - **The checksum short-circuit is what makes a preview affordable.** A pair
+    whose two `.cl` checksums match SCOPE was already cut by the last
+    discovery, so its answer is in the ledger. `pf:poly-x` is O(n × m) segment
+    tests per pair. Steady state costs almost nothing; only new or changed
+    lines are re-cut — exactly the set worth showing.
+  - **The memo covers the cold case.** A never-discovered target has no SCOPE,
+    so nothing short-circuits and every pair is cut on every click. Keyed on
+    anchor + every checksum + the SCOPE record, which fully determine the
+    answer. Same pattern as `pfa:pend-for`; shares `pfa:memo-get`/`put`.
+    **Read-only scans only** — discovery bypasses it, because a hit would skip
+    the `pf:cl-geom` filing that passing `T` is *for*.
+- `pfa:xing-find anchor` → `(T . ((entry state) …))` | nil — pure read. Merges
+  what is on record with what the scan finds on the ground, so the palette can
+  show a crossing **before** it has been discovered. `state` is `LABELED` /
+  `OUTSTANDING` / `NEW` / `MOVED`. A `MOVED` hit drops the stale ledger row
+  rather than showing it twice; `UPDATED` is not added separately — same
+  crossing, same key, and the ledger row carries the surveyed elevations.
+- `pfa:xing-classify dict e` → `(status existing-key | nil)` — pure read, the
+  whole of `pfa:xing-merge`'s decision and none of its filing, so the preview
+  and the writer cannot drift. Takes the **dict**, so the caller decides
+  whether it was opened with `create` T; a nil dict answers `NEW`.
+- `pfa:split`, `pfa:scope-read` — moved down from pfxlabel 2026-07-30 with the
+  scan, for the reason `pfa:entry-cl` was: pure record knowledge that a reader
+  four load positions above it now needs.
+- `pfa:target-items anchor pass` → `(T . ((item station state) …))` | nil —
+  **the item-level twin of `target-counts`**, for the palette's `lvwCommand`
+  list. `pass` is `"LABEL"` \ `"INVERT"` \ `"XING"`. Counts answer *how much*;
+  this answers *which, and where* — the same question `pflabel:rd-fill`'s list
+  answers, minus the dialog.
+  - **One shape for all three passes**, because the control showing it has one
+    set of columns. `item` is a block name for the label passes and the
+    *crossing line's* name for `XING`; `station` is always on the target.
+    Elevations (`pfa:xr-telev` / `-selev`) are deliberately excluded — no room
+    for them at the 420px form width.
+  - **`state` is a SYMBOL, not a boolean** — `LABELED` / `OUTSTANDING`, plus
+    `NEW` / `MOVED` for `XING`. It was a bare `T`/`nil` that meant something
+    slightly different per pass, which is what made adding the two crossing
+    states awkward; one vocabulary means the renderer never switches on `pass`.
+  - **`(T . rows)`, not bare rows.** `nil` and `'()` are the same object, so a
+    bare list cannot separate "no `.cl` bound" from "read fine, nothing on this
+    line", and those need different words on screen. Same idiom, same reason as
+    `pfa:memb-get`.
+  - Shares `pfa:pend-for`'s memo with `target-counts`, so the second call in
+    one palette click is a memo hit, not a second inlets × lines walk.
+  - **`XING` is LIVE as of 2026-07-30**, via `pfa:xing-find` — not ledger-only.
+    An empty Crossings list now means the `.cl` genuinely crosses nothing, not
+    that nobody has looked yet.
 - `pfa:line-loaded-p`, `pfa:pass-xs`, `pfa:labeled-x-p`, `pfa:cluster-xs`,
   `pfa:orphan-xs` (the drift detector), `pfa:inlet-sig`, `pfa:lines-sig`,
   `pfa:memo-get`, `pfa:memo-put`, `pfa:count-t`.
@@ -236,7 +304,13 @@ elevations preserved; key drift renames), `pfa:xing-put-elevs` **W**,
   flag pattern. `pf:group-open-p` — any pf group open?
 
 **Teardown (§7):** `pfa:teardown-counts`, `pfa:teardown` **W**;
-`C:PFREMOVE` (copy-safe purge offered for copies).
+`pfrem:remove-anchor anchor` **W** — confirm + tear down ONE anchor the caller
+already has (copy-safe purge offered for copies); opens the undo group and owns
+the `*pfrem-undo-open*` reset. `pfrem:cmd` is now only *find a target, then call
+it*, and `C:PFREMOVE` is unchanged by the split. The palette's `btnRemove`
+(2026-07-30) calls `pfrem:remove-anchor` directly with the selected row's
+anchor — a split, **not** a graft, so no palette-only global reaches this file
+and command-line behaviour is byte-identical (PALETTE-LAYOUT §10).
 
 **`C:PFINDEX` (§8)** — `[Build/Verify/Report] <Report>`.
 - **Build** **W** rewrites every structure's record. Nothing in normal use
@@ -259,6 +333,14 @@ elevations preserved; key drift renames), `pfa:xing-put-elevs` **W**,
   every tree click (`pfa:target-counts` alone calls `status-for` twice). The
   "could not read a station range" error beside them stays a `prompt` and
   always prints. New output here picks a side deliberately.
+- **A command never inherits a mute.** `pf:run-command` clears `*pf-quiet*` in
+  its prologue and `pf:run-error` clears it on the error path, alongside
+  `pf:echo-on` and for the same reason: whatever the console state was borrowed
+  for, the wrapper hands it back. Callers that bind the flag (the palette's
+  read fills, and its run gather in `pfp:run-labels`) still reset it
+  themselves — but a throw can skip that reset, and the resulting failure is
+  session-long, silent, and mutes *every* command. This makes the flag safe to
+  bind from anywhere without each caller having to be perfect.
 - NO layer-scoped erases. Erase happens BY HANDLE only.
 - All state hangs off the anchor block; erase the anchor and the ledger
   dies with it (hard owner). No reactors, no background execution.

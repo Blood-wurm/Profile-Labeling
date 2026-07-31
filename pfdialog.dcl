@@ -101,6 +101,27 @@ pf_confirm : dialog {
 }
 
 
+// ---- Palette help ---------------------------------------------------------
+// A list_box and not a stack of text tiles: the help runs ~90 lines, which no
+// alert holds and no fixed tile count survives an edit.  The list scrolls, and
+// growing the text costs nothing here.  Selection is meaningless -- it is a
+// read-only page that happens to be built from a list.
+pfp_help : dialog {
+  label = "PFTools Palette - Help";
+  : list_box {
+    key             = "help_list";
+    width           = 70;
+    height          = 26;
+    multiple_select = false;
+  }
+  : row {
+    fixed_width = true;
+    alignment   = "centered";
+    : button { key = "accept"; label = "Close"; is_default = true; is_cancel = true; width = 11; }
+  }
+}
+
+
 // ---- PFSETUP: the registry manager ----------------------------------------
 // Replaces the command-line registry menu.  The list is THE registry
 // (anchors + stubs); every verb is a button.  The dialog closes for any

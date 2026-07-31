@@ -17,18 +17,24 @@
 ;;;   candidate mechanism.  This file fires it from a genuine palette click
 ;;;   and checks that what lands on the other side is a real command context.
 ;;;
-;;; ONE STUDIO STEP FIRST
-;;;   btnHelp is the trigger (form-level, unwired, visible on every tab -- so
-;;;   no new control is needed).  Select btnHelp in Studio, open its Events
-;;;   tab, and tick "Clicked".  A handler with the event unticked never fires.
+;;; NO LONGER HAS A BUTTON.  btnHelp was the Phase 1 trigger (form-level,
+;;; unwired, visible on every tab).  Phase 1 passed, and 2026-07-30 the button
+;;; became real Help -- pfpalette.lsp SECTION 10 owns
+;;; btnHelp#OnClicked now.  The handler that lived here has been deleted rather
+;;; than renamed: two defuns of that name across two files is a load-order coin
+;;; flip, and this is the copy that is finished with.
+;;;
+;;; What that costs: tests [1] and [2] were the palette-click half of the proof
+;;; and cannot be re-run from a keyboard.  They are the half that already
+;;; passed.  [3]-[5] still run, and still answer the question that matters on a
+;;; re-run -- that what lands on the other side of a defer is a real command
+;;; context.
 ;;;
 ;;; HOW TO RUN
 ;;;   1. Open a drawing.  Load the suite, then load this file.
-;;;   2. PFPALETTE to show the palette.
-;;;   3. Click Help.  Answer the one point prompt when asked.
-;;;   4. Read the five PASS/FAIL lines.
-;;;   5. Type U once.  The proof line must vanish in ONE undo step.
-;;;   6. PFPTESTRESET if the Help button is left disabled by an error.
+;;;   2. PFPTEST at the command line.  Answer the one point prompt.
+;;;   3. Read the [3]-[5] lines.
+;;;   4. Type U once.  The proof line must vanish in ONE undo step.
 ;;; ==========================================================================
 
 (vl-load-com)
@@ -50,34 +56,17 @@
 
 
 ;;; ==========================================================================
-;;; SECTION 2  --  The palette side: a modeless handler that defers
+;;; SECTION 2  --  The palette side  --  RETIRED, NO LONGER HERE
 ;;; ==========================================================================
-
-;; Handler naming follows the working convention (tvwLines#OnSelChanged):
-;; path segments with "/", event with "#".
-;;   Disabling the button before the send is the "palette disabled while a
-;;   command runs" rule from root README 5.  C:PFPTEST re-enables it.
-(defun c:pfsuite/pfsPalette/btnHelp#OnClicked ( / )
-  (prompt "\n=== PHASE 1 deferred-fire proof ===")
-  (prompt (strcat "\n[handler] CMDACTIVE=" (itoa (getvar "CMDACTIVE"))
-                  "  CMDNAMES=\"" (getvar "CMDNAMES") "\""))
-  ;; TEST 1 -- the negative control.  This (command) call is issued from a
-  ;; modeless handler and MUST fail to draw.  If a circle appears, the
-  ;; modeless restriction is not what we think it is and the whole
-  ;; defer design needs revisiting.
-  (setq *pfpt-ent* (entlast))
-  (vl-catch-all-apply '(lambda () (command "._CIRCLE" '(0.0 0.0 0.0) 1.0)) '())
-  (prompt (if (equal *pfpt-ent* (entlast))
-            "\n  [1] PASS  (command) from the handler drew nothing, as expected."
-            "\n  [1] FAIL  (command) DREW from a modeless handler -- investigate."))
-  ;; Now the real thing: queue a command instead of running one.
-  (setq *pfpt-sent* T)
-  (vl-catch-all-apply
-    '(lambda () (dcl-Control-SetEnabled pfsuite/pfsPalette/btnHelp nil)) '())
-  (if (pfp:defer "PFPTEST")
-    (prompt "\n  [2] SENT  PFPTEST queued -- watch for its report below.")
-    (prompt "\n  [2] FAIL  pfp:defer refused (command line busy)."))
-  (princ))
+;;; btnHelp#OnClicked lived here and fired tests [1] (a (command) call from a
+;;; modeless handler must draw nothing) and [2] (pfp:defer queues instead).
+;;; Both PASSED 2026-07-27, PALETTE-TESTING 4.1-4.9.  Deleted 2026-07-30 when
+;;; btnHelp became real Help: the suite may hold exactly one defun of that name
+;;; and pfpalette.lsp SECTION 10 is now it.
+;;;
+;;; Re-proving [1] and [2] needs a click, so it needs a spare wired control.
+;;; There isn't one, and inventing one costs a Studio round trip to re-answer a
+;;; settled question -- so this file no longer asks it.
 
 
 ;;; ==========================================================================
@@ -111,9 +100,9 @@
             "\n  [5] PASS  getpoint returned -- real command context confirmed."
             "\n  [5] ----  getpoint cancelled (Esc) -- inconclusive, re-run."))
 
-  ;; Hand the palette back.  Proves the command side can talk to the form.
-  (vl-catch-all-apply
-    '(lambda () (dcl-Control-SetEnabled pfsuite/pfsPalette/btnHelp T)) '())
+  ;; The "hand the palette back" step was a SetEnabled on btnHelp.  Gone with
+  ;; the handler -- this file must not touch a control it no longer owns, and
+  ;; re-enabling a button nothing here disabled would be theatre.
   (setq *pfpt-sent* nil)
   (prompt "\n=== end of proof ===")
   (princ))
@@ -123,12 +112,12 @@
 (defun c:PFPTEST ()
   (pf:run-command "PFPTEST" nil 'pfpt:body))
 
-;; Re-enable the Help button if an error left it disabled.
+;; Clear the proof's state after an error left it half-set.  It no longer
+;; re-enables btnHelp -- that button belongs to Help now and this file never
+;; disables it.
 (defun c:PFPTESTRESET ()
-  (vl-catch-all-apply
-    '(lambda () (dcl-Control-SetEnabled pfsuite/pfsPalette/btnHelp T)) '())
   (setq *pfpt-sent* nil *pfpt-undo-open* nil)
-  (prompt "\nPFPTESTRESET: Help button re-enabled.")
+  (prompt "\nPFPTESTRESET: proof state cleared.")
   (princ))
 
 
@@ -186,9 +175,10 @@
 
 
 (princ "\npfp-proof.lsp loaded (PHASE 1, TEMPORARY).")
-(princ "\n  Studio: tick btnHelp \"Clicked\"; tick pfsPalette \"DocActivated\"")
-(princ "\n          and \"EnteringNoDocState\".  Then PFPALETTE.")
-(princ "\n  Defer test:     click Help, read [1]-[5], then type U once.")
+(princ "\n  Studio: tick pfsPalette \"DocActivated\" and")
+(princ "\n          \"EnteringNoDocState\".  Then PFPALETTE.")
+(princ "\n  Defer test:     PFPTEST, read [3]-[5], then type U once.")
+(princ "\n                  ([1]/[2] retired with btnHelp -- it is Help now.)")
 (princ "\n  Lifecycle test: L1 switch drawings, L2 close all, L3 reopen one.")
 (princ)
 ;;; ==========================================================================

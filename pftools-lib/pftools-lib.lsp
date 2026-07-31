@@ -1059,6 +1059,37 @@
                             (+ ssta *pfx-sample-step*) *pfx-refine-step*))
   (if (and tv sv) (pf:poly-x tv sv)))
 
+;; (pf:sta-at-end-p rng sta) -> T | nil
+;;   Station within *pfx-terminus-tol* of either end of that alignment's range.
+(defun pf:sta-at-end-p (rng sta)
+  (and rng sta (car rng) (cadr rng)
+       (or (<= (abs (- sta (car  rng))) *pfx-terminus-tol*)
+           (<= (abs (- sta (cadr rng))) *pfx-terminus-tol*))))
+
+;; (pf:shared-structure-p trng tsta srng ssta) -> T | nil
+;;   T when an intersection sits at a terminus of EITHER alignment: two lines
+;;   meeting at a SHARED STRUCTURE (a junction manhole, or a branch tying into
+;;   a main), not one pipe crossing over or under another.
+;;
+;;   pf:poly-x cannot tell them apart and never could -- `inters` is a bounded
+;;   segment test, and endpoints that touch lie on both segments, so a junction
+;;   returns a hit indistinguishable from a crossing.  Near-collinear ties make
+;;   it worse by making it INTERMITTENT: whether the touch registers comes down
+;;   to floating point, so the same drawing files a false crossing on one pair
+;;   and not on its neighbour.
+;;
+;;   EITHER, not both, and the asymmetry is the whole point.  An end-to-end
+;;   junction puts both lines at a terminus, but a branch tying into a main
+;;   mid-run puts only the BRANCH there -- the main runs straight through, its
+;;   station nowhere near either end.  Requiring both would let every tee past.
+;;
+;;   The cost of "either" is a genuine crossing that happens to fall within the
+;;   band of a line's end.  That is why pfa:xing-scan RETURNS its skips by name
+;;   rather than dropping them silently -- a rejected crossing is reported, not
+;;   disappeared.  Tolerance is *pfx-terminus-tol* in pftools-cfg.
+(defun pf:shared-structure-p (trng tsta srng ssta)
+  (or (pf:sta-at-end-p trng tsta) (pf:sta-at-end-p srng ssta)))
+
 ;; (pf:get-verts clfile) -> list of (x y) vertices | nil
 ;;   Geometry source order, best first: .cl sampling -> drawn polyline
 ;;   (chords!) -> endpoint chord (loud warnings on the fallbacks).

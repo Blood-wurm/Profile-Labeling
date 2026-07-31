@@ -11,7 +11,23 @@ without OpenDCL), not deleted.
 
 ---
 
-## 1. Status (2026-07-27)
+## 1. Status (2026-07-29)
+
+> **The Commands tab fires.** `PFPRUN` labelled two structures on `BB` from the
+> palette — ticket → `pfp:defer` → `pf:run-command` → `pflabel:run`, one undo
+> group, `Status: PASSING`. That closes milestone 4 and makes the palette the
+> first surface that can *run* a pass, not just read one.
+>
+> Getting there cost eight CAD round trips, almost all on OpenDCL control
+> wiring rather than on the suite. Every fact bought is written down in
+> [`pfsuite-odcl/OPENDCL-WIRING.md`](pfsuite-odcl/OPENDCL-WIRING.md) — read it
+> before wiring the Settings tab, or it will cost the same again.
+>
+> Still open on the tab: `optTools` greyed (no Carlson command names),
+> `Label Selected` refused by design, and **Crossings and Inverts have not been
+> fired from the palette yet** — only Structures has.
+
+### Status as of 2026-07-27
 
 | | |
 |---|---|
@@ -110,10 +126,25 @@ membership internally and the runtime shows and hides them for you.
 | `lblProject` / `lblCounts` | Label | Project root + registry tallies, seeded by `pfp:seed-labels`. Form-level, outside `tabMain`. |
 | `btnPickCL` … `btnPickDESIGN` | Button ×5 | File pickers, one row. **Not wired** (milestone 3). |
 | `btnAnchor` `btnEdit` `btnNew` `btnRemove` `btnZoom` | Button ×5 | Registry verbs, one row. **Not wired** (milestone 3). |
-| `btnRefresh` `btnHelp` | Button ×2 | Form-level, bottom, visible on all tabs. **Not wired**; Refresh will call `pfp:refresh`. |
+| `btnRefresh` `btnHelp` | Button ×2 | Form-level, bottom, visible on all tabs. Refresh calls `pfp:refresh` inline; Help defers `PFPHELP`. Both wired, **unverified in CAD**. |
 | `tabMain` | TabStrip | Spans the content region. |
 
-### Commands tab (not built)
+### Commands tab (built and firing in CAD, 2026-07-29)
+
+**It runs.** `PFPRUN` labelled two structures on line `BB` from the palette,
+under `pf:run-command`, one undo group, `Status: PASSING`. Contract and the
+four decisions that departed from the original design:
+[`pfpalette/README.md`](pfpalette/README.md) §9. Control-level wiring:
+[`pfsuite-odcl/OPENDCL-WIRING.md`](pfsuite-odcl/OPENDCL-WIRING.md).
+
+Working: `tarLines` → `detailsList` summary, `optLabel` (Structures / Inverts /
+Crossings), `optRun` (`Label All`, `Label Outstanding`), `chkbxZoom`, `btnRun`,
+`btnClear`. Not wired: `optTools` (greyed — the three Carlson command names are
+unknown) and `Label Selected` (refused — `detailsList` is a summary, so there
+is nothing to select from; the modal keeps that job).
+
+The table below is the **2026-07-24 design**, kept for the reasoning. Two rows
+were overtaken by what got built — see the note after it.
 
 Decided 2026-07-24. The tab **replaces the modal run dialogs** (`pf_run`,
 `pfi_run`, `pfxl_run`) for all three label commands — it does not launch them.
@@ -131,6 +162,20 @@ Top to bottom:
 The Status column's data source already exists in every gather-compute
 (pflabel's `[LABELED]` mark, pfinvert's `id-status`, pfxlabel's `recon`) — all
 reads, all modeless-safe.
+
+> **Two rows above were overtaken by the build (2026-07-29).**
+>
+> **Items is a per-target SUMMARY, not an item list.** `detailsList` shows all
+> three passes' counts at once — structures on the line, structure labels
+> "8 labeled, 4 outstanding", invert labels, crossings on record, drift — so
+> the numbers are on screen *before* the radio is touched. An item list for one
+> pass cannot do that. The consequence is `Label Selected`, which had nothing
+> left to select from and is refused.
+>
+> **Options is one checkbox, not a swapping band.** Only `Zoom To` exists.
+> "allow relabeling" is unreachable from the palette: Crossings takes
+> `pfxl:run`'s All branch, which filters already-labeled crossings out rather
+> than offering to duplicate them.
 
 **Prove the deferred fire first.** A modeless handler cannot call `command`,
 so both our verbs and the Carlson buttons must queue the real command into a
@@ -351,13 +396,26 @@ palette wiring (REFACTOR-PLAN).
    ticket, rather than five `SendCommand` targets — it keeps `pfs:place-one` /
    `pfs:edit-one` private and puts the gate, the undo mark and the
    palette-disable in one place.
-4. **Tab 2 (Commands) — the heaviest lift.** First the CAD regression gate on
-   the extracted engines, then ~~prove the deferred fire in isolation~~
-   (**done**), then the headless path, target tree + radio + item list +
-   Status, the checkbox band, the native Carlson row. Options list and Carlson
-   command list TBD (Jake). **Note:** `pfxl:discover` is a writer, so the
-   Crossings gather shows already-merged crossings only and discovery happens
-   on RUN — and §5's write-free delta must be re-run once these gathers land.
+4. ~~**Tab 2 (Commands) — the heaviest lift.**~~ **FIRING IN CAD 2026-07-29.**
+   `*pfp-order*` + `C:PFPRUN` (pfpalette §9): ticket → `pfp:defer` →
+   `pf:run-command` → `pflabel:run`. Structures / `Label All` labelled two
+   structures on `BB`, one undo group, `Status: PASSING`.
+   - **Phase 2 folded into this**, not built separately — one dispatcher
+     (`C:PFPRUN`) rather than three thin `C:PF*RUN`, for the reason Phase 3
+     collapsed five verb commands into `C:PFPVERB`. The `*pf-preset-target*`
+     graft it specified proved **unnecessary**: the dispatcher calls the
+     engines directly and never reaches `pfs:choose-or-place`. That permitted
+     graft stays unspent.
+   - **The gather moved into the dispatcher**, which removed the Crossings
+     special case — `pfxl:discover` is a writer, and in a command context that
+     stops mattering.
+   - **`Label Outstanding` cost no engine edit** — both engines read the same
+     `'sel` key, and `mode` only decides whether the previous pass is erased.
+   - Left: `optTools` (Carlson command names TBD, Jake), `Label Selected`
+     (refused — the summary shape has nothing to select from), and **firing
+     Inverts and Crossings from the palette, neither yet tried.**
+   - **§5's write-free delta must still be re-run** — the Commands tab's
+     gathers were not in the drawing when `PFPDBMOD` last measured.
 5. **Tab 3 (Settings).** `pflabel_settings` contents plus suite-level settings,
    `Apply` / `Reset` local to the tab.
 

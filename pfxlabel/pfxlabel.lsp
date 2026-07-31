@@ -24,13 +24,10 @@
 
 (defun pfxl:nz (s) (if (and s (/= s "")) s))
 
-;; (pfxl:split s d) -> list of substrings split on the string d
-(defun pfxl:split (s d / pos out)
-  (setq out '())
-  (while (setq pos (vl-string-search d s))
-    (setq out (cons (substr s 1 pos) out)
-          s   (substr s (+ pos 1 (strlen d)))))
-  (reverse (cons s out)))
+;; pfxl:split and pfxl:scope-read MOVED to pfanchor 2026-07-30 as pfa:split /
+;; pfa:scope-read, with the discovery scan itself (pfa:xing-scan).  They are
+;; SCOPE-record knowledge, and pfanchor -- four load positions above this file
+;; -- is the reader that now needs them.  No aliases left behind.
 
 ;; (pfxl:src-files type name) -> (inv-pro top-pro material) | nil
 ;;   Anchor first (carries material), then stub (no material).  nz-guarded.
@@ -82,74 +79,56 @@
 ;;; SECTION 3  --  Discovery  (auto; registry-scoped; checksum short-circuit)
 ;;; ==========================================================================
 
-;; (pfxl:scope-read anchor) -> list of (sbase tck sck)
-(defun pfxl:scope-read (anchor / d out s parts)
-  (setq out '())
-  (if (setq d (pfa:scope-get anchor))
-    (foreach s (pfa:collect-300 d)
-      (setq parts (pfxl:split s "|"))
-      (if (= (length parts) 3) (setq out (cons parts out)))))
-  out)
-
 ;; (pfxl:discover anchor) -> nil   (merges into the ledger; rewrites SCOPE)
 ;;   Caller must hold an open undo group.
-(defun pfxl:discover (anchor / xf ty nm tcl tck tverts reg last newscope
-                      nnew nupd nmov r scl sck sbase triple sverts xy tsta ssta
-                      xy2 tsta2 ssta2 st)
-  (setq xf  (pfa:anchor->xform anchor)
-        ty  (strcase (pf:xf-get 'type xf))
-        nm  (strcase (pf:xf-get 'name xf))
-        tcl (pfxl:nz (cdr (assoc 1 (pfa:meta-get anchor)))))
+;;
+;;   THE FILING HALF ONLY, since 2026-07-30.  The scan it used to carry moved
+;;   to pfa:xing-scan so the palette could run the SAME find read-only and show
+;;   crossings before this command has ever been run against a line -- see that
+;;   function's header for why it lives in pfanchor.  What is left here is the
+;;   part that genuinely writes: merge each hit, rewrite SCOPE, report.
+;;
+;;   IT STILL PASSES write-p T.  Inside the undo group the GEOM cache filing is
+;;   wanted, and it is what makes the NEXT read-only preview cheap -- the two
+;;   callers are not competing, they are feeding each other.
+;;
+;;   The scan's own short-circuit means `found` holds only pairs whose .cl
+;;   changed since the last run; the counters therefore report movement, not
+;;   the size of the line set, exactly as before.
+(defun pfxl:discover (anchor / res found newscope skips nnew nupd nmov f st sk)
   (prompt "\nChecking for crossings...")
-  (cond
-    ((null tcl)
-     (prompt "\nTarget has no .cl on record -- discovery skipped."))
-    ((null (setq tverts (cdr (pf:cl-geom tcl T))))   ; in-group: filing allowed
-     (prompt "\nCould not read target .cl geometry -- discovery skipped."))
-    (T
-     (setq tck      (pf:checksum-file tcl)
-           reg      (pfa:registry)
-           last     (pfxl:scope-read anchor)
-           newscope '() nnew 0 nupd 0 nmov 0)
-     (foreach r reg
-       (if (not (and (= (strcase (car r)) ty) (= (strcase (cadr r)) nm)))
-         (if (setq scl (pfa:entry-cl r))
-           (progn
-             (setq sck    (pf:checksum-file scl)
-                   sbase  (vl-filename-base scl)
-                   triple (car (vl-member-if
-                                 '(lambda (x) (= (car x) sbase)) last)))
-             ;; record current state for the next scan regardless
-             (setq newscope (cons (strcat sbase "|" tck "|" sck) newscope))
-             ;; short-circuit: both .cl unchanged since last scan
-             (if (not (and triple (= (cadr triple) tck) (= (caddr triple) sck)))
-               (if (setq sverts (cdr (pf:cl-geom scl T)))  ; in-group: filing allowed
-                 (if (setq xy (pf:poly-x tverts sverts))
-                   (progn
-                     (setq tsta (pf:sta-at tcl xy)
-                           ssta (pf:sta-at scl xy))
-                     (if (and tsta ssta
-                              (setq xy2 (pf:refine-x tcl tsta scl ssta)))
-                       (progn
-                         (setq tsta2 (pf:sta-at tcl xy2)
-                               ssta2 (pf:sta-at scl xy2))
-                         (if (and tsta2 ssta2)
-                           (setq xy xy2 tsta tsta2 ssta ssta2))))
-                     (if (and tsta ssta)
-                       (progn
-                         (setq st (pfa:xing-merge anchor
-                                    (list nil tcl (vl-filename-base tcl)
-                                          scl sbase (list (car xy) (cadr xy))
-                                          tsta ssta nil nil)))
-                         (cond ((eq st 'NEW)   (setq nnew (1+ nnew)))
-                               ((eq st 'MOVED) (setq nmov (1+ nmov)))
-                               (T              (setq nupd (1+ nupd))))))))))))))
-     (pfa:scope-put anchor (reverse newscope))
-     ;; report only when the scan actually changed something -- a bare
-     ;; "0 new, 0 updated, 0 moved" reads like nothing was labeled
-     (if (> (+ nnew nupd nmov) 0)
-       (prompt (strcat "\nDiscovery: " (itoa nnew) " new, " (itoa nupd)
-                       " updated, " (itoa nmov) " moved.")))))
+  (if (null (setq res (pfa:xing-scan anchor T)))
+    (prompt (strcat "\nTarget has no readable .cl on record"
+                    " -- discovery skipped."))
+    (progn
+      (setq found    (car res)
+            newscope (cadr res)
+            skips    (caddr res)
+            nnew 0 nupd 0 nmov 0)
+      (foreach f found
+        ;; Re-merged rather than trusting the scan's classification: merge is
+        ;; the writer and owns the final say, and between the scan and here it
+        ;; is the only thing that has touched the ledger.  Same call, same
+        ;; classifier underneath (pfa:xing-classify), so the two cannot
+        ;; disagree -- this just keeps the write path authoritative.
+        (setq st (pfa:xing-merge anchor (car f)))
+        (cond ((eq st 'NEW)   (setq nnew (1+ nnew)))
+              ((eq st 'MOVED) (setq nmov (1+ nmov)))
+              (T              (setq nupd (1+ nupd)))))
+      (pfa:scope-put anchor newscope)
+      ;; report only when the scan actually changed something -- a bare
+      ;; "0 new, 0 updated, 0 moved" reads like nothing was labeled
+      (if (> (+ nnew nupd nmov) 0)
+        (prompt (strcat "\nDiscovery: " (itoa nnew) " new, " (itoa nupd)
+                        " updated, " (itoa nmov) " moved.")))
+      ;; NAMED, one line each, and unconditionally -- a skipped tie-in is the
+      ;; one case where the operator has to be able to tell "not a crossing"
+      ;; from "missed a crossing", and the tolerance that decides it is a
+      ;; config value (*pfx-terminus-tol*) they may need to argue with.
+      (foreach sk skips
+        (prompt (strcat "\n  Shared structure, not a crossing: " (car sk)
+                        " at " (pf:fmt-station (cadr sk))
+                        " (source " (pf:fmt-station (caddr sk)) ") -- skipped.")))))
   (princ))
 
 

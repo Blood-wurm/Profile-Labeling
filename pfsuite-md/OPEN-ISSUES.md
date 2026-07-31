@@ -249,6 +249,39 @@ hand-entered or hardcoded values.
   open question left: **one sheet per project, or many sheets sharing one data
   folder?** If many, build the sidecar; if one, the in-DWG NOD cache is already
   right. *(TESTING.md storage-location discussion)*
+- **[decided — do not re-open] A crossing is written to the OWNING anchor's
+  record, and only that one.** Each anchor's ledger holds `X_*` records for the
+  crossings on *its* line, keyed by source basename. The same physical
+  intersection therefore appears in both lines' ledgers, from each line's own
+  point of view.
+  - **This is deliberate, not duplication to be normalised away.** Re-raised
+    2026-07-30 as "one fact stored twice, move it to a NOD store keyed by `.cl`
+    pair, like `GEOM_*`" — **rejected, as it had been before.** The anchor
+    hard-owns its record: that is what makes `PFREMOVE` a clean teardown (the
+    ledger dies with the entity that carries it), what keeps one line's data
+    from outliving the line, and what stops a registration having to write into
+    every other anchor's record. A shared store trades all three for a
+    deduplication nobody needs.
+  - The two views are also **not** identical rows: each stores the crossing
+    from its own side — its own station as target, the other's as source, and
+    the elevations in the matching order. Neither is derivable from the other
+    without knowing both `.pro` bindings.
+- **[idea] Reciprocal continuity check across anchors' `X_` records.** Because
+  each anchor records its own view, the two views of one crossing are a natural
+  cross-check: if line A's ledger says it crosses B, then B's ledger — where B
+  is itself anchored — should carry the reciprocal, at the same `(x y)` and
+  with the elevations swapped (A's target elevation is B's source elevation).
+  - **What a mismatch catches**, none of which any single-anchor read can see:
+    one side discovered before a `.cl` changed and never re-run; a stale `.pro`
+    binding on one side only; a crossing recorded on one line and missing
+    entirely on the other.
+  - **Home: `PFCHECK`** (announced in the loader banner, not yet built). It is
+    a whole-drawing consistency question, which is exactly that command's job,
+    and it wants no new storage — both halves are already on record.
+  - Note the live scan (`pfa:xing-find`, 2026-07-30) does **not** cover this:
+    it recomputes geometry for one target, so it would find a missing
+    reciprocal only as a `NEW` row on the other line, and it says nothing about
+    elevations at all.
 - ~~**[question] PVI probe.**~~ **RESOLVED 2026-07-22.** The Road API exposes
   **no** vertex accessor — the only profile calls are `profile z` and `profile
   sta range` (confirmed against the live `cf:road_api` catalog). `pfi:invert-
@@ -290,12 +323,55 @@ Only unresolved items are listed here.
     far have not cleared it.
   - **Real cost beyond the noise:** the second dispatch re-runs the fill. On
     the Commands tab that is a second `pfa:target-counts` per click, with its
-    file I/O and Road API calls. An idempotence guard (return early when
-    `Key` matches the row already showing) would halve the work while leaving
-    the cancels — **designed, deliberately not built**, because it guards a
-    condition that should not exist.
+    file I/O and Road API calls. ~~An idempotence guard … **designed,
+    deliberately not built**, because it guards a condition that should not
+    exist.~~ **BUILT 2026-07-30** (`*pfp-last-key*` / `pfp:route-sel`). The
+    workload changed the answer: the Commands fill now also reaches
+    `pfa:xing-scan`, which on a target with no SCOPE cuts every registry line
+    against the target (`pf:poly-x`, O(n × m) per pair). Paying that twice per
+    click is a different order of waste from an extra `*Cancel*`. **The cancels
+    themselves are unaffected** — still one per dispatch, still not fixable
+    from LISP; only the duplicated *work* is gone.
   - `pfp:route-sel` routes on **which map owns the key**, never on which
     handler fired, so it stays correct however this resolves.
+- ~~**`lvwCommand` is not a List View**~~ **RESOLVED 2026-07-30 same day** — it
+  *was* a **List Box**, and was then **rebuilt in Studio as a real List View**
+  under the same `(Name)` later that day, because padded-string columns could
+  not be made to line up: `pfset:pad` pads but never **truncates**, so any item
+  over 20 characters staggers the row in *any* font, and `pfp:skin` paints the
+  proportional "MS Shell Dlg" over everything. `*pfp-items-mode*` is
+  `'listview`. **New and narrower open item: no List View getter is attested
+  anywhere in this suite**, so the `Label Selected` read-back that
+  `dcl-ListBox-GetCurSel` / `GetText` would have provided is unproven — settle
+  it with `C:PFPAPI *LIST*`, which calls nothing, before assuming one exists.
+  Recorded because the diagnosis is reusable:
+  - Four uncatchable modals on one open, `Invalid argument type / Argument: 0`,
+    once on `dcl-ListView-AddColumns` and three times on
+    `dcl-ListView-FillList`. **Argument 0 is the control and the complaint is
+    its type** — the name resolved, so every `null` guard passed.
+  - **Wrong name and wrong type are opposite failures.** Wrong name → symbol
+    `nil` → silent no-op, guardable. Wrong type → symbol bound → modal, and it
+    **aborts the caller** (`OnInitialize` died). No guard exists or can:
+    asking a control its type needs a type-specific call, which is the fault.
+  - **`AddColumns` was last in `OnInitialize`**, so the other three lists kept
+    their columns. Keep the least-certain control last there.
+  - Still open, and narrower: **enumerating several selected rows.**
+    `GetCurSel` is singular and the `SelChanged` event reports only a count on
+    a multi-select list. This is what gates `Label Selected`. `C:PFPAPI *LIST*`
+    is the safe way to look for a sibling that returns a set.
+  - **Re-read the `SelChanged` argument list in Studio after the conversion.**
+    `(ItemIndexOrCount Value)` was measured off the **List Box**'s Events
+    panel, and that panel is per control *type*. A wrong argument list is as
+    silent as an unticked event.
+- **`optTools`' `SelChanged` is not ticked in Studio** (PALETTE-LAYOUT §7 has
+  carried it as an action since 2026-07-30). Symptom, and it does not look like
+  the cause: clicking a Tools item and pressing RUN answers `PFPALETTE: select
+  a line first.` That string is printed only by `pfp:need-row`, called only by
+  `pfp:order-fire`, reached only when `*pfp-active-group*` is not `TOOLS` — so
+  the message is proof `optTools#OnSelChanged` never fired, and it reads as a
+  fault in PFPROINV/PFPROTOP instead. `pfp:order-fire` now names the armed
+  group when it refuses. **Fix is one tick plus `PFPRELOAD`**; `C:PFPCTL`
+  confirms whether `optTools` has ever reported.
 - **The five pick buttons do not exist on the current `.odcl`.** Open prints
   `control is nil -- btnPickCL / INV / TOP / DESIGN / EXIST` (2026-07-29),
   five lines every time, because `*pfp-controls*` and PALETTE-LAYOUT §5 still

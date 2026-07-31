@@ -90,8 +90,8 @@
 (defun pfpro:pick (role / sel done res)
   (setq done nil res nil)
   (while (not done)
-    (setq sel (entsel (strcat "\nPick the polyline drawing the " role
-                              " profile (Enter to cancel): ")))
+    (setq sel (entsel (strcat "\nSelect polyline to write " role
+                              " profile from: (Enter to cancel): ")))
     (if (null sel)
       (setq done T)
       (setq res (car sel) done T)))

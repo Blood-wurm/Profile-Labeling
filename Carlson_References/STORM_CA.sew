@@ -1,0 +1,126 @@
+<SewerSettings NetworkType="0" Unit="0">
+    <HydraulicCalc HydroMethod="0" ComputationMethod="0"/>
+    <Libraries/>
+</SewerSettings>
+
+<SewerNetwork Debug="7" Program="Carlson Software 2025">
+    <SewerStructures>
+        <SewerStructure Name="CA-1" SewerNodeID="CSMH0" System="CA" Desc="HEADWALL" Line="CA-1" Type="0" Length="0" Width="0">
+            <Center X="1803996.9902592835" Y="833781.31239947735" Z="743"/>
+            <Elevation Base="-4.5399999999999965" Rim="745.25" RimRaisedHeight="0" JunctionDrop="0" Sump="0" Underdrain="0" RiserNumber="0"/>
+            <Symbol symbol2D="" symbol3D="" symbolProfileFrontView="" symbolProfileSideView="" RotateType="0" SizeType="1" AzimuthAngle="0" SkewAngle="90"/>
+            <JunctionLoss Method="3" Coefficient="0"/>
+            <OutfallTailwater Elevation="0"/>
+            <DrainageData Type="0" Area="0" CatchmentFlow="0" Tc="0" ActualTc="0" Cf="0" ScsCN="0" ScsSwampFactor="0"/>
+            <Pavement LonSlope="0.01" CrossSlope="0.02" ManningsN="0.012999999999999999" InletProfile="1"/>
+            <ReferenceCLFile Name="$PROJECTPATH\02_ProjectData\Alignments\Storm_CA.cl"/>
+            <ReferenceLocation Station="140.00000000055678" Elevation="743" Offset="-40.00000000001274"/>
+            <SwrStruct ID="Outfall-Funnel" Desc="" Type="0">
+                <Funnel Length="4" InWidth="2" OutWidth="3"/>
+            </SwrStruct>
+        </SewerStructure>
+        <SewerStructure Name="CA-2" SewerNodeID="CSMH1" System="CA" Desc="" Line="" Type="2" Length="0" Width="4">
+            <Center X="1803977.4759800693" Y="833746.39545650186" Z="746.90924561414283"/>
+            <Elevation Base="-4.49999999999996" Rim="746.90924561414283" RimRaisedHeight="0" JunctionDrop="0" Sump="0" Underdrain="0" RiserNumber="0"/>
+            <Symbol symbol2D="INLET3" symbol3D="" symbolProfileFrontView="" symbolProfileSideView="" RotateType="0" SizeType="1" AzimuthAngle="0" SkewAngle="90"/>
+            <JunctionLoss Method="3" Coefficient="0"/>
+            <OutfallTailwater Elevation="0"/>
+            <DrainageData Type="0" Area="0" CatchmentFlow="0" Tc="0" ActualTc="0" Cf="0.5" ScsCN="50" ScsSwampFactor="1"/>
+            <Pavement LonSlope="0.01" CrossSlope="0.02" ManningsN="0.012999999999999999" InletProfile="1"/>
+            <ReferenceLocation Station="0" Elevation="746.90924561414283" Offset="0"/>
+            <HydroInlet ID="Combo-Grade" Desc="" Type="3" ProfileType="1" Symbol="INLET3" Unit="0" InletBottomDepth="0">
+                <Gutter Depression="0" Slope="0" Width="3" LocalDepression="0" useSlope="false"/>
+                <Grate Type="0" Length="3" Width="2" CloggingRatio="0" OpeningRatio="1" WeirCoeff="3" OrificeCoeff="0.67000000000000004" SplashVelocity="1" isCircularGrate="false"/>
+                <Curb ThroatType="0" Length="3" OpeningHeight="0" InclinedAngle="0" WeirCoeff="2.2999999999999998" OrificeCoeff="0.67000000000000004"/>
+            </HydroInlet>
+            <SwrStruct ID="MH1" Desc="" Type="2">
+                <Manhole TaperFormat="0" BottomDia="4" TopDia="4" TaperOffset="0" FixedTaperHeight="0" Thick="8"/>
+            </SwrStruct>
+        </SewerStructure>
+        <SewerStructure Name="CA-3" SewerNodeID="CSMH2" System="CA" Desc="" Line="" Type="2" Length="0" Width="4">
+            <Center X="1804214.4633527873" Y="833613.9486450915" Z="754.34978364259973"/>
+            <Elevation Base="-4.228513034050251" Rim="754.34978364259973" RimRaisedHeight="0" JunctionDrop="0" Sump="0" Underdrain="0" RiserNumber="0"/>
+            <Symbol symbol2D="INLET3" symbol3D="" symbolProfileFrontView="" symbolProfileSideView="" RotateType="0" SizeType="1" AzimuthAngle="0" SkewAngle="90"/>
+            <JunctionLoss Method="3" Coefficient="0"/>
+            <Bypass ID="CSMH1"/>
+            <OutfallTailwater Elevation="0"/>
+            <DrainageData Type="0" Area="0" CatchmentFlow="0" Tc="0" ActualTc="0" Cf="0.5" ScsCN="50" ScsSwampFactor="1"/>
+            <Pavement LonSlope="0.01" CrossSlope="0.02" ManningsN="0.012999999999999999" InletProfile="1"/>
+            <ReferenceLocation Station="0" Elevation="754.34978364259973" Offset="0"/>
+            <HydroInlet ID="Combo-Grade" Desc="" Type="3" ProfileType="1" Symbol="INLET3" Unit="0" InletBottomDepth="0">
+                <Gutter Depression="0" Slope="0" Width="3" LocalDepression="0" useSlope="false"/>
+                <Grate Type="0" Length="3" Width="2" CloggingRatio="0" OpeningRatio="1" WeirCoeff="3" OrificeCoeff="0.67000000000000004" SplashVelocity="1" isCircularGrate="false"/>
+                <Curb ThroatType="0" Length="3" OpeningHeight="0" InclinedAngle="0" WeirCoeff="2.2999999999999998" OrificeCoeff="0.67000000000000004"/>
+            </HydroInlet>
+            <SwrStruct ID="MH1" Desc="" Type="2">
+                <Manhole TaperFormat="0" BottomDia="4" TopDia="4" TaperOffset="0" FixedTaperHeight="0" Thick="8"/>
+            </SwrStruct>
+        </SewerStructure>
+        <SewerStructure Name="CA-4" SewerNodeID="CSMH3" System="CA" Desc="" Line="" Type="2" Length="0" Width="4">
+            <Center X="1804222.9669067392" Y="833583.89807450783" Z="754.7786752962819"/>
+            <Elevation Base="-4.1972824845479408" Rim="754.7786752962819" RimRaisedHeight="0" JunctionDrop="0" Sump="0" Underdrain="0" RiserNumber="0"/>
+            <Symbol symbol2D="INLET3" symbol3D="" symbolProfileFrontView="" symbolProfileSideView="" RotateType="0" SizeType="1" AzimuthAngle="0" SkewAngle="90"/>
+            <JunctionLoss Method="3" Coefficient="0"/>
+            <Bypass ID="CSMH2"/>
+            <OutfallTailwater Elevation="0"/>
+            <DrainageData Type="0" Area="0" CatchmentFlow="0" Tc="0" ActualTc="0" Cf="0.5" ScsCN="50" ScsSwampFactor="1"/>
+            <Pavement LonSlope="0.01" CrossSlope="0.02" ManningsN="0.012999999999999999" InletProfile="1"/>
+            <ReferenceLocation Station="0" Elevation="754.7786752962819" Offset="0"/>
+            <HydroInlet ID="Combo-Grade" Desc="" Type="3" ProfileType="1" Symbol="INLET3" Unit="0" InletBottomDepth="0">
+                <Gutter Depression="0" Slope="0" Width="3" LocalDepression="0" useSlope="false"/>
+                <Grate Type="0" Length="3" Width="2" CloggingRatio="0" OpeningRatio="1" WeirCoeff="3" OrificeCoeff="0.67000000000000004" SplashVelocity="1" isCircularGrate="false"/>
+                <Curb ThroatType="0" Length="3" OpeningHeight="0" InclinedAngle="0" WeirCoeff="2.2999999999999998" OrificeCoeff="0.67000000000000004"/>
+            </HydroInlet>
+            <SwrStruct ID="MH1" Desc="" Type="2">
+                <Manhole TaperFormat="0" BottomDia="4" TopDia="4" TaperOffset="0" FixedTaperHeight="0" Thick="8"/>
+            </SwrStruct>
+        </SewerStructure>
+        <SewerStructure Name="CA-5" SewerNodeID="CSMH4" System="CA" Desc="" Line="" Type="2" Length="0" Width="4">
+            <Center X="1804126.7212695528" Y="833411.68554293131" Z="0"/>
+            <Elevation Base="-4" Rim="0" RimRaisedHeight="0" JunctionDrop="0" Sump="0" Underdrain="0" RiserNumber="0"/>
+            <Symbol symbol2D="INLET3" symbol3D="" symbolProfileFrontView="" symbolProfileSideView="" RotateType="0" SizeType="1" AzimuthAngle="0" SkewAngle="90"/>
+            <JunctionLoss Method="3" Coefficient="0"/>
+            <Bypass ID="0"/>
+            <OutfallTailwater Elevation="0"/>
+            <DrainageData Type="0" Area="0" CatchmentFlow="0" Tc="0" ActualTc="0" Cf="0.5" ScsCN="50" ScsSwampFactor="1"/>
+            <Pavement LonSlope="0.01" CrossSlope="0.02" ManningsN="0.012999999999999999" InletProfile="1"/>
+            <HydroInlet ID="Combo-Grade" Desc="" Type="3" ProfileType="1" Symbol="INLET3" Unit="0" InletBottomDepth="0">
+                <Gutter Depression="0" Slope="0" Width="3" LocalDepression="0" useSlope="false"/>
+                <Grate Type="0" Length="3" Width="2" CloggingRatio="0" OpeningRatio="1" WeirCoeff="3" OrificeCoeff="0.67000000000000004" SplashVelocity="1" isCircularGrate="false"/>
+                <Curb ThroatType="0" Length="3" OpeningHeight="0" InclinedAngle="0" WeirCoeff="2.2999999999999998" OrificeCoeff="0.67000000000000004"/>
+            </HydroInlet>
+            <SwrStruct ID="MH1" Desc="" Type="2">
+                <Manhole TaperFormat="0" BottomDia="4" TopDia="4" TaperOffset="0" FixedTaperHeight="0" Thick="8"/>
+            </SwrStruct>
+        </SewerStructure>
+    </SewerStructures>
+    <SewerPipes>
+        <SewerPipe Name="CA-1" Desc="" DownstreamStructureID="CSMH0" UpstreamStructureID="CSMH1">
+            <Pipe Shape="0" Material="PVC" Rise="12" Width="0" Thickness="1" ManningsValue="0.012999999999999999" BarrelNum="1"/>
+            <Elevation Downstream="-4.5399999999999965" Upstream="-4.49999999999996"/>
+            <PipeResults Flow="0" MaxFlow="0" TravelTime="0" MaxCover="750.95688284127004" DownstreamHGL="0" UpstreamHGL="0" DownstreamEGL="0" UpstreamEGL="0" DownstreamV="0" UpstreamV="0" CriticalFlowDepth="0" NormalFlowDepth="0" InitialV="0"/>
+        </SewerPipe>
+        <SewerPipe Name="CA-2" Desc="" DownstreamStructureID="CSMH1" UpstreamStructureID="CSMH2">
+            <Pipe Shape="0" Material="PVC" Rise="12" Width="0" Thickness="1" ManningsValue="0.012999999999999999" BarrelNum="1"/>
+            <Elevation Downstream="-4.49999999999996" Upstream="-4.228513034050251"/>
+            <PipeResults Flow="0" MaxFlow="0" TravelTime="0" MaxCover="0" DownstreamHGL="0" UpstreamHGL="0" DownstreamEGL="0" UpstreamEGL="0" DownstreamV="0" UpstreamV="0" CriticalFlowDepth="0" NormalFlowDepth="0" InitialV="0"/>
+        </SewerPipe>
+        <SewerPipe Name="CA-3" Desc="" DownstreamStructureID="CSMH2" UpstreamStructureID="CSMH3">
+            <Pipe Shape="0" Material="PVC" Rise="12" Width="0" Thickness="1" ManningsValue="0.012999999999999999" BarrelNum="1"/>
+            <Elevation Downstream="-4.228513034050251" Upstream="-4.1972824845479408"/>
+            <PipeResults Flow="0" MaxFlow="0" TravelTime="0" MaxCover="0" DownstreamHGL="0" UpstreamHGL="0" DownstreamEGL="0" UpstreamEGL="0" DownstreamV="0" UpstreamV="0" CriticalFlowDepth="0" NormalFlowDepth="0" InitialV="0"/>
+        </SewerPipe>
+        <SewerPipe Name="CA-4" Desc="" DownstreamStructureID="CSMH3" UpstreamStructureID="CSMH4">
+            <Pipe Shape="0" Material="PVC" Rise="12" Width="0" Thickness="1" ManningsValue="0.012999999999999999" BarrelNum="1"/>
+            <Elevation Downstream="-4.1972824845479408" Upstream="-4"/>
+            <PipeResults Flow="0" MaxFlow="0" TravelTime="0" MaxCover="0" DownstreamHGL="0" UpstreamHGL="0" DownstreamEGL="0" UpstreamEGL="0" DownstreamV="0" UpstreamV="0" CriticalFlowDepth="0" NormalFlowDepth="0" InitialV="0"/>
+        </SewerPipe>
+    </SewerPipes>
+</SewerNetwork>
+
+<Graph>
+    <LINE X_From="1803996.9902592835" Y_From="833781.31239947735" X_To="1803977.4759800693" Y_To="833746.39545650186"/>
+    <LINE X_From="1803977.4759800693" Y_From="833746.39545650186" X_To="1804214.4633527873" Y_To="833613.9486450915"/>
+    <LINE X_From="1804214.4633527873" Y_From="833613.9486450915" X_To="1804222.9669067392" Y_To="833583.89807450783"/>
+    <LINE X_From="1804222.9669067392" Y_From="833583.89807450783" X_To="1804126.7212695528" Y_To="833411.68554293131"/>
+</Graph>

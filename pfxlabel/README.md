@@ -20,6 +20,15 @@ Dialog: `pfxl_run`.
   profile's .cl (anchors AND stubs, via `pfa:entry-cl`). Per source pair a
   SCOPE checksum short-circuit skips unchanged pairs. Merges are additive
   (elevations preserved, never destructive).
+- **Shared structures are NOT crossings.** An intersection at a terminus of
+  either .cl — a junction manhole, or a branch tying into a main — is rejected
+  by `pf:shared-structure-p` inside `pfa:xing-scan` and never filed.
+  `pfxl:discover` names each rejection on the command line
+  (`Shared structure, not a crossing: <line> at <sta> …`) so it reads as a
+  decision rather than a miss. Tolerance: `*pfx-terminus-tol*` (2.0 ft).
+  **The filter is forward-only** — it stops new false records; crossings
+  already on a ledger from before it landed keep drawing until removed by
+  hand. Deliberate, per Jake 2026-07-30: no purge pass.
 - **Completeness:** a crossing is "labeled" when its station line stands
   on the target grid at the per-station top (`pf:top-at`) — recon in
   pfanchor SECTION 5. Label Outstanding draws every unlabeled row; Label
@@ -56,7 +65,28 @@ Dialog: `pfxl_run`.
 Internal: `pfxl:discover` (**writer**: merges crossings + rewrites SCOPE,
 in-group; `pf:cl-geom` with write-p T files GEOM here), `pfxl:resolve-target`
 (session-sticky `*pfxl-last*`), `pfxl:run-dialog`, `pfxl:zoom-to`,
-`pfxl:scope-read`, `pfxl:split`, `pfxl:nz`, `pfxl:handle-of`.
+`pfxl:nz`, `pfxl:handle-of`.
+
+### `pfxl:discover` is the filing half only — 2026-07-30
+
+The **scan** moved to `pfa:xing-scan` in pfanchor; what stays here is merging
+each hit, rewriting SCOPE, and reporting. Finding a crossing never needed a
+write — it is `.cl` geometry through `pf:poly-x`, and `pf:cl-geom`'s `write-p`
+is the documented read/write seam — but because the two jobs shared one
+function, the palette could only ever show crossings a previous `PFXLABEL` had
+already filed. It now runs the **same** scan read-only, so a preview cannot
+disagree with what this command then does.
+
+It still passes `write-p` **T**: inside the undo group the GEOM filing is
+wanted, and it is what makes the next read-only preview cheap.
+
+The SCOPE string splitter and reader moved with it and now live in pfanchor as
+`pfa:split` / `pfa:scope-read` — SCOPE-record knowledge, and pfanchor is four
+load positions above this file, so a reader there could never have called
+upward. No aliases left behind, and **the old names are deliberately not
+written here in code font**: everything in a Public API section is checked
+against a real `defun` by `pf-verify`, so naming a deleted symbol makes it a
+drift note forever.
 
 ## Invariants
 

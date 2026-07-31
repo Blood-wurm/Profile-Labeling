@@ -18,8 +18,10 @@ discover it was the wrong shape.
 - **`pf-find`** — where a symbol is, what calls it, show one defun, a module's
   public API. `bash .claude/skills/pf-find/pf.sh find|show|refs|api|outline`
 - **`pf-change`** — prefix→module map, load-order guardrail, the write-free
-  palette contract, and which of the fifteen .md files answers a question.
-  Read before editing anything or opening a project doc.
+  palette contract, and which of the sixteen .md files answers a question.
+  Read before editing anything or opening a project doc. Wiring an OpenDCL
+  control is its own reference (`pfsuite-odcl/OPENDCL-WIRING.md`) — read that
+  before touching a handler; none of it is inferable from the code.
 - **`pf-verify`** — `bash .claude/skills/pf-verify/pfcheck.sh` runs the static
   gates (parens, dupes, undefined calls, load order, dead code, API drift) in
   ~6s. Run it after every .lsp edit; it also lists the CAD gates only Jake can

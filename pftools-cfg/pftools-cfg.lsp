@@ -198,6 +198,16 @@
 (setq *pfx-sample-step* 2.0)   ; ft -- .cl walk interval (arcs followed)
 (setq *pfx-refine-step* 0.1)   ; ft -- re-sample interval near a hit
 
+;; Terminus band, EITHER alignment -- a hit this close to a .cl's first or last
+;; station is two lines meeting at a SHARED STRUCTURE (junction manhole, or a
+;; branch tying into a main mid-run), not a pipe crossing over or under one.
+;; `inters` cannot tell the difference: touching endpoints lie on both segments,
+;; so a junction files exactly like a crossing.  Widen this if two .cl files
+;; that meet at a structure stop further apart than a manhole radius; narrow it
+;; if a genuine crossing near a line end is being skipped (discovery names its
+;; skips, so that case reports rather than vanishing).
+(setq *pfx-terminus-tol* 2.0)  ; ft -- see pf:shared-structure-p
+
 ;; Corridor pre-filter distance for a SAMPLED .cl shape (pflabel:build-lines'
 ;; last-resort verts).  A station walk lands ON the centerline, but the chords
 ;; BETWEEN samples cut corners at deflections: with the PI up to one step from

@@ -928,6 +928,29 @@
 
 (defun pfa:scope-get (anchor) (pfa:rec-get anchor "SCOPE"))
 
+;; (pfa:split s d) -> list of substrings split on the string d
+(defun pfa:split (s d / pos out)
+  (setq out '())
+  (while (setq pos (vl-string-search d s))
+    (setq out (cons (substr s 1 pos) out)
+          s   (substr s (+ pos 1 (strlen d)))))
+  (reverse (cons s out)))
+
+;; (pfa:scope-read anchor) -> list of (sbase target-cksum source-cksum)
+;;   THE last discovery scan's checksum record, one entry per source line.
+;;   Moved down from pfxlabel 2026-07-30 with pfxl:split, for the reason
+;;   pfa:entry-cl was moved: it is pure record knowledge, and pfa:xing-scan --
+;;   which pfanchor owns and pfxlabel calls -- needs it. A file may only depend
+;;   on files above it, so a reader at load position 4 cannot reach position 9.
+;;   Pure read.
+(defun pfa:scope-read (anchor / d out s parts)
+  (setq out '())
+  (if (setq d (pfa:scope-get anchor))
+    (foreach s (pfa:collect-300 d)
+      (setq parts (pfa:split s "|"))
+      (if (= (length parts) 3) (setq out (cons parts out)))))
+  out)
+
 (defun pfa:scope-put (anchor files / data f)
   (setq data (list (cons 1 (pf:timestamp))))
   (foreach f files
@@ -1523,6 +1546,81 @@
   (foreach v lst (if v (setq n (1+ n))))
   n)
 
+;; (pfa:target-items anchor pass) -> (T . ((item station labeled-p) ...)) | nil
+;;   pass = "LABEL" | "INVERT" | "XING"
+;;
+;;   THE ITEM-LEVEL TWIN of pfa:target-counts, for the palette's lvwCommand
+;;   (pfpalette SECTION 5c).  Counts answer "how much is on this line"; this
+;;   answers "which things, and where" -- the same question the modal run
+;;   dialog's list answers (pflabel:rd-fill), minus the dialog.
+;;
+;;   ONE SHAPE FOR ALL THREE PASSES, because the control showing it has one
+;;   set of columns: AddColumns is additive and runs once at OnInitialize, so
+;;   it cannot be re-shaped per radio click.  A structure's item is its block
+;;   name, a crossing's is the line that crosses; both have a station on the
+;;   target and a labeled-yet flag, and that is the whole of what the list
+;;   renders.  Elevations (pfa:xr-telev / -selev) are deliberately not here --
+;;   there is no column for them at the 420px form width.
+;;
+;;   (T . rows) AND NOT rows.  nil and '() are the same object in AutoLISP, so
+;;   a bare list cannot distinguish "no .cl bound / grid unreadable" from "read
+;;   fine, nothing on this line" -- and those need different words on screen.
+;;   Same reasoning, same idiom as pfa:memb-get.
+;;
+;;   Pure reads throughout -- legal from a modeless handler.  Structures and
+;;   Inverts share pfa:pend-for's memo with target-counts, so the second call
+;;   in one click is a memo hit, not a second inlets x lines walk.
+;;
+;;   CROSSINGS ARE WHAT IS ON RECORD, not what exists.  pfxl:discover is a
+;;   writer, so nothing reachable from a palette read can find an undiscovered
+;;   crossing; a line that has never had PFXLABEL run answers with an empty
+;;   list.  The caller has to say "on record" and not "found" -- detailsList
+;;   already does (pfpalette:492).
+(defun pfa:target-items (anchor pass / lt primary lines inlets pend xf st
+                                       res out i e)
+  (setq xf (pfa:anchor->xform anchor))
+  (cond
+    ((null xf) nil)
+    ((= pass "XING")
+     ;; LIVE, not ledger-only (2026-07-30).  pfa:xing-find merges what is on
+     ;; record with what pfa:xing-scan finds on the ground, so a line that has
+     ;; never had PFXLABEL run still lists its crossings -- marked 'NEW.
+     (if (setq res (pfa:xing-find anchor))
+       (progn
+         (setq out '())
+         (foreach e (cdr res)
+           (setq out (cons (list (pfa:xr-sbase (car e))
+                                 (pfa:xr-tsta  (car e))
+                                 (cadr e))
+                           out)))
+         (cons T (reverse out)))))
+    ((null (setq lt (pfa:line-table anchor))) nil)
+    (T
+     (setq primary (car lt)
+           lines   (cadr lt))
+     (if (not (pfa:line-loaded-p primary lines))
+       nil
+       (progn
+         (setq inlets (pfa:gather-inlets)
+               pend   (pfa:pend-for primary lines inlets)
+               ;; car: status-for returns (status orphans); the orphan half is
+               ;; the Drift row's business, and detailsList already renders it.
+               st     (car (pfa:status-for anchor pass pend xf))
+               out    '()
+               i      0)
+         ;; pend entries are (sta ename blkname); status is a list of booleans
+         ;; PARALLEL to pend, not an alist, so the two are walked by index.
+         ;; The boolean becomes a SYMBOL here so every pass reports state the
+         ;; same way -- Crossings has four states ('NEW / 'MOVED as well), and
+         ;; a renderer switching on `pass` to interpret a bare T was the shape
+         ;; that made adding them awkward.
+         (foreach e pend
+           (setq out (cons (list (caddr e) (car e)
+                                 (if (nth i st) 'LABELED 'OUTSTANDING))
+                           out)
+                 i   (1+ i)))
+         (cons T (reverse out)))))))
+
 
 ;;; ==========================================================================
 ;;; SECTION 5  --  Crossing records + reconciliation  (unchanged from v3)
@@ -1550,20 +1648,27 @@
                             out)))))
       (vl-sort out '(lambda (a b) (< (pfa:xr-tsta a) (pfa:xr-tsta b)))))))
 
-;; (pfa:xing-merge anchor e) -> 'NEW | 'UPDATED | 'MOVED
-;;   Elevations already on record are PRESERVED; key drift renames.
-(defun pfa:xing-merge (anchor e / dict key d old-t old-s kdrift k status data)
-  (setq dict   (pfa:ledger-dict anchor T)
-        key    (pfa:xing-key (pfa:xr-sbase e) (pfa:xr-tsta e))
-        status 'NEW
-        old-t  nil
-        old-s  nil)
+;; (pfa:xing-classify dict e) -> (status existing-key | nil)
+;;   status = 'NEW | 'UPDATED | 'MOVED
+;;
+;;   SPLIT OUT OF pfa:xing-merge 2026-07-30 so the READ-ONLY scan can classify
+;;   a found crossing without filing one.  It is the whole of merge's decision
+;;   and none of its writing: exact content key present -> UPDATED; else a
+;;   same-source crossing within *pfa-key-tol* of this station -> MOVED (the
+;;   station drifted, so the content key drifted with it); else NEW.
+;;
+;;   PURE READ, and it takes the DICT rather than the anchor precisely so the
+;;   caller decides whether that dict was opened with create T.  A nil dict is
+;;   legal and answers 'NEW -- no ledger yet means nothing is on record.
+;;
+;;   Re-deriving this in the preview instead would have been the real defect:
+;;   two copies drift, and then the palette promises one thing while PFXLABEL
+;;   does another.
+(defun pfa:xing-classify (dict e / key d kdrift k)
+  (setq key (pfa:xing-key (pfa:xr-sbase e) (pfa:xr-tsta e)))
   (cond
-    ((dictsearch dict key)
-     (setq d      (pfa:xrec-data dict key)
-           old-t  (cdr (assoc 42 d))
-           old-s  (cdr (assoc 43 d))
-           status 'UPDATED))
+    ((null dict) (list 'NEW nil))
+    ((dictsearch dict key) (list 'UPDATED key))
     (T
      (setq kdrift nil)
      (foreach k (pfa:dict-keys dict)
@@ -1575,13 +1680,27 @@
                     (<= (abs (- (cdr (assoc 40 d)) (pfa:xr-tsta e)))
                         *pfa-key-tol*))
              (setq kdrift k)))))
-     (if kdrift
-       (progn
-         (setq d      (pfa:xrec-data dict kdrift)
-               old-t  (cdr (assoc 42 d))
-               old-s  (cdr (assoc 43 d))
-               status 'MOVED)
-         (pfa:xrec-del dict kdrift)))))
+     (if kdrift (list 'MOVED kdrift) (list 'NEW nil)))))
+
+;; (pfa:xing-merge anchor e) -> 'NEW | 'UPDATED | 'MOVED
+;;   Elevations already on record are PRESERVED; key drift renames.
+;;   The DECISION is pfa:xing-classify's; this is the filing half only.
+(defun pfa:xing-merge (anchor e / dict key cls status kdrift d old-t old-s data)
+  (setq dict   (pfa:ledger-dict anchor T)
+        key    (pfa:xing-key (pfa:xr-sbase e) (pfa:xr-tsta e))
+        cls    (pfa:xing-classify dict e)
+        status (car cls)
+        kdrift (cadr cls)
+        old-t  nil
+        old-s  nil)
+  ;; UPDATED and MOVED both carry an existing record whose ELEVATIONS have to
+  ;; survive the rewrite (they are surveyed, not derived).  Only MOVED also
+  ;; drops the old key: its station changed, so its content key changed with it.
+  (if kdrift
+    (setq d     (pfa:xrec-data dict kdrift)
+          old-t (cdr (assoc 42 d))
+          old-s (cdr (assoc 43 d))))
+  (if (eq status 'MOVED) (pfa:xrec-del dict kdrift))
   (setq data (append
                (list (cons 1  (pfa:xr-sfile e))
                      (cons 2  (strcase (pfa:xr-sbase e)))
@@ -1608,6 +1727,214 @@
       (if selev (setq data (append data (list (cons 43 selev)))))
       (pfa:xrec-put dict key data)
       T)))
+
+;;; ---- Crossing DISCOVERY: the shared scan ---------------------------------
+;;; THE FIND AND THE FILE ARE DIFFERENT JOBS, split 2026-07-30.
+;;;
+;;; This lived inside pfxl:discover, which found crossings AND merged them, so
+;;; the palette could only ever show what a previous PFXLABEL had already
+;;; written -- "0 crossings" on a line that has plenty, which is what prompted
+;;; the split.  Nothing about FINDING a crossing needs a write: it is
+;;; .cl geometry through pf:poly-x, and pf:cl-geom's `write-p` is documented as
+;;; exactly this read/write seam (pftools-lib SECTION 11 -- "one day a modeless
+;;; palette handler ... MUST pass nil").  The writers were only ever
+;;; pfa:xing-merge, pfa:scope-put, and pf:cl-geom filing its cache.
+;;;
+;;; IT LIVES IN PFANCHOR, not pfxlabel, for two reasons.  Load order: pfanchor
+;;; is position 4 and pfxlabel 9, so pfa:target-items could never call upward
+;;; into pfxl:.  And ownership: pfanchor already holds the whole crossing
+;;; record layer -- xing-key, xing-classify, xing-merge, xing-list, SCOPE --
+;;; while every geometry helper is down in pftools-lib.  pfxl:discover is now
+;;; the filing half and nothing else.
+;;;
+;;; ONE SCAN, TWO CALLERS, so a preview cannot disagree with what the command
+;;; then does.  That is the point of the split, not a side effect of it.
+
+(if (not (boundp '*pfa-xscan-memo*)) (setq *pfa-xscan-memo* '()))
+
+;; (pfa:xing-scan anchor write-p) -> (found newscope skips) | nil
+;;   found    = ((entry status existing-key) ...)   entry is xr-shaped, key nil
+;;              status is pfa:xing-classify's: 'NEW | 'UPDATED | 'MOVED
+;;   newscope = "sbase|target-cksum|source-cksum" strings, for pfa:scope-put
+;;   skips    = ((sbase tsta ssta) ...) -- intersections REJECTED as shared
+;;              structures (pf:shared-structure-p), reported not discarded
+;;   nil = no xform, no .cl on record, or the .cl cannot be checksummed.
+;;
+;;   SHARED STRUCTURES ARE FILTERED HERE, not in the caller, because the split
+;;   exists so a preview cannot disagree with the command -- a filter in
+;;   pfxl:discover alone would have the palette showing tie-ins that running
+;;   Crossings then refuses to file.  See pf:shared-structure-p for why the
+;;   test is what it is.
+;;
+;;   WRITE-P THREADS STRAIGHT THROUGH to pf:cl-geom and decides nothing else.
+;;   Passed nil this is a pure read and legal from a modeless handler; passed T
+;;   it is discovery's scan and files the GEOM cache as it goes.  NOTHING here
+;;   writes the ledger either way -- classification is a read, and merging is
+;;   the caller's job.
+;;
+;;   THE CHECKSUM SHORT-CIRCUIT IS WHAT MAKES THE PREVIEW AFFORDABLE.  A pair
+;;   whose two .cl checksums match what SCOPE recorded was already intersected
+;;   by the last discovery, so its answer is in the ledger and re-intersecting
+;;   it would be wasted work -- pf:poly-x is O(n x m) segment tests per pair and
+;;   its own header records it being minutes per pair before the cdr-walk fix.
+;;   Steady state therefore costs almost nothing; only genuinely new or changed
+;;   lines are re-cut, which is exactly the set the operator wants to see.
+;;
+;;   THE MEMO COVERS THE OTHER CASE.  A target that has never been discovered
+;;   has no SCOPE, so nothing short-circuits and every pair is cut -- on every
+;;   tree click and every radio click.  The memo keys on the anchor plus every
+;;   checksum plus the SCOPE record, which together fully determine the answer,
+;;   so a repeat click is free.  Same pattern and same reasoning as
+;;   pfa:pend-for's; it shares pfa:memo-get / pfa:memo-put.
+;;
+;;   READ-ONLY SCANS ONLY.  Discovery (write-p T) deliberately bypasses the
+;;   memo: a hit would skip the pf:cl-geom filing that passing T is FOR, and a
+;;   command that quietly declines to do its work is worse than a slow one.
+(defun pfa:xing-scan (anchor write-p / xf ty nm tcl tck tgeom trng tverts
+                                       reg dict e
+                                       sources r scl sbase sck newscope s
+                                       last mkey hit found skips triple
+                                       sgeom srng sverts xy
+                                       tsta ssta xy2 tsta2 ssta2 cls)
+  (setq xf  (pfa:anchor->xform anchor)
+        tcl (if xf (cdr (assoc 1 (pfa:meta-get anchor)))))
+  (cond
+    ((or (null xf) (null tcl) (= tcl "")) nil)
+    ((null (setq tck (pf:checksum-file tcl))) nil)
+    (T
+     (setq ty      (strcase (pf:xf-get 'type xf))
+           nm      (strcase (pf:xf-get 'name xf))
+           reg     (pfa:registry)
+           sources '())
+     ;; PRE-PASS: every source line and its checksum.  Cheap beside an
+     ;; intersection, and it is what both SCOPE and the memo key are built
+     ;; from -- so it has to happen before either can be consulted.
+     (foreach r reg
+       (if (and (not (and (= (strcase (car r)) ty) (= (strcase (cadr r)) nm)))
+                (setq scl (pfa:entry-cl r)))
+         (setq sources (cons (list scl (vl-filename-base scl)
+                                   (pf:checksum-file scl))
+                             sources))))
+     (setq sources  (reverse sources)
+           newscope '())
+     (foreach s sources
+       (setq newscope (cons (strcat (cadr s) "|" tck "|"
+                                    (if (caddr s) (caddr s) ""))
+                            newscope)))
+     (setq newscope (reverse newscope)
+           last     (pfa:scope-read anchor)
+           ;; 'X2 is a VALUE-SHAPE tag, not decoration: the memo value gained a
+           ;; skips half, and *pfa-xscan-memo* survives a hot .lsp reload by
+           ;; design (the boundp guard).  Without the tag the first preview
+           ;; after a reload would read an old-shape entry and mistake the
+           ;; first found row for the whole list.  A new tag simply never
+           ;; matches the old entries, so they age out untouched.
+           mkey     (list 'X2 (cdr (assoc 5 (entget anchor))) newscope last)
+           hit      (if write-p nil (pfa:memo-get mkey *pfa-xscan-memo*)))
+     (cond
+       (hit (list (car (cdr hit)) newscope (cadr (cdr hit))))
+       (T
+        ;; pf:cl-geom returns (range . verts) and the scan wants BOTH halves:
+        ;; the range is what tells a shared structure from a crossing, and it
+        ;; costs nothing -- it is already in hand, and was simply discarded
+        ;; here before.
+        (setq tgeom  (pf:cl-geom tcl write-p)
+              trng   (car tgeom)
+              tverts (cdr tgeom)
+              ;; create nil ALWAYS: classification only reads, and a preview
+              ;; must not bring a ledger dictionary into being.  Discovery's
+              ;; own pfa:xing-merge opens it with T when it files.
+              dict   (pfa:ledger-dict anchor nil)
+              found  '()
+              skips  '())
+        (if tverts
+          (foreach s sources
+            (setq scl    (car s)
+                  sbase  (cadr s)
+                  sck    (caddr s)
+                  triple (car (vl-member-if
+                                '(lambda (x) (= (car x) sbase)) last)))
+            ;; short-circuit: both .cl unchanged since the last scan
+            (if (not (and triple (= (cadr triple) tck) (= (caddr triple) sck)))
+              (if (setq sgeom  (pf:cl-geom scl write-p)
+                        srng   (car sgeom)
+                        sverts (cdr sgeom))
+                (if (setq xy (pf:poly-x tverts sverts))
+                  (progn
+                    (setq tsta (pf:sta-at tcl xy)
+                          ssta (pf:sta-at scl xy))
+                    (if (and tsta ssta
+                             (setq xy2 (pf:refine-x tcl tsta scl ssta)))
+                      (progn
+                        (setq tsta2 (pf:sta-at tcl xy2)
+                              ssta2 (pf:sta-at scl xy2))
+                        (if (and tsta2 ssta2)
+                          (setq xy xy2 tsta tsta2 ssta ssta2))))
+                    ;; AFTER refinement, deliberately: the terminus test is a
+                    ;; station comparison, so it wants the best station the
+                    ;; scan has, not the coarse sampled one.
+                    (if (and tsta ssta)
+                      (if (pf:shared-structure-p trng tsta srng ssta)
+                        (setq skips (cons (list sbase tsta ssta) skips))
+                        (progn
+                          (setq e   (list nil tcl (vl-filename-base tcl)
+                                          scl sbase (list (car xy) (cadr xy))
+                                          tsta ssta nil nil)
+                                cls (pfa:xing-classify dict e))
+                          (setq found (cons (list e (car cls) (cadr cls))
+                                            found)))))))))))
+        (setq found (reverse found)
+              skips (reverse skips))
+        (if (not write-p)
+          (setq *pfa-xscan-memo*
+                  (pfa:memo-put mkey (list found skips) *pfa-xscan-memo*)))
+        (list found newscope skips))))))
+
+;; (pfa:xing-find anchor) -> (T . ((entry state) ...)) | nil    PURE READ
+;;   state = 'LABELED | 'OUTSTANDING | 'NEW | 'MOVED
+;;
+;;   WHAT IS ON THIS LINE, whether or not PFXLABEL has ever run.  The ledger
+;;   supplies what is on record and pfa:xing-scan supplies what is on the
+;;   ground; the two are merged so the palette can show a crossing BEFORE it
+;;   has been discovered -- the thing "0 crossings on record" could not say.
+;;
+;;   'NEW    -- found by the live scan, not in the ledger.  Running Crossings
+;;              is what puts it there.
+;;   'MOVED  -- on record, but the scan puts it at a different station.  The
+;;              stale ledger row is dropped from the list rather than shown
+;;              twice; pfa:xing-merge will rename it on the next run.
+;;   'UPDATED is NOT added as a separate row: it is the same crossing at the
+;;              same key, and the ledger row is the better one to show because
+;;              it carries the surveyed elevations the scan cannot know.
+;;
+;;   (T . rows), not bare rows -- nil and '() are the same object, so an empty
+;;   list has to be distinguishable from an unreadable target.  Same idiom as
+;;   pfa:memb-get and pfa:target-items.
+(defun pfa:xing-find (anchor / xf merged scan found drop out f e recon)
+  (setq xf (pfa:anchor->xform anchor))
+  (if (null xf)
+    nil
+    (progn
+      (setq merged (pfa:xing-list anchor)
+            scan   (pfa:xing-scan anchor nil)
+            found  (if scan (car scan) '())
+            recon  (if merged (pfa:recon xf merged) '())
+            drop   '())
+      (foreach f found
+        (if (and (eq (cadr f) 'MOVED) (caddr f))
+          (setq drop (cons (caddr f) drop))))
+      (setq out '())
+      (foreach e merged
+        (if (not (member (pfa:xr-key e) drop))
+          (setq out (cons (list e (if (cdr (assoc (pfa:xr-key e) recon))
+                                    'LABELED
+                                    'OUTSTANDING))
+                          out))))
+      (foreach f found
+        (if (member (cadr f) '(NEW MOVED))
+          (setq out (cons (list (car f) (cadr f)) out))))
+      (cons T (vl-sort out '(lambda (a b) (< (pfa:xr-tsta (car a))
+                                             (pfa:xr-tsta (car b)))))))))
 
 ;;; ---- Reconciliation (read-only; TWO scans per call) ----------------------
 ;;; STEPPED TOPS: a crossing station line is drawn to the grid top AT ITS
@@ -1782,6 +2109,13 @@
         *pfinvert-undo-open* nil
         *pfrem-undo-open*    nil)
   (pf:echo-on)                       ; error path always restores CMDECHO
+  ;; 2b. and always restores the console VOLUME.  The palette binds *pf-quiet*
+  ;; around gather paths that run inside a wrapped command (pfp:run-labels), so
+  ;; an error thrown mid-gather jumps here and skips that caller's reset --
+  ;; leaving the whole suite mute for the rest of the session, silently.  Same
+  ;; class as pf:echo-on: whatever the console state was borrowed for, the
+  ;; error path hands it back.
+  (setq *pf-quiet* nil)
   ;; 3. Esc mid-parade: restore the pre-run view (no-op when the parade is off)
   (pf:zoom-onerror)
   ;; 4. restore the caller's *error*
@@ -1808,10 +2142,18 @@
 ;;   needs belongs to the ONE wrapper, not to the discipline of whoever writes
 ;;   the next command.  scload is idempotent and catch-wrapped, so repeat calls
 ;;   cost nothing, and it sits AFTER echo-off so the load chatter is suppressed.
+;;   THE CONSOLE STARTS AUDIBLE, 2026-07-30.  *pf-quiet* is bound by palette
+;;   read paths and by the palette's own run gather, and every one of those
+;;   resets it -- but a reset can be skipped by a throw, and the failure is
+;;   both session-long and silent (every command mute, no error to explain it).
+;;   Clearing it here and in pf:run-error means no command can ever INHERIT a
+;;   mute from whatever ran before it, which makes the flag safe to bind from
+;;   anywhere without each caller having to be perfect.
 (defun pf:run-command (name flush work)
   (setq *pf-run-prev-error* *error*
         *pf-run-name*       name
         *pf-run-flush*      flush
+        *pf-quiet*          nil
         *error*             pf:run-error)
   (pf:echo-off)
   (pf:load-apis)
@@ -1852,15 +2194,17 @@
 
 (if (not (boundp '*pfrem-undo-open*)) (setq *pfrem-undo-open* nil))
 
-;; (pfrem:cmd) -> nil   The command body, run under pf:run-command.
-(defun pfrem:cmd ( / anchor counts n)
+;; (pfrem:remove-anchor anchor) -> nil   Confirm + tear down ONE anchor.
+;;   Split out of pfrem:cmd 2026-07-30 so the palette's btnRemove can hand in
+;;   the anchor the user already selected instead of re-asking for it.  This is
+;;   a SPLIT, NOT A GRAFT (PALETTE-LAYOUT 10): no palette-only global reaches
+;;   into a path the command line runs, so C:PFREMOVE is unchanged in every
+;;   respect -- same pick, same confirm, same undo group, same messages.
+;;   Caller runs under pf:run-command; the undo group is opened HERE, which is
+;;   why the *pfrem-undo-open* reset lives here and not in the pick phase.
+(defun pfrem:remove-anchor (anchor / counts n)
   (setq *pfrem-undo-open* nil)
-  (setq anchor (pfa:pick-anchor
-                 "\nSelect grid anchor to REMOVE (Enter to list): "))
-  (if (null anchor) (setq anchor (pfa:choose-anchor)))
   (cond
-    ((null anchor)
-     (prompt "\nNothing removed."))
     ;; a COPY's ledger points at ANOTHER grid's entities -- teardown would
     ;; erase-by-handle the original's labels.  Offer copy-safe purge instead.
     ((pfa:copy-p anchor)
@@ -1889,7 +2233,7 @@
                                (itoa (caddr counts)) " pass record(s),")
                        "the anchor, and its ledger."
                        ""
-                       "Untracked work (hand-drawn, CLAYER passes) is NOT touched.")))
+                       "Manual work by the user is NOT touched.")))
         (prompt "\nNothing removed.")
         (progn
           (pf:undo-begin '*pfrem-undo-open*)
@@ -1898,6 +2242,17 @@
           (prompt (strcat "\nRemoved anchor + ledger + " (itoa n)
                           " entit" (if (= n 1) "y" "ies")
                           ".  (One U reverses it.)"))))))
+  (princ))
+
+;; (pfrem:cmd) -> nil   The command body, run under pf:run-command.
+;;   Finds a target, then hands it to pfrem:remove-anchor.  Nothing else.
+(defun pfrem:cmd ( / anchor)
+  (setq anchor (pfa:pick-anchor
+                 "\nSelect grid anchor to REMOVE (Enter to list): "))
+  (if (null anchor) (setq anchor (pfa:choose-anchor)))
+  (if (null anchor)
+    (prompt "\nNothing removed.")
+    (pfrem:remove-anchor anchor))
   (princ))
 
 (defun c:PFREMOVE ()
