@@ -81,20 +81,17 @@
 
 ;; (pfxl:discover anchor) -> nil   (merges into the ledger; rewrites SCOPE)
 ;;   Caller must hold an open undo group.
-;;
-;;   THE FILING HALF ONLY, since 2026-07-30.  The scan it used to carry moved
-;;   to pfa:xing-scan so the palette could run the SAME find read-only and show
-;;   crossings before this command has ever been run against a line -- see that
-;;   function's header for why it lives in pfanchor.  What is left here is the
-;;   part that genuinely writes: merge each hit, rewrite SCOPE, report.
-;;
+;;   THE FILING HALF ONLY.  The scan lives in pfa:xing-scan so the palette can
+;;   run the SAME find read-only and show crossings before this command has ever
+;;   been run against a line -- see that function's header for why it sits in
+;;   pfanchor.  What is left here is the part that genuinely writes: merge each
+;;   hit, rewrite SCOPE, report.
 ;;   IT STILL PASSES write-p T.  Inside the undo group the GEOM cache filing is
 ;;   wanted, and it is what makes the NEXT read-only preview cheap -- the two
-;;   callers are not competing, they are feeding each other.
-;;
-;;   The scan's own short-circuit means `found` holds only pairs whose .cl
-;;   changed since the last run; the counters therefore report movement, not
-;;   the size of the line set, exactly as before.
+;;   callers feed each other rather than competing.
+;;   The scan's short-circuit means `found` holds only pairs whose .cl changed
+;;   since the last run, so the counters report movement, not the size of the
+;;   line set.
 (defun pfxl:discover (anchor / res found newscope skips nnew nupd nmov f st sk)
   (prompt "\nChecking for crossings...")
   (if (null (setq res (pfa:xing-scan anchor T)))
@@ -287,23 +284,22 @@
 ;;; SECTION 6  --  C:PFXLABEL
 ;;; ==========================================================================
 
-;; (pfxl:write-status anchor) -> nil
-;;   The crossings half of the four-way STATUS split.  Validates the TARGET .cl
-;;   against the checksum META recorded at setup -- the same comparison PFLABEL
-;;   makes, because a crossing's target station comes off the same alignment.
-;;   Per-SOURCE freshness is SCOPE's job: it already stores a
-;;   <base>|<target-cksum>|<source-cksum> triple per pair and short-circuits
-;;   discovery on it, so duplicating those here would be a fifth copy of a fact
-;;   that already has an owner.
-(defun pfxl:write-status (anchor / meta stored res state findings e)
+;; (pfxl:report-status anchor) -> nil
+;;   PRINTS the crossings freshness verdict; STORES NOTHING.  STATUS_XING was
+;;   retired 2026-08-01 (DATA-FLOW §4.1): it validated the TARGET .cl against
+;;   META (301) through the same code as STATUS_LABEL -- identical inputs,
+;;   identical verdict, so the record could never disagree with LABEL's and the
+;;   Checks roll-up was counting one question twice.  Per-SOURCE freshness is
+;;   SCOPE's job: it stores a <base>|<target-cksum>|<source-cksum> triple per
+;;   pair and short-circuits discovery on it.
+(defun pfxl:report-status (anchor / meta stored res state findings e)
   (setq meta   (pfa:meta-get anchor)
         stored (if (and meta (assoc 301 meta)) (cdr (assoc 301 meta)) "")
         res    (pfa:status-check anchor "XING"
                                  (if meta (cdr (assoc 1 meta))) stored)
         state  (car res)
         findings (cdr res))
-  (pfa:status-put anchor "XING" state stored findings)
-  (prompt (strcat "\nPass recorded.  Status: " (pfa:status-label state)))
+  (prompt (strcat "\nPass complete.  Freshness: " (pfa:status-label state)))
   (foreach e findings (prompt (strcat "\n  FINDING: " e)))
   (princ))
 
@@ -361,12 +357,11 @@
       (pfa:pass-put anchor *pfxl-pass-name* lay nil
                     (append oldh *pfxl-run-newh*))))
   (setq *pfxl-run-newh* nil *pfxl-run-anchor* nil)  ; normal exit: flush disarms
-  ;; ---- input validation -> STATUS_XING ----------------------------------
-  ;; NEW 2026-07-27: PFXLABEL wrote no status at all, so a crossings pass left
-  ;; nothing behind saying whether its inputs were sound.  The input here is the
-  ;; TARGET .cl -- the source .cl checksums are per-pair and already live in
-  ;; SCOPE, which stays the source of truth for them rather than being copied.
-  (pfxl:write-status anchor)
+  ;; ---- input validation, printed only -----------------------------------
+  ;; STATUS_XING retired 2026-08-01 (DATA-FLOW §4.1): the verdict duplicated
+  ;; STATUS_LABEL exactly, so it is reported to the operator but not stored.
+  ;; Source .cl checksums are per-pair and live in SCOPE.
+  (pfxl:report-status anchor)
   ;; pass report
   (prompt (strcat "\n== PFXLABEL: " (itoa drawn)
                   " labeled, " (itoa (length skips))

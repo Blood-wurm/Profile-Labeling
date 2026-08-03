@@ -44,12 +44,12 @@
 (setq *pf-hash-scale* 10000.0)
 
 ;;; --------------------------------------------------------------------------
-;;; INERT SCAFFOLD -- set here, read NOWHERE in the suite (audit 2026-07-26).
+;;; INERT SCAFFOLD -- set here, read NOWHERE in the suite.
 ;;; These belong to the planned point-to-SEGMENT membership fix for the
-;;; "structures silently dropped" bug (OPEN-ISSUES / PFLABEL).  Membership
-;;; still gates on cl_location_at_pt via pf:lines-at-point, so CHANGING ANY
-;;; VALUE BELOW HAS NO EFFECT ON A RUN.  Do not tune them chasing a missing
-;;; structure -- the fix is not wired yet.  Delete this banner when it is.
+;;; "structures silently dropped" bug (OPEN-ISSUES / PFLABEL).  Membership still
+;;; gates on cl_location_at_pt via pf:lines-at-point, so CHANGING ANY VALUE
+;;; BELOW HAS NO EFFECT ON A RUN.  Do not tune them chasing a missing structure
+;;; -- the fix is not wired yet.  Delete this banner when it is.
 ;;; --------------------------------------------------------------------------
 
 ;; [INERT] Vertex-proximity membership (segment-distance model).  RADIAL
@@ -72,9 +72,9 @@
 
 ;; GEOM record KIND: EXACT = parsed .cl vertices (stations authoritative);
 ;; SAMPLED = Road-API station walk (vertex stations not carried, so the z slot
-;; stores 0.0).  NOT INERT -- both are live as of 2026-07-27: pf:cl-geom writes
-;; EXACT whenever pf:cl-parse reads the file, SAMPLED when the parse is refused
-;; and it falls back to the walk.  A drawing can hold both kinds at once.
+;; stores 0.0).  Both are live: pf:cl-geom writes EXACT whenever pf:cl-parse
+;; reads the file, SAMPLED when the parse is refused and it falls back to the
+;; walk.  A drawing can hold both kinds at once.
 (setq *pf-geom-exact*   0)
 (setq *pf-geom-sampled* 1)
 
@@ -132,10 +132,10 @@
 ;;; --------------------------------------------------------------------------
 ;;; Utility-type derived layers & templates
 ;;; --------------------------------------------------------------------------
-;;; RETIRED 2026-07-29 -- see *pf-anno-layer*.  Every label pass now writes to
-;;; the ONE annotation layer, so nothing derives a layer from the utility type
-;;; any more.  Kept (with pf:sym-layer / pf:text-layer) so a per-type revert is
-;;; a one-line change rather than an archaeology exercise.
+;;; RETIRED -- see *pf-anno-layer*.  Every label pass now writes to the ONE
+;;; annotation layer, so nothing derives a layer from the utility type.  Kept
+;;; (with pf:sym-layer / pf:text-layer) so a per-type revert is a one-line
+;;; change rather than an archaeology exercise.
 (setq *pfx-layer-suffix*      "_P")
 (setq *pfx-text-layer-suffix* "-TEXT_P")
 (setq *pfx-align-layers*
@@ -280,49 +280,42 @@
 ;;; THE annotation layer: EVERY label pass writes here -- PFLABEL's stacks and
 ;;; station lines, PFINVERT's stacks and lateral pipe blocks, PFXLABEL's station
 ;;; text, crossing pipe block and pipe labels.  Replaces the per-utility-type
-;;; derived layers (<TYPE>-TEXT_P / <TYPE>_P) as of 2026-07-29.
-;;;
-;;; NO-PLOT is deliberate and is the whole point of the layer: labels are review
-;;; output here, not plotted sheet annotation.
-;;;
-;;; Same create-only caveat as *pfa-layer-color* above -- pfd:ensure-layer-c
-;;; never recolours a layer that already exists, so a drawing already carrying
-;;; PF-ANNO keeps its colour AND its plot flag.  Only fresh drawings are born
-;;; green no-plot.
+;;; derived layers (<TYPE>-TEXT_P / <TYPE>_P).
+;;; NO-PLOT is deliberate and is the whole point: labels are review output here,
+;;; not plotted sheet annotation.
+;;; Same create-only caveat as *pfa-layer-color* -- pfd:ensure-layer-c never
+;;; recolours an existing layer, so a drawing already carrying PF-ANNO keeps its
+;;; colour AND its plot flag.  Only fresh drawings are born green no-plot.
 (setq *pf-anno-layer*       "PF-ANNO")
 (setq *pf-anno-layer-color* 80)          ; green
 ;;; THE LEDGER dictionary, hung off an entity's extension dictionary.  Owner is
 ;;; whatever entity carries it: an ANCHOR holds META/FILES/STATUS_*/SCOPE/PASS_*
-;;; /X_*, a STRUCTURE holds MEMB.  pfa:ledger-dict is owner-agnostic and always
-;;; was -- nothing in it ever looked at the anchor.
-;;;
-;;; The old name is the fossil of the one tool that happened to need a record
-;;; first.  Four of the six key families on an anchor have nothing to do with
-;;; crossings, and structures are a second owner, so it was renamed 2026-07-27.
-;;; *pfa-dict-legacy* is READ for drawings registered before that, and
-;;; pfa:ledger-dict RENAMES the entry the first time something writes -- so the
-;;; fallback empties out on its own instead of living forever.
+;;; /X_*, a STRUCTURE holds MEMB.  pfa:ledger-dict is owner-agnostic.
+;;; The old name is a fossil of the one tool that happened to need a record
+;;; first.  *pfa-dict-legacy* is READ for drawings registered before the rename,
+;;; and pfa:ledger-dict RENAMES the entry the first time something writes, so
+;;; the fallback empties out on its own instead of living forever.
 (setq *pfa-dict-name*   "PFLEDGER")
 (setq *pfa-dict-legacy* "PFXLEDGER")
 (setq *pfa-schema-ver*  3)                ; schema 3 = the V4 record (FILES/EXTENTS/STATUS/SCOPE/PASS_/X_); matches pfanchor + README
-;;; WIDTH/HEIGHT are the grid extents RELATIVE to the insertion point.  They
-;;; used to be carried by the insert's X/Y scale factors, back when the block
-;;; spanned the grid; the block is a fixed-size icon now and its scales carry
-;;; plot scale instead, so these two attributes are the only extent truth on a
-;;; current anchor.  An anchor with no WIDTH/HEIGHT attribute is pre-icon --
-;;; that absence IS the legacy discriminator (see pfa:extents).  Order matters:
-;;; pfa:write-anchor writes values positionally against this list.
+;;; WIDTH/HEIGHT are the grid extents RELATIVE to the insertion point.  The
+;;; insert's X/Y scale factors carried them back when the block spanned the
+;;; grid; the block is a fixed-size icon now and its scales carry plot scale, so
+;;; these two attributes are the only extent truth on a current anchor.  An
+;;; anchor with no WIDTH/HEIGHT is pre-icon -- that absence IS the legacy
+;;; discriminator (see pfa:extents).  ORDER MATTERS: pfa:write-anchor writes
+;;; values positionally against this list.
 (setq *pfa-att-tags*    '("LINE" "UTIL" "STA0" "DATUM" "HPLOT" "VPLOT"
                           "WIDTH" "HEIGHT"))
 (setq *pfa-att-height*  0.8)
 (setq *pfa-att-gap*     1.6)
 
 ;;; ATTRIB (70) flags on the anchor's attributes.  1 = INVISIBLE: the anchor
-;;; carries eight fields of machine state and none of them belong on the sheet.
-;;; This was 8 (PRESET) for a long time, which is a different bit entirely and
-;;; left every value rendering under the datum.  Add 8 back only if a manual
-;;; INSERT of the block should skip prompting; the entmade path never prompts.
-;;; ATTDISP ON still forces them visible -- that is the intended debug escape.
+;;; carries eight fields of machine state and none belong on the sheet.
+;;; NOT 8 (PRESET) -- a different bit entirely, which leaves every value
+;;; rendering under the datum.  Add 8 back only if a manual INSERT of the block
+;;; should skip prompting; the entmade path never prompts.
+;;; ATTDISP ON still forces them visible -- the intended debug escape.
 (setq *pfa-att-flags*   1)
 
 ;;; H plot scale the anchor ICON was drawn at: at H:50 the block reads at the
@@ -339,8 +332,7 @@
 (setq *pfa-grid-layers* "PF-GRID-MJR,PF-GRID-MNR,PF-HBOX")
 
 ;;; --------------------------------------------------------------------------
-;;; Carlson-drawn grid sheet layers
-;;; Confirmed 2026-07-17: these ARE the layers Carlson draws the grids on.
+;;; Carlson-drawn grid sheet layers -- these ARE the layers Carlson draws on.
 ;;; The sheet-geometry parser is retired; the only sheet reads left are the
 ;;; PF-NAME identity scan (AUTO registration) and the top-of-grid probe.
 ;;; --------------------------------------------------------------------------
@@ -411,9 +403,9 @@
 (setq *pfr-rim-eps-factor* 10.0)   ; x text height -- max |dX| from a structure's
                                    ; station line to claim one of its label rows
 
-;;; Slope units in the .stm.  T = percent, nil = ft/ft.  The sample carries
-;;; 0 for every line (Hydraflow had not computed them yet), so this is an
-;;; inference from the Storm Sewers UI -- one flip if a round trip disagrees.
+;;; Slope units in the .stm.  T = percent, nil = ft/ft.  The reference sample
+;;; carries 0 for every line, so this is inferred from the Storm Sewers UI --
+;;; one flip if a round trip disagrees.
 (setq *pfr-slope-percent* T)
 
 (setq *pfr-sigfigs* 7)             ; Hydraflow writes ~7 significant digits
@@ -489,6 +481,114 @@
     "0,0,0,0"
     "\"End of file\""))
 (setq *pfr-idf-name* "IDF PORTLAND 2 (40-7359).IDF")   ; named in the warning
+
+
+;;; --------------------------------------------------------------------------
+;;; PF2SEW  --  Carlson Hydrology .SEW export
+;;; --------------------------------------------------------------------------
+;;; TUNABLES LIVE IN ONE TABLE ON PURPOSE.  *pfsew-opts* is a flat
+;;; (KEY VALUE LABEL) list, not thirty named globals, because the planned home
+;;; for these is a PFTools settings page / pfpalette tab -- and a data-driven
+;;; table is one `foreach` away from a tile per row, where named globals would
+;;; need a hand-written tile each.  pfsew:opt reads at EMIT time, never at load
+;;; time, so changing a value takes effect on the next export with no reload.
+;;; Anything a drafter might plausibly want to change belongs here; anything
+;;; structural belongs in pf2sew.lsp.
+;;;
+;;; VALUES ARE STRINGS -- they are written into XML attributes verbatim, so
+;;; what is typed here is what Carlson reads.  Keep Carlson's own spellings.
+(setq *pfsew-opts*
+  '(;; ---- file-level settings (the <SewerSettings> fragment) ---------------
+    (network-type      "0"      "Network type (0 = storm)")
+    (unit              "0"      "Units (0 = US feet)")
+    (hydro-method      "0"      "Hydrology method (0 = Rational)")
+    (comp-method       "0"      "Computation method")
+    (program           "Carlson Software 2025" "Program string")
+    (debug             "7"      "Debug flag Carlson writes")
+    ;; ---- number grammar ---------------------------------------------------
+    (coord-decimals    "4"      "Decimal places on coordinates")
+    (elev-decimals     "4"      "Decimal places on elevations")
+    ;; ---- pipe defaults ----------------------------------------------------
+    (pipe-shape        "0"      "Pipe shape (0 = circular)")
+    (pipe-thickness    "1"      "Wall thickness, inches")
+    (barrel-num        "1"      "Barrels per pipe")
+    (material-default  "RCP"    "Material when the record has none")
+    ;; ---- structure defaults ----------------------------------------------
+    (node-prefix       "CSMH"   "SewerNodeID prefix")
+    (junction-method   "3"      "Junction loss method")
+    (junction-coeff    "0"      "Junction loss coefficient")
+    (sump              "0"      "Structure sump depth")
+    (rim-raised        "0"      "Rim raised height")
+    (skew-angle        "90"     "Symbol skew angle")
+    ;; ---- hydrology: written at CARLSON'S DEFAULTS, never fabricated -------
+    ;; PFTools does not hold drainage data.  These are the values Carlson's own
+    ;; dialog writes for an un-entered structure, so the model opens and
+    ;; computes capacity while the drainage side reads visibly unentered.
+    (runoff-cf         "0.5"    "Rational Cf (Carlson default)")
+    (scs-cn            "50"     "SCS curve number (Carlson default)")
+    (scs-swamp         "1"      "SCS swamp factor (Carlson default)")
+    (pave-lon-slope    "0.01"   "Pavement longitudinal slope")
+    (pave-cross-slope  "0.02"   "Pavement cross slope")
+    (pave-mannings     "0.013"  "Pavement Manning's n")
+    (inlet-profile     "1"      "Inlet profile flag")
+    (gutter-width      "3"      "Gutter width")
+    (grate-length      "3"      "Grate length")
+    (grate-width       "2"      "Grate width")
+    (grate-weir-c      "3"      "Grate weir coefficient")
+    (grate-orifice-c   "0.67"   "Grate orifice coefficient")
+    (grate-splash-v    "1"      "Grate splash-over velocity")
+    (curb-length       "3"      "Curb throat length")
+    (curb-weir-c       "2.3"    "Curb weir coefficient")
+    (curb-orifice-c    "0.67"   "Curb orifice coefficient")))
+
+;;; --------------------------------------------------------------------------
+;;; Carlson library mapping  --  ORDERED, FIRST MATCH WINS, same token lists as
+;;; *pf-rule-table* above.  Deliberately a PARALLEL table, not extra columns on
+;;; *pf-rule-table*: that one is load-bearing for every sheet label PFLABEL
+;;; draws, and export concerns do not belong in the drafting path.  Adding a
+;;; row here can never change a label.
+;;;
+;;;   (TOKENS  STRUCT-ID  STRUCT-TYPE  WIDTH  GEOMETRY-XML  INLET-ID  INLET-TYPE  SYMBOL)
+;;;
+;;; STRUCT-ID / INLET-ID / SYMBOL are CARLSON'S OWN library names.  Only four
+;;; are confirmed present on the target install (MH1, Outfall-Funnel,
+;;; Combo-Grade, INLET3 -- from Carlson_References/STORM_CA.sew).  Every row
+;;; below resolves to one of those four ON PURPOSE: a file that opens beats a
+;;; file naming a library entry Carlson does not have.  Refine per row once the
+;;; real library is enumerated -- see pf2sew/README.md, "Open issues".
+;;; INLET-ID nil = a junction structure that captures no flow.
+(setq *pfsew-type-map*
+  '((("CBI" "MH") "MH1" "2" "4"
+     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+     "Combo-Grade" "3" "INLET3")
+    (("DBI" "MH") "MH1" "2" "4"
+     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+     "Combo-Grade" "3" "INLET3")
+    (("SMH")      "MH1" "2" "4"
+     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+     nil nil "")
+    (("DMH")      "MH1" "2" "4"
+     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+     nil nil "")
+    (("CBI")      "MH1" "2" "4"
+     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+     "Combo-Grade" "3" "INLET3")
+    (("DBI")      "MH1" "2" "4"
+     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+     "Combo-Grade" "3" "INLET3")
+    (("MH")       "MH1" "2" "4"
+     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+     nil nil "")
+    (("HDWL")     "Outfall-Funnel" "0" "0"
+     "<Funnel Length=\"4\" InWidth=\"2\" OutWidth=\"3\"/>"
+     nil nil "")))
+
+;;; The row used when a structure's block matches no rule above.  A network
+;;; still exports; the structure is a plain junction and the run says so.
+(setq *pfsew-type-fallback*
+  '(NIL "MH1" "2" "4"
+    "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
+    nil nil ""))
 
 (princ "\npftools-cfg.lsp loaded (V4 configuration).")
 (princ)

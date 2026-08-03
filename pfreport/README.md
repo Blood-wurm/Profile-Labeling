@@ -5,7 +5,14 @@
 (line table, structure walk, station index), pfxlabel (`pfxl:src-files`).
 Does **not** depend on pfdraw or pfsetup — it draws nothing and registers
 nothing.
-**Depended on by:** nothing. Nothing calls `pfr:`.
+**Depended on by:** **pf2sew** — `C:PF2SEW` reuses this file's whole gather
+(`pfr:candidates`, `pfr:row`, `pfr:line-table`, `pfr:line-pipes`,
+`pfr:build-nodes`, `pfr:order`, `pfr:validate`, the `pfr:g` / `pfr:nd-*`
+accessors and the `*pfr-fatal*` / `*pfr-warn*` findings) rather than carrying a
+second copy. Hoisting that gather into `pf:` engine code is still the end state
+and stays ticketed in [../pf2sew.md](../pf2sew.md) §8 step 1;
+it was deferred until both commands have passed their CAD gates, so that a
+failure is attributable. See [../pf2sew/README.md](../pf2sew/README.md).
 
 ## What it owns
 
@@ -151,6 +158,10 @@ emit (`pfr:record`, `pfr:write`).
   differ by half a structure at a shared node; connectivity is explicit in
   `Downstream Line No.`, so nothing depends on them coinciding.
 - Pipe identity is `idx`, never list identity — every stamp returns a new list.
+- The node table is `(xy id sta line rim blk)`. `blk` is the structure's block
+  name, carried for PF2SEW's Carlson-library mapping; **nothing on the `.stm`
+  path reads it** and `pfr:record` never touches it. It rides here rather than
+  being re-resolved downstream because `pfr:struct-at` already returns it.
 - Field ORDER in a record is load-bearing: it is `_Sampl.txt`'s, record for
   record.
 - A rim row still reading `*pf-elev-placeholder*` is UNFILLED. It exports as 0
@@ -164,6 +175,11 @@ emit (`pfr:record`, `pfr:write`).
 the corridor-pre-filter fix and `pf:cl-parse`'s exact vertices without
 changing a line. Note `pfr:line-table` **unions across utility types** where
 PFLABEL is single-type, so a mixed selection reads several line sets.
+
+The per-line pending list goes through `pfa:pend-for` since 2026-08-01
+(DATA-FLOW §4.2) — the run iterates candidates, and the old direct
+`pfa:pending` call re-walked inlets × lines once per candidate where the
+memo serves repeats from one walk.
 
 `pfr:struct-id` recomputes exactly what PFLABEL computes —
 `pf:lines-at-point` + `pf:rank-on-line` over the index, then

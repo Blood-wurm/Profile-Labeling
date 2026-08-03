@@ -40,6 +40,8 @@
   (princ))
 
 ;; DTM wrappers -----------------------------------------------------------
+;; KEEP though the dead-code gate names all three: Version 5.1.md §4 Track B
+;; (surface elevations, LOW-6) is what makes them live.
 (defun pf:tin-load (file)   (apply *pf-dtm-fn* (list "load_tin" file)))
 (defun pf:tin-unload ()     (apply *pf-dtm-fn* (list "unload_tin")))
 (defun pf:tin-z (pt)        (apply *pf-dtm-fn* (list "tin_z" (list (car pt) (cadr pt)))))
@@ -78,10 +80,7 @@
   (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_z" pro sta)))
   (if (and (not (vl-catch-all-error-p r)) (numberp r)) r nil))
 
-;; (pf:pro-range pro) -> (s0 s1) | nil
-(defun pf:pro-range (pro / r)
-  (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_sta_range" pro)))
-  (if (and (not (vl-catch-all-error-p r)) (listp r)) r nil))
+;; pf:pro-range quarantined to _attic 2026-08-01 (no caller).
 
 ;; (pf:pro-verts pro) -> ((sta . elev) ...) sorted by sta | nil
 ;;   Reads the .pro FILE directly for its EXACT vertices -- the one file read in
@@ -177,8 +176,7 @@
     (pf:cl-sample-range clfile (car rng) (cadr rng) *pfx-sample-step*)))
 
 ;;; ---- The .cl FILE parser  (exact vertices, authored stations) -------------
-;;; Format probe CLOSED 2026-07-27 against Carlson_References/*.cl.  A .cl is
-;;; CSV, one row per alignment point, terminated by "0,0,L,0,0":
+;;; A .cl is CSV, one row per alignment point, terminated by "0,0,L,0,0":
 ;;;
 ;;;   0, station, L,  northing, easting     tangent PI
 ;;;   0, station, PC, northing, easting     start of arc
@@ -192,25 +190,24 @@
 ;;;      -21.575746298 is -21d57'57.46" = -21.96596 deg.
 ;;;   3. columns 4/5 on an R row are the arc CENTRE, not a vertex.  Push it
 ;;;      into the shape and the polyline grows a leg running hundreds of feet
-;;;      off the alignment (985 ft, on the sample set's flattest curve).
+;;;      off the alignment (985 ft on the sample set's flattest curve).
 ;;;   4. the file is NORTHING,EASTING; the drawing is X=easting, Y=northing.
 ;;;      A swapped parse reflects the alignment about y=x: correct lengths,
-;;;      correct radii, correct stations, ~971,000 ft from where it belongs,
-;;;      and nothing errors -- every structure just reads as "not on any named
-;;;      centerline".  Confirmed by ID on the live drawing (Storm_BA start
-;;;      X = 1804451.14 = column 5) and re-checked per file by pf:cl-parse-ok-p.
+;;;      radii and stations, ~971,000 ft from where it belongs, and nothing
+;;;      errors -- every structure just reads as "not on any named
+;;;      centerline".  Re-checked per file by pf:cl-parse-ok-p.
 ;;;
 ;;; Stations are measured ALONG THE ARC, so a curve's station delta IS its arc
-;;; length -- which, with the centre, fixes the sweep without having to trust
-;;; the delta at all.  The delta's SIGN gives turn direction (negative = right,
-;;; in drawing space); its magnitude is used only as a cross-check.
+;;; length -- which, with the centre, fixes the sweep without trusting the
+;;; delta at all.  The delta's SIGN gives turn direction (negative = right, in
+;;; drawing space); its magnitude is only a cross-check.
 ;;;
 ;;; ARCS ARE DENSIFIED at *pfx-sample-step*, not carried as curves: the GEOM
 ;;; store holds points.  Densified points sit exactly ON the arc with exactly
 ;;; interpolated stations -- only the chords BETWEEN them cut the corner, by
-;;; R(1-cos(sweep/2n)), which is ~0.005 ft on the tightest curve in the sample
-;;; set (R=104) against a 0.2 ft corridor.  Carrying true bulges is the better
-;;; long answer and does not require this parser to be rewritten.
+;;; R(1-cos(sweep/2n)), ~0.005 ft on the tightest curve in the sample set
+;;; (R=104) against a 0.2 ft corridor.  Carrying true bulges is the better long
+;;; answer and does not require rewriting this parser.
 
 ;; (pf:dms->deg packed) -> signed decimal degrees.  DD.MMSSsss -> DD.dddddd
 (defun pf:dms->deg (v / sgn d r m s)
@@ -415,20 +412,17 @@
            (list (car (cadr ends)) (cadr (cadr ends)))))))
 
 ;; (pf:cl-geom clfile write-p) -> (range . verts) | nil     range = (s0 s1)
-;;   The cached seam for .cl geometry.  Reads the drawing-wide GEOM store
-;;   (pfa:geom-*); on a checksum match it returns the filed shape WITHOUT a
-;;   single Road-API call -- this is what lets labeling read a shape instead
-;;   of re-tracing it.  On a miss (absent, or the .cl changed on disk) it
-;;   samples ONCE and returns the result; it FILES the sample only when
-;;   write-p is T.  A transient sample failure is never filed, so the next
-;;   call retries.  Range is returned even when verts are unavailable (the
-;;   proximity filter just goes off).
-;;
-;;   WRITE-P IS THE READ/WRITE SEAM (palette contract): the label commands'
-;;   GATHER paths (run dialogs, setup -- all pre-undo-group, and one day a
-;;   modeless palette handler) MUST pass nil -- a cache miss there costs one
-;;   re-sample, never a drawing write.  Registration (PFSETUP) and discovery
-;;   (PFXLABEL, inside its command undo group) pass T and own the filing.
+;;   The cached seam for .cl geometry.  Reads the drawing-wide GEOM store; on a
+;;   checksum match it returns the filed shape with NO Road-API call, which is
+;;   what lets labeling read a shape instead of re-tracing it.  On a miss it
+;;   samples ONCE and returns the result, filing it only when write-p is T.
+;;   A transient sample failure is never filed, so the next call retries.
+;;   Range is returned even when verts are unavailable (the proximity filter
+;;   just goes off).
+;;   WRITE-P IS THE READ/WRITE SEAM (palette contract): GATHER paths -- run
+;;   dialogs, setup, any modeless handler -- MUST pass nil, where a cache miss
+;;   costs one re-sample and never a drawing write.  Registration (PFSETUP) and
+;;   discovery (PFXLABEL, inside its undo group) pass T and own the filing.
 (defun pf:cl-geom (clfile write-p / cur cached rng vts kind)
   (setq cur (pf:checksum-file clfile))
   (cond
@@ -735,13 +729,7 @@
     (setq i (1+ i)))
   found)
 
-;; (pf:remove-nth idx lst) -> lst with element idx dropped
-(defun pf:remove-nth (idx lst / i out)
-  (setq i 0 out '())
-  (foreach x lst
-    (if (/= i idx) (setq out (cons x out)))
-    (setq i (1+ i)))
-  (reverse out))
+;; pf:remove-nth quarantined to _attic 2026-08-01 (no caller).
 
 ;; (pf:cl-id file) -> canonical identity string for a .cl/.pro path.
 ;;   Slash-normalized (/ -> \) and upcased so spelling variants of ONE file
@@ -796,8 +784,8 @@
     (strcase (substr base (+ pos 2)))
     (strcase base)))
 
-;; Alias kept for the dialog code's vocabulary.
-(defun pf:parse-line-name (file) (pf:name-of file))
+;; pf:parse-line-name (alias of pf:name-of) quarantined to _attic 2026-08-01:
+;; the dialog code it was kept for never called it.
 
 ;; (pf:parse-pro-name file) -> (name . role)
 ;;   Role-aware sibling of pf:name-of: strips the trailing role suffix.
@@ -899,15 +887,7 @@
 (defun pf:rule-size (name rule)
   (if (and rule (pf:rule-sized-p rule)) (pf:parse-size name)))
 
-(defun pf:name-prefix (name / i c out)
-  (setq i 1 out "")
-  (while (and (<= i (strlen name))
-              (setq c (substr name i 1))
-              (/= c "_")
-              (/= c "-")
-              (not (pf:digit-p c)))
-    (setq out (strcat out c) i (1+ i)))
-  out)
+;; pf:name-prefix quarantined to _attic 2026-08-01 (no caller).
 
 (defun pf:parse-size (name / i n c out indim)
   (setq i 1 n (strlen name) out "" indim nil)
@@ -933,7 +913,7 @@
   (setq hund (fix (/ sta 100.0)) rem (- sta (* hund 100.0)))
   (strcat (itoa hund) "+" (if (< rem 10.0) "0" "") (rtos rem 2 2)))
 
-(defun pf:fmt-elev (elev prec) (rtos elev 2 prec))
+;; pf:fmt-elev quarantined to _attic 2026-08-01 (no caller).
 
 
 ;;; ==========================================================================
@@ -996,22 +976,9 @@
 
 (defun pf:pt2 (p) (list (car p) (cadr p)))
 
-;; (pf:sample-cl clfile) -> list of (x y) | nil   (true alignment, arcs followed)
-(defun pf:sample-cl (clfile / rng sta0 stan sta pts r)
-  (if (setq rng (pf:cl-range clfile))
-    (progn
-      (setq sta0 (car rng) stan (cadr rng) sta sta0 pts '())
-      (while (< sta stan)
-        (setq r (vl-catch-all-apply *pf-road-fn*
-                  (list "cl_location_at_sta" clfile sta)))
-        (if (and (not (vl-catch-all-error-p r)) (listp r) (listp (car r)))
-          (setq pts (cons (pf:pt2 (car r)) pts)))
-        (setq sta (+ sta *pfx-sample-step*)))
-      (setq r (vl-catch-all-apply *pf-road-fn*
-                (list "cl_location_at_sta" clfile stan)))
-      (if (and (not (vl-catch-all-error-p r)) (listp r) (listp (car r)))
-        (setq pts (cons (pf:pt2 (car r)) pts)))
-      (if (> (length pts) 1) (reverse pts)))))
+;; pf:sample-cl quarantined to _attic 2026-08-01: its only caller was
+;; pf:get-verts, which left in the same sweep (pf:sample-range is the live
+;; sampler on the gather path).
 
 ;; (pf:sample-range clfile s0 s1 step) -> list of (x y) | nil
 (defun pf:sample-range (clfile s0 s1 step / rng lo hi sta pts r)
@@ -1068,50 +1035,24 @@
 
 ;; (pf:shared-structure-p trng tsta srng ssta) -> T | nil
 ;;   T when an intersection sits at a terminus of EITHER alignment: two lines
-;;   meeting at a SHARED STRUCTURE (a junction manhole, or a branch tying into
-;;   a main), not one pipe crossing over or under another.
-;;
-;;   pf:poly-x cannot tell them apart and never could -- `inters` is a bounded
-;;   segment test, and endpoints that touch lie on both segments, so a junction
-;;   returns a hit indistinguishable from a crossing.  Near-collinear ties make
-;;   it worse by making it INTERMITTENT: whether the touch registers comes down
-;;   to floating point, so the same drawing files a false crossing on one pair
-;;   and not on its neighbour.
-;;
-;;   EITHER, not both, and the asymmetry is the whole point.  An end-to-end
-;;   junction puts both lines at a terminus, but a branch tying into a main
-;;   mid-run puts only the BRANCH there -- the main runs straight through, its
-;;   station nowhere near either end.  Requiring both would let every tee past.
-;;
-;;   The cost of "either" is a genuine crossing that happens to fall within the
-;;   band of a line's end.  That is why pfa:xing-scan RETURNS its skips by name
-;;   rather than dropping them silently -- a rejected crossing is reported, not
-;;   disappeared.  Tolerance is *pfx-terminus-tol* in pftools-cfg.
+;;   meeting at a SHARED STRUCTURE (a junction manhole, or a branch tying into a
+;;   main), not one pipe crossing over or under another.
+;;   pf:poly-x cannot tell them apart -- `inters` is a bounded segment test, and
+;;   endpoints that touch lie on both segments, so a junction returns a hit
+;;   indistinguishable from a crossing.  Near-collinear ties make it
+;;   INTERMITTENT: whether the touch registers comes down to floating point, so
+;;   the same drawing files a false crossing on one pair and not its neighbour.
+;;   EITHER, not both, and the asymmetry is the point: an end-to-end junction
+;;   puts both lines at a terminus, but a branch tying into a main mid-run puts
+;;   only the BRANCH there.  Requiring both would let every tee past.
+;;   The cost is a genuine crossing falling within the band of a line's end --
+;;   which is why pfa:xing-scan RETURNS its skips by name rather than dropping
+;;   them silently.  Tolerance is *pfx-terminus-tol*.
 (defun pf:shared-structure-p (trng tsta srng ssta)
   (or (pf:sta-at-end-p trng tsta) (pf:sta-at-end-p srng ssta)))
 
-;; (pf:get-verts clfile) -> list of (x y) vertices | nil
-;;   Geometry source order, best first: .cl sampling -> drawn polyline
-;;   (chords!) -> endpoint chord (loud warnings on the fallbacks).
-(defun pf:get-verts (clfile / pts rng entry verts ends)
-  (cond
-    ((setq pts (pf:sample-cl clfile)) pts)
-    ((setq rng (pf:cl-range clfile))
-     (setq entry (pf:attach-corridor
-                   (list clfile (pf:basename clfile) (car rng) (cadr rng)))
-           verts (nth 4 entry))
-     (if (and verts (> (length verts) 1))
-       (progn
-         (prompt (strcat "\n  Warning: .cl sampling failed for "
-                         (pf:basename clfile)
-                         " -- using drawn polyline vertices (arcs read as chords)."))
-         (mapcar 'pf:pt2 verts))
-       (if (setq ends (pf:cl-endpoints clfile))
-         (progn
-           (prompt (strcat "\n  Warning: using straight endpoint CHORD for "
-                           (pf:basename clfile)
-                           " -- crossings on curves may be missed or false."))
-           (list (pf:pt2 (car ends)) (pf:pt2 (cadr ends)))))))))
+;; pf:get-verts quarantined to _attic 2026-08-01 (no caller -- the gather path
+;; reads geometry through pf:cl-geom / pfa:build-lines instead).
 
 ;; (pf:sta-at clfile xy) -> station | nil
 (defun pf:sta-at (clfile xy / res)
@@ -1150,26 +1091,13 @@
             pn (if (and (not (vl-catch-all-error-p rn)) (listp rn)) (car rn)))
       (if (and (listp p0) (listp pn)) (list p0 pn)))))
 
-(defun pf:find-cl-polyline (p0 pn tol / ss i e vs verts a b)
-  (setq ss (ssget "_X" '((0 . "LWPOLYLINE,LINE,POLYLINE") (410 . "Model"))) i 0)
-  (if ss
-    (while (and (< i (sslength ss)) (null verts))
-      (setq e  (ssname ss i)
-            vs (pf:poly-verts e))
-      (if (and vs (> (length vs) 1))
-        (progn
-          (setq a (car vs) b (last vs))
-          (if (or (and (pf:pt2d-near a p0 tol) (pf:pt2d-near b pn tol))
-                  (and (pf:pt2d-near a pn tol) (pf:pt2d-near b p0 tol)))
-            (setq verts vs))))
-      (setq i (1+ i))))
-  verts)
+;; pf:find-cl-polyline quarantined to _attic 2026-08-01: cascade -- its only
+;; caller was pf:attach-corridor.  pf:match-twin-ename is the live equivalent
+;; (same endpoint match, returns the ename for filing).
 
-;; (pf:attach-corridor entry) -> (clfile name start end verts)
-(defun pf:attach-corridor (entry / ends verts)
-  (if (setq ends (pf:cl-endpoints (car entry)))
-    (setq verts (pf:find-cl-polyline (car ends) (cadr ends) *pf-corridor*)))
-  (append entry (list verts)))
+;; pf:attach-corridor quarantined to _attic 2026-08-01: its only caller was
+;; pf:get-verts, which left in the same sweep (pfa:build-lines matches twins
+;; through pfa:twin-get / pf:match-twin-ename instead).
 
 ;; (pf:match-twin-ename p0 pn tol) -> ename | nil
 ;;   The drawn LWPOLYLINE/LINE/POLYLINE whose two ENDS match the .cl termini
@@ -1238,38 +1166,9 @@
 
 ;; ---- geometry reads ------------------------------------------------------
 
-;; (pf:bbox e) -> (minx miny maxx maxy) | nil
-(defun pf:bbox (e / o mn mx r)
-  (setq o (vlax-ename->vla-object e))
-  (setq r (vl-catch-all-apply 'vla-getboundingbox (list o 'mn 'mx)))
-  (if (not (vl-catch-all-error-p r))
-    (progn
-      (setq mn (vlax-safearray->list mn)
-            mx (vlax-safearray->list mx))
-      (list (car mn) (cadr mn) (car mx) (cadr mx)))))
-
-;; (pf:text-pos ed) -> insertion point honoring justification
-(defun pf:text-pos (ed / j1 j2)
-  (setq j1 (cdr (assoc 72 ed))
-        j2 (cdr (assoc 73 ed)))
-  (if (and (assoc 11 ed)
-           (or (and j1 (/= j1 0)) (and j2 (/= j2 0))))
-    (cdr (assoc 11 ed))
-    (cdr (assoc 10 ed))))
-
-;; (pf:ss->list ss) -> list of enames
-(defun pf:ss->list (ss / i out)
-  (setq out '() i 0)
-  (if ss
-    (while (< i (sslength ss))
-      (setq out (cons (ssname ss i) out) i (1+ i))))
-  (reverse out))
-
-(defun pf:on-layer-p (e la)
-  (= (strcase (cdr (assoc 8 (entget e)))) (strcase la)))
-
-(defun pf:filter-layer (ents la)
-  (vl-remove-if-not '(lambda (e) (pf:on-layer-p e la)) ents))
+;; pf:bbox / pf:text-pos / pf:ss->list / pf:filter-layer / pf:on-layer-p
+;; quarantined to _attic 2026-08-01 (no callers -- pftools-lib is the engine,
+;; not a toolbox; on-layer-p's only caller was filter-layer).
 
 ;;; --------------------------------------------------------------------------
 ;;; THE TOP-OF-GRID PROBE  (distinct, named; the only probe in the suite)
@@ -1322,15 +1221,13 @@
 ;; independent (read-line normalizes CRLF); certain, not probabilistic.
 ;;
 ;; ---- The memo in front of it ---------------------------------------------
-;; "~free on the few-KB .cl/.pro files" was true per call and wrong per RUN:
-;; pf:checksum-read walks every byte in interpreted LISP.  PFLABEL's gather
-;; checksums EVERY registry .cl on every run -- 47 full file reads on a real
-;; job -- purely to conclude that nothing changed.  The stat probe below is
-;; O(1) and answers the same question.
-;;
-;; CAVEAT: a file edited in place preserving BOTH mtime and size reads from
-;; the memo.  Session-scoped (cleared by a reload), and the content walk is
-;; still what fills it, so GEOM's self-validation is unchanged in kind.
+;; The content walk is ~free per call and expensive per RUN: it walks every byte
+;; in interpreted LISP, and PFLABEL's gather checksums EVERY registry .cl on
+;; every run -- 47 full file reads on a real job -- purely to conclude that
+;; nothing changed.  The stat probe below is O(1) and answers the same question.
+;; CAVEAT: a file edited in place preserving BOTH mtime and size reads from the
+;; memo.  Session-scoped, and the content walk still fills it, so GEOM's
+;; self-validation is unchanged in kind.
 (setq *pf-cksum-cache* '())        ; (path systime size checksum)*
 
 ;; (pf:checksum-file file) -> "a-b-n" | nil    memoised on (path, mtime, size)

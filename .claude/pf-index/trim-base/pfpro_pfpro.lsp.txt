@@ -1,0 +1,270 @@
+(defun pfpro:refuse (msg)
+  (prompt (strcat "\n  REFUSED: " msg))
+  nil)
+(defun pfpro:verts (e / ed typ flg ext out bulge v vd)
+  (setq ed  (entget e)
+        typ (cdr (assoc 0 ed))
+        ext (cdr (assoc 210 ed))
+        flg (cdr (assoc 70 ed)))
+  (if (null flg) (setq flg 0))
+  (cond
+    ((not (member typ '("LWPOLYLINE" "POLYLINE")))
+     (pfpro:refuse (strcat "that is a " typ
+                           " -- pick the POLYLINE that draws the profile.")))
+    ((and ext (not (equal ext '(0.0 0.0 1.0) 1e-8)))
+     (pfpro:refuse
+       (strcat "that polyline has an extrusion direction -- it is not in the "
+               "world XY plane, so its vertices are not station/elevation.")))
+    ((/= 0 (logand flg 1))
+     (pfpro:refuse
+       (strcat "that polyline is CLOSED.  A profile runs once from low station "
+               "to high; closed, it doubles back on itself.")))
+    ((/= 0 (logand flg 2))
+     (pfpro:refuse
+       (strcat "that polyline is CURVE-FIT.  Every .pro vertex is an invert, "
+               "and fitted vertices would invent structures.  Decurve it.")))
+    ((/= 0 (logand flg 4))
+     (pfpro:refuse
+       (strcat "that polyline is SPLINE-FIT.  Every .pro vertex is an invert, "
+               "and spline vertices would invent structures.  Decurve it.")))
+    ((/= 0 (logand flg 16))
+     (pfpro:refuse "that is a polygon mesh, not a profile polyline."))
+    ((/= 0 (logand flg 64))
+     (pfpro:refuse "that is a polyface mesh, not a profile polyline."))
+    (T
+     (setq out '() bulge nil)
+     (cond
+       ((= typ "LWPOLYLINE")
+        (foreach d ed
+          (cond
+            ((= (car d) 10) (setq out (cons (list (cadr d) (caddr d)) out)))
+            ((and (= (car d) 42) (not (equal (cdr d) 0.0 1e-8)))
+             (setq bulge T)))))
+       (T
+        (setq v (entnext e))
+        (while (and v (setq vd (entget v)) (= (cdr (assoc 0 vd)) "VERTEX"))
+          (if (and (assoc 42 vd) (not (equal (cdr (assoc 42 vd)) 0.0 1e-8)))
+            (setq bulge T))
+          (setq out (cons (pf:pt2 (cdr (assoc 10 vd))) out)
+                v   (entnext v)))))
+     (setq out (reverse out))
+     (cond
+       (bulge
+        (pfpro:refuse
+          (strcat "that polyline has an ARC segment (a bulge).  A .pro is "
+                  "straight runs between vertices, and each vertex is an "
+                  "invert -- densifying the arc would invent structures.")))
+       ((< (length out) 2)
+        (pfpro:refuse "that polyline has fewer than 2 vertices."))
+       (T out)))))
+(defun pfpro:pick (role / sel done res)
+  (setq done nil res nil)
+  (while (not done)
+    (setq sel (entsel (strcat "\nSelect polyline to write " role
+                              " profile from: (Enter to cancel): ")))
+    (if (null sel)
+      (setq done T)
+      (setq res (car sel) done T)))
+  res)
+(defun pfpro:left-end (pts / a b)
+  (setq a (car pts) b (last pts))
+  (if (<= (car a) (car b)) a b))
+(defun pfpro:owner (pts / p px py best bestd copies any ins d)
+  (setq p      (pfpro:left-end pts)
+        px     (car  p)
+        py     (cadr p)
+        best   nil
+        bestd  nil
+        copies 0
+        any    nil)
+  (foreach a (pfa:all-anchors)
+    (setq any T
+          ins (cdr (assoc 10 (entget a))))
+    (if (and ins (<= (car ins) px) (<= (cadr ins) py))
+      (if (pfa:copy-p a)
+        (setq copies (1+ copies))
+        (progn
+          (setq d (distance (list px py) (list (car ins) (cadr ins))))
+          (if (or (null bestd) (< d bestd))
+            (setq best a bestd d))))))
+  (cond
+    (best best)
+    ((> copies 0)
+     (pfpro:refuse
+       (strcat "the nearest grid to that polyline is a COPIED anchor.  A copy "
+               "never resolves -- its ledger is a clone -- so binding a .pro to "
+               "it would write where nothing reads.  PFREMOVE the copy, then "
+               "PFSETUP that grid properly.")))
+    ((null any)
+     (pfpro:refuse
+       (strcat "there are no registered grids in this drawing, so there is no "
+               "station/elevation transform to read that polyline with.  Run "
+               "PFSETUP first.")))
+    (T
+     (pfpro:refuse
+       (strcat "no registered grid lies below-left of that polyline's left end, "
+               "so there is no station/elevation transform to read it with.  "
+               "Check that it was drawn inside its grid, not beside it.")))))
+(defun pfpro:map-verts (pts xf)
+  (mapcar '(lambda (p)
+             (cons (pf:profile-x->station (car  p) xf)
+                   (pf:y->elev           (cadr p) xf)))
+          pts))
+(defun pfpro:orient (verts / asc desc prev bad)
+  (setq asc T desc T prev (car verts))
+  (foreach v (cdr verts)
+    (if (<= (car v) (car prev)) (setq asc  nil))
+    (if (>= (car v) (car prev)) (setq desc nil))
+    (setq prev v))
+  (cond
+    (asc  verts)
+    (desc (reverse verts))
+    (T
+     (setq prev (car verts) bad nil)
+     (foreach v (cdr verts)
+       (if (and (null bad) (<= (car v) (car prev)))
+         (setq bad (list (car prev) (car v))))
+       (setq prev v))
+     (pfpro:refuse
+       (if (equal (car bad) (cadr bad) 1e-6)
+         (strcat "that polyline has two vertices at station "
+                 (pf:fmt-station (car bad))
+                 " -- a vertical segment.  A .pro holds one elevation per "
+                 "station; a structure drop is drawn as the short run between "
+                 "its two vertices, never as a vertical drop.")
+         (strcat "that polyline does not run monotonically along the station "
+                 "axis -- it goes from " (pf:fmt-station (car bad))
+                 " back to " (pf:fmt-station (cadr bad))
+                 ".  Fix the polyline; sorting it here would launder a "
+                 "drafting fault into a plausible .pro."))))))
+(defun pfpro:check-range (verts clfile / rng s0 s1 p0 p1)
+  (setq p0 (car (car verts))
+        p1 (car (last verts))
+        rng (pf:cl-range clfile))
+  (cond
+    ((null rng)
+     (prompt (strcat "\n  Warning: could not read the station range of "
+                     (vl-filename-base clfile)
+                     ".cl -- writing without the range check."))
+     T)
+    (T
+     (setq s0 (car rng) s1 (cadr rng))
+     (cond
+       ((or (< p1 s0) (> p0 s1))
+        (pfpro:refuse
+          (strcat "the mapped stations (" (pf:fmt-station p0) " to "
+                  (pf:fmt-station p1) ") fall entirely OUTSIDE "
+                  (vl-filename-base clfile) ".cl (" (pf:fmt-station s0)
+                  " to " (pf:fmt-station s1)
+                  ").  Check STA0 on the anchor -- re-run PFSETUP in Edit mode.")))
+       ((or (< p0 s0) (> p1 s1))
+        (prompt (strcat "\n  Warning: the profile runs "
+                        (pf:fmt-station p0) " to " (pf:fmt-station p1)
+                        ", past the ends of " (vl-filename-base clfile)
+                        ".cl (" (pf:fmt-station s0) " to "
+                        (pf:fmt-station s1) ").  Writing anyway."))
+        T)
+       (T T)))))
+(defun pfpro:filename (clfile role / base pos)
+  (setq base (vl-filename-base clfile)
+        pos  (vl-string-search "_" base))
+  (strcat (pf:type-of clfile)
+          (if pos (substr base (1+ pos)) "")
+          "_" (strcase role) ".pro"))
+(defun pfpro:dest-dir ( / d)
+  (if (setq d (pfset:get-company-dir "pro"))
+    (strcat (vl-string-right-trim "\\/" d) "\\")))
+(defun pfpro:write (file verts / f)
+  (if (null (setq f (open file "w")))
+    (progn
+      (prompt (strcat "\n  Could not open " file " for writing."))
+      nil)
+    (progn
+      (foreach v verts
+        (write-line (strcat (rtos (car v) 2 4) ","
+                            (rtos (cdr v) 2 4) ",0.0")
+                    f))
+      (write-line "0,0,0" f)
+      (write-line "1" f)
+      (close f)
+      T)))
+(defun pfpro:bind (anchor role path / files inv top tine tind mat invck topck ck)
+  (setq files (pfa:files-get anchor)
+        inv   (cdr (assoc 1   files))
+        top   (cdr (assoc 2   files))
+        tine  (cdr (assoc 3   files))
+        tind  (cdr (assoc 4   files))
+        mat   (cdr (assoc 5   files))
+        invck (cdr (assoc 300 files))
+        topck (cdr (assoc 301 files))
+        ck    (pf:checksum-file path))
+  (if (= (strcase role) "INV")
+    (setq inv path invck ck)
+    (setq top path topck ck))
+  (pfa:files-put anchor inv invck top topck tine tind mat)
+  (princ))
+(defun pfpro:run (role / e pts anchor xf clfile verts name dir file exists ok)
+  (cond
+    ((null (setq e (pfpro:pick role)))
+     (prompt (strcat "\nPFPRO" role " cancelled.")))
+    ((null (setq pts (pfpro:verts e))))
+    ((null (setq anchor (pfpro:owner pts))))
+    ((null (setq xf (pfa:anchor->xform anchor)))
+     (prompt (strcat "\n  REFUSED: " (pfa:anchor-title anchor)
+                     " has an unreadable transform (STA0 / DATUM / HPLOT / "
+                     "VPLOT).  Re-run PFSETUP in Edit mode.")))
+    ((null (setq clfile (pf:xf-get 'clfile xf)))
+     (prompt (strcat "\n  REFUSED: " (pfa:anchor-title anchor)
+                     " has no .cl bound, and the .pro name is derived from it.  "
+                     "Bind the centerline in PFSETUP first.")))
+    ((null (setq verts (pfpro:orient (pfpro:map-verts pts xf)))))
+    ((null (pfpro:check-range verts clfile)))
+    (T
+     (prompt (strcat "\n  Grid:  " (pfa:anchor-title anchor)
+                     "   (" (vl-filename-base clfile) ".cl, STA0 "
+                     (pf:fmt-station (pf:xf-sta0 xf)) ", datum "
+                     (rtos (pf:xf-datum xf) 2 2) ", H:"
+                     (rtos (pf:xf-hplot xf) 2 0) " V:"
+                     (rtos (pf:xf-vplot xf) 2 0) ")"))
+     (prompt (strcat "\n  " (itoa (length verts)) " vertices, "
+                     (pf:fmt-station (car (car verts))) " to "
+                     (pf:fmt-station (car (last verts))) ", elev "
+                     (rtos (cdr (car verts)) 2 2) " to "
+                     (rtos (cdr (last verts)) 2 2) "."))
+     (setq name (pfpro:filename clfile role)
+           dir  (pfpro:dest-dir))
+     (if (null dir)
+       (setq file (getfiled (strcat "Write " role " profile") name "pro" 1)
+             ok   (if file T nil))
+       (progn
+         (setq file   (strcat dir name)
+               exists (findfile file)
+               ok     (if exists
+                        (pfset:confirm
+                          (strcat "Overwrite " name "?")
+                          (list (strcat "Already in " dir)
+                                "Anything reading it (PFINVERT, PFXLABEL,"
+                                "PFREPORT) will see the new inverts."))
+                        T))))
+     (cond
+       ((null file) (prompt (strcat "\nPFPRO" role " cancelled -- no file chosen.")))
+       ((null ok)   (prompt (strcat "\nPFPRO" role " cancelled -- "
+                                    name " left as it was.")))
+       ((null (pfpro:write file verts)))
+       (T
+        (prompt (strcat "\n\nWrote " (itoa (length verts)) " vertices to " file))
+        (pf:undo-begin '*pfs-undo-open*)
+        (pfpro:bind anchor role file)
+        (pf:undo-end '*pfs-undo-open*)
+        (prompt (strcat "\n  Bound to " (pfa:anchor-title anchor) " as its "
+                        role " profile.  (One U reverses the binding, not the "
+                        "file.)"))))))
+  (princ))
+(defun pfpro:cmd-inv ( / ) (pfpro:run "INV"))
+(defun pfpro:cmd-top ( / ) (pfpro:run "TOP"))
+(defun c:PFPROINV ()
+  (pf:run-command "PFPROINV" nil 'pfpro:cmd-inv))
+(defun c:PFPROTOP ()
+  (pf:run-command "PFPROTOP" nil 'pfpro:cmd-top))
+(princ "\npfpro.lsp loaded (.pro from a profile polyline).  Commands: PFPROINV, PFPROTOP.")
+(princ)

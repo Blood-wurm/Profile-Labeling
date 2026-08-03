@@ -26,14 +26,12 @@
 ;;; SECTION 1  --  The placement record  (seeds / validate / remember /
 ;;;                prompts) + the pfsetup_main dialog wiring
 ;;; ==========================================================================
-;;; d-cl / d-pro / d-tin / d-res live in pfs:show-dialog and are reached by
-;;; the action callbacks via dynamic scope while start_dialog runs.
-;;;
-;;; The record (the `res` alist) is the unit every writer below consumes, and
-;;; the modal is only ONE way to build one.  Everything that used to be a side
-;;; effect of the dialog -- the seed chain, the refusal cascade, the session
-;;; memory -- lives out here so a record built anywhere else gets the same
-;;; treatment.  pfs:show-dialog fills a record; it no longer decides anything.
+;;; d-cl / d-pro / d-tin / d-res live in pfs:show-dialog and are reached by the
+;;; action callbacks via dynamic scope while start_dialog runs.
+;;; The record (the `res` alist) is the unit every writer below consumes, and the
+;;; modal is only ONE way to build one.  The seed chain, the refusal cascade and
+;;; the session memory live out here so a record built anywhere else gets the
+;;; same treatment.  pfs:show-dialog fills a record; it decides nothing.
 
 (defun pfs:file-display (f)
   (strcat (vl-filename-base f) (vl-filename-extension f)))
@@ -316,15 +314,12 @@
 
 ;; (pfs:remember res) -> nil
 ;;   The three session-memory effects of a CONFIRMED record: the scales become
-;;   the next placement's defaults, the material is remembered per type, and
-;;   the datum seeds the next prompt.
-;;
-;;   These were side effects of the modal closing.  That was invisible while
-;;   the modal was the only way in -- but a record built anywhere else would
-;;   have stopped updating them SILENTLY, leaving every default frozen at the
-;;   last time someone used the dialog.  Called from pfs:complete-res, at the
-;;   same point in the flow the dialog used to do it: input confirmed, before
-;;   the extent picks.
+;;   the next placement's defaults, the material is remembered per type, and the
+;;   datum seeds the next prompt.
+;;   Out here rather than inside the modal, because a record built anywhere else
+;;   would stop updating them SILENTLY, freezing every default at the last time
+;;   someone used the dialog.  Called from pfs:complete-res, at the same point in
+;;   the flow the dialog used to do it: input confirmed, before the extent picks.
 (defun pfs:remember (res / ty mat)
   (setq ty  (strcase (cdr (assoc 'type res)))
         mat (cdr (assoc 'material res)))
@@ -457,16 +452,15 @@
 
 ;;; ---- late .pro binding (Refresh re-checks an already-registered line) ----
 ;;; A grid is routinely registered BEFORE its profiles exist -- the .cl lands
-;;; first and the _INV/_TOP pair is cut later.  Without this, that pair stays
-;;; invisible forever: AUTO's idempotence used to mean "already known = skip
-;;; entirely", so Refresh re-scanned only for NEW names.
-;;;
-;;; The rule is FILL-EMPTY-ONLY, in both stores: a slot that is already bound
-;;; is never overwritten and never re-pointed, even if a different file now
-;;; matches the naming convention.  Refresh therefore cannot silently undo a
-;;; deliberate binding made in the setup/Edit dialog -- rebinding an occupied
-;;; slot stays that dialog's job.  Filling an empty one is exactly what first
-;;; registration would have done, so it guesses nothing new.
+;;; first and the _INV/_TOP pair is cut later.  Without this that pair stays
+;;; invisible forever, because AUTO's idempotence meant "already known = skip
+;;; entirely" and Refresh re-scanned only for NEW names.
+;;; The rule is FILL-EMPTY-ONLY, in both stores: a bound slot is never
+;;; overwritten and never re-pointed, even if a different file now matches the
+;;; naming convention.  Refresh therefore cannot silently undo a deliberate
+;;; binding made in the setup/Edit dialog -- rebinding an occupied slot stays
+;;; that dialog's job.  Filling an empty one is what first registration would
+;;; have done, so it guesses nothing new.
 
 ;; (pfs:rebind-stub ty nm stub proDir) -> 1 if a slot was filled, else 0
 (defun pfs:rebind-stub (ty nm stub proDir / inv top ninv ntop)
@@ -657,7 +651,7 @@
 ;;   *pfs-preset-res* when a caller supplied one.  Promotion deletes the stub
 ;;   under its ORIGINAL key, so an identity override re-keys cleanly.
 (defun pfs:place-one (stub / init pro preset vmsg res ty nm cl rng pts ll tr
-                       datum xf anchor notes r)
+                       datum xf anchor notes idx r)
   (setq init '())
   (if stub
     (progn
@@ -711,14 +705,27 @@
         (pf:cl-geom cl T)                          ; in-group: filing allowed
         (pfa:twin-put cl (pf:cl-twin-handle cl *pf-corridor*)) ; file the drawn twin
         (setq notes (pfs:bind-files anchor res))
-        ;; a brand-new anchor has run no pass at all: all three UNCHECKED
-        (pfa:status-reset anchor '("LABEL" "INVERT" "XING") notes)
+        ;; a brand-new anchor has run no pass at all: both UNCHECKED
+        ;; (STATUS_XING retired 2026-08-01, DATA-FLOW §4.1)
+        (pfa:status-reset anchor '("LABEL" "INVERT") notes)
         (if stub (pfa:stub-del (car stub) (cadr stub)))
+        ;; DATA-FLOW §6 (decided 2026-08-01): registration REPAIRS the
+        ;; membership index in-group -- absent records only; stale ones are
+        ;; the engine top-up's or PFINDEX Build's to refresh.
+        (setq idx (pfa:index-repair))
         (pf:undo-end '*pfs-undo-open*)
         (prompt (strcat "\n  Anchored.  Sta " (pf:fmt-station (car rng))
                         " to " (pf:fmt-station (cadr rng))
                         ", datum " (rtos datum 2 2)
                         ".  (One U reverses this grid.)"))
+        (if idx
+          (prompt (strcat "\n  Index: " (itoa (car idx))
+                          " structure(s) newly indexed"
+                          (if (> (nth 3 idx) 0)
+                            (strcat ", " (itoa (nth 3 idx))
+                                    " stale (PFINDEX Build refreshes)")
+                            "")
+                          ".")))
         (foreach r notes (prompt (strcat "\n  NOTE: " r)))
         anchor)))))
 
@@ -733,7 +740,7 @@
   (setq out '() new-cl (cdr (assoc 'cl res)))
   (if (or (null old-cl) (= old-cl "")
           (/= (pf:cl-id old-cl) (pf:cl-id new-cl)))
-    (setq out '("LABEL" "XING")))
+    (setq out '("LABEL")))          ; STATUS_XING retired 2026-08-01 (§4.1)
   (setq files   (pfa:files-get anchor)
         old-inv (if (and files (assoc 1 files)) (cdr (assoc 1 files)) ""))
   (foreach r (cdr (assoc 'pro res))
@@ -796,7 +803,7 @@
 
 ;; (pfs:edit-one anchor) -> nil
 (defun pfs:edit-one (anchor / init preset vmsg res at old-cl rm pts ed ins ext
-                      xs ys datum xf notes touched r)
+                      xs ys datum xf notes touched idx r)
   (prompt (strcat "\nEditing " (pfa:anchor-title anchor) "."))
   (foreach r (pfa:corner-check anchor)
     (prompt (strcat "\n  DRIFT: " r)))
@@ -877,8 +884,16 @@
               (setq touched (pfs:touched-passes anchor old-cl res)
                     notes   (pfs:bind-files anchor res))
               (pfa:status-reset anchor touched notes)
+              ;; DATA-FLOW §6: repair the membership index in-group -- a
+              ;; re-bound .cl changes the roster, so absent records get filed
+              ;; against the NEW stamp; stale ones wait for top-up/Build.
+              (setq idx (pfa:index-repair))
               (pf:undo-end '*pfs-undo-open*)
               (prompt "\n  Updated in place (ledger preserved; status UNCHECKED).")
+              (if (and idx (> (+ (car idx) (nth 3 idx)) 0))
+                (prompt (strcat "\n  Index: " (itoa (car idx))
+                                " structure(s) newly indexed, " (itoa (nth 3 idx))
+                                " stale (PFINDEX Build refreshes).")))
               (foreach r notes (prompt (strcat "\n  NOTE: " r))))))))))))
 
 

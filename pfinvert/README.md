@@ -86,7 +86,7 @@ bracket), `pfi:lateral-info`, `pfi:endpoint-hits`, `pfi:inv-row`,
 **Signature changes 2026-07-29.** `pfi:process-structure` takes
 `(block-ename mates context)` — mates are the other blocks of a merged node.
 `pfi:lateral-info` returns `(clfile (role elev size) ...)` instead of
-`(elev size clfile)`; role is `'IO` | `'II`. `pfi:prim-size` is now
+`(elev size clfile)`; role is `'IO` | `'II`. The old prim-size helper became
 `pfi:size-at` (it serves shared lines too). All four are file-local.
 
 **The ticket carries the work, 2026-07-27.** `pfi:rd-sel` / `pfi:rd-all`

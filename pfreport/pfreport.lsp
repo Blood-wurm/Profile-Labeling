@@ -102,7 +102,10 @@
 ;;;   dn-node up-node                           (indices into the node table)
 ;;; Identity is `idx`, never list identity -- every stamp returns a new list.
 ;;;
-;;; NODE (a structure, in the node table): (xy id sta line rim)
+;;; NODE (a structure, in the node table): (xy id sta line rim blk)
+;;;   `blk` is the structure's block name.  Nothing on the .stm path reads it;
+;;;   it rides here so PF2SEW can map a structure to a Carlson library entry
+;;;   without re-resolving the block.
 
 (defun pfr:g (key p) (cdr (assoc key p)))
 
@@ -116,6 +119,7 @@
 (defun pfr:nd-sta  (nd) (nth 2 nd))
 (defun pfr:nd-line (nd) (nth 3 nd))
 (defun pfr:nd-rim  (nd) (nth 4 nd))
+(defun pfr:nd-blk  (nd) (nth 5 nd))     ; block name -- PF2SEW only
 
 
 ;;; ==========================================================================
@@ -298,6 +302,8 @@
 ;;   the plan point THERE -- this is what the graph matches on, never the
 ;;   pipe-end vertices, which sit half a structure away on each side -- its
 ;;   PFLABEL combined ID, and its rim elevation read off the sheet.
+;;   'blk is the structure's BLOCK NAME, carried for PF2SEW's type mapping.
+;;   Nothing on the .stm path reads it; pfr:record never touches it.
 (defun pfr:node-of (grp clfile pending lines index band xf allstas
                     / mid xy st sta id rim)
   (setq mid (pfr:grp-mid grp)
@@ -309,6 +315,7 @@
   (list (cons 'sta mid)
         (cons 'xy  xy)
         (cons 'id  id)
+        (cons 'blk (if st (caddr st)))
         (cons 'rim (car rim))
         (cons 'why (if (car rim) nil (cdr rim)))))
 
@@ -329,7 +336,10 @@
         verts   (pf:pro-verts inv)
         grps    (if verts (pfr:groups verts))
         band    (pfr:band-texts texts xf)
-        pending (pfa:pending inlets lines name)
+        ;; pfa:pend-for, not pfa:pending (DATA-FLOW §4.2, 2026-08-01): the run
+        ;; iterates candidates, so the direct call re-walked inlets x lines
+        ;; once per line where the memo serves repeats from one walk.
+        pending (pfa:pend-for name lines inlets)
         allstas (mapcar 'car pending))
   (cond
     ((null verts)
@@ -444,15 +454,15 @@
       (if (null idx)
         (setq tbl (append tbl (list (list (pfr:g 'xy nd) (pfr:g 'id nd)
                                           (pfr:g 'sta nd) (pfr:g 'line p)
-                                          (pfr:g 'rim nd)))))
+                                          (pfr:g 'rim nd) (pfr:g 'blk nd)))))
         (progn                                  ; merge what this line knows
           (setq e (nth idx tbl))
           (if (and (= (pfr:nd-id e) "") (/= (pfr:g 'id nd) ""))
-            (setq e (list (pfr:nd-xy e) (pfr:g 'id nd) (pfr:nd-sta e)
-                          (pfr:nd-line e) (pfr:nd-rim e))))
+            (setq e (pfr:set-nth 1 (pfr:g 'id nd) e)))
           (if (and (null (pfr:nd-rim e)) (pfr:g 'rim nd))
-            (setq e (list (pfr:nd-xy e) (pfr:nd-id e) (pfr:nd-sta e)
-                          (pfr:nd-line e) (pfr:g 'rim nd))))
+            (setq e (pfr:set-nth 4 (pfr:g 'rim nd) e)))
+          (if (and (null (pfr:nd-blk e)) (pfr:g 'blk nd))
+            (setq e (pfr:set-nth 5 (pfr:g 'blk nd) e)))
           (setq tbl (pfr:set-nth idx e tbl)))))
     (setq p   (pfr:p 'idx i p)
           p   (pfr:p 'dn-node (pfr:node-index tbl (pfr:g 'xy (pfr:g 'dn-nd p))) p)

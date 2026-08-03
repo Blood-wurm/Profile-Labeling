@@ -54,19 +54,14 @@
 ;;   each (edge-sta . elev) or nil.  Two adjacent vertices a structure-width
 ;;   apart form a normal structure (both set): of that pair the LOWER is the
 ;;   outgoing pipe, so direction is self-determining from elevation.
-;;
 ;;   A polyline ENDPOINT whose only neighbour is a full pipe-run away is a
-;;   TERMINUS -- one invert, and the pair rule does not apply to it, because the
-;;   single vertex is the end of a whole pipe rather than one side of a
-;;   structure.  Which end of the RUN it is decides the direction:
+;;   TERMINUS -- one invert, and the pair rule does NOT apply, because the single
+;;   vertex is the end of a whole pipe rather than one side of a structure.
+;;   Which end of the RUN it is decides the direction:
 ;;     high end = the upstream head -- the only pipe LEAVES  -> I.O only
 ;;     low  end = the downstream terminus -- the pipe ARRIVES -> I.I only
-;;   (This was inverted until 2026-07-29: the pair rule had been carried over to
-;;   the terminus, so every profile's head structure read I.I and its downstream
-;;   terminus read I.O.  Comparing against the far END of the profile rather
-;;   than the neighbouring vertex keeps this independent of which way the line
-;;   is stationed.)
-;;
+;;   Compared against the far END of the profile, not the neighbouring vertex,
+;;   which keeps it independent of which way the line is stationed.
 ;;   nil when there are no vertices, or when the nearest vertex is farther from
 ;;   sta than a structure is wide -- that structure has no invert in THIS .pro
 ;;   and must not silently inherit its neighbour's elevation.
@@ -186,19 +181,16 @@
 ;;; ==========================================================================
 
 ;; (pfi:lateral-info hit lines) -> (clfile (role elev size) ...) | (nil . reason)
-;;   hit = (name station) on a NON-primary line.  Resolves that line's
-;;   _INV/_TOP .pro through the registry (anchor first, stub second) and
-;;   BRACKETS its vertices at ITS station -- the same exact-vertex read the
-;;   primary gets, so a shared line's DIRECTION is derived rather than assumed.
-;;   role = 'IO (the pipe leaves this structure) | 'II (it arrives).  A line
-;;   that terminates at the structure yields ONE row, a line that passes
-;;   through yields both, I.O first.
-;;
-;;   Until 2026-07-29 this sampled pf:pipe-at at the station instead and labeled
-;;   every result "I.I."  Both halves were wrong at a shared structure: the
-;;   continuing downstream line LEAVES and owns the I.O, and sampling at a
-;;   junction means sampling at the .pro's own station-range boundary, where
-;;   profile_z returns nil and the row silently vanished.
+;;   hit = (name station) on a NON-primary line.  Resolves that line's _INV/_TOP
+;;   .pro through the registry (anchor first, stub second) and BRACKETS its
+;;   vertices at ITS station -- the same exact-vertex read the primary gets, so a
+;;   shared line's DIRECTION is derived rather than assumed.
+;;   role = 'IO (the pipe leaves this structure) | 'II (it arrives).  A line that
+;;   terminates at the structure yields ONE row; one that passes through yields
+;;   both, I.O first.
+;;   NOT a pf:pipe-at sample: sampling at a junction means sampling at the .pro's
+;;   own station-range boundary, where profile_z returns nil and the row silently
+;;   vanishes.
 (defun pfi:lateral-info (hit lines / entry clfile ty nm sf3 verts br out)
   (setq entry  (pfa:line-loaded-p (car hit) lines)
         clfile (if entry (car entry)))
@@ -230,23 +222,20 @@
                           out)))
         (cons clfile out))))))
 
-;; (pfi:endpoint-hits pt lines seen) -> extra (name station) for same-type
-;;   lines that TERMINATE at this structure -- an endpoint within
-;;   *pfi-junction-tol* of the point -- and are not already in `seen`.  The
-;;   on-line membership (pf:lines-at-point) is tuned for pass-through hits, so a
-;;   lateral joining at its own END (common at the primary's downstream
-;;   structure) slips past it; this recovers those junctions.
-;;
+;; (pfi:endpoint-hits pt lines seen) -> extra (name station) for same-type lines
+;;   that TERMINATE at this structure -- an endpoint within *pfi-junction-tol* of
+;;   the point -- and are not already in `seen`.  On-line membership
+;;   (pf:lines-at-point) is tuned for pass-through hits, so a lateral joining at
+;;   its own END slips past it; this recovers those junctions.
 ;;   TWO STAGES, and the split matters.  The drawn twin's vertices are a cheap
-;;   PROXIMITY filter only -- their order is the drafting direction, which need
-;;   not follow the .cl's stationing, so pairing the first vertex with `lo` (as
-;;   this did until 2026-07-29) reads the invert at the WRONG END of any line
-;;   drawn against its stationing: nil when the .pro does not reach, a plausible
-;;   wrong elevation when it does.  The STATION therefore comes from
-;;   pf:cl-endpoints, which is station-ordered by construction (p0 at lo, pn at
-;;   hi) because it asks cl_location_at_sta for each range end.  A line whose
-;;   authored end is NOT within tolerance contributes nothing, so the station
-;;   this returns is always one the structure actually sits at.
+;;   PROXIMITY filter ONLY -- their order is the drafting direction, which need
+;;   not follow the .cl's stationing, so pairing the first vertex with `lo` reads
+;;   the invert at the WRONG END of any line drawn against its stationing: nil
+;;   when the .pro does not reach, a plausible wrong elevation when it does.
+;;   The STATION therefore comes from pf:cl-endpoints, which is station-ordered
+;;   by construction (p0 at lo, pn at hi).  A line whose authored end is not
+;;   within tolerance contributes nothing, so the station returned is always one
+;;   the structure actually sits at.
 (defun pfi:endpoint-hits (pt lines seen / out pt2d e nm verts lo hi ends
                           p0 pn sta near)
   (setq out  '()
@@ -404,22 +393,21 @@
                         (if ii-row (list ii-row))))
      ;; one shared base Y: lowest invert present minus the text-scaled drop
      ;;
-     ;; UNIFORM GAPS, FAN CENTRED ON THE STATION X (2026-07-29).  PFLABEL's
-     ;; stack is deliberately lopsided -- row 0 left of the station X, the rest
-     ;; right, and the 2 x offset straddle gives pfd:station-line room to run
-     ;; up between them.  PFINVERT draws no station line, so that geometry only
-     ;; produced a first gap a third wider than the rest (visible from three
-     ;; rows up, now the norm at a shared structure) and a fan hanging off to
-     ;; the right of the structure it belongs to.
+     ;; UNIFORM GAPS, FAN CENTRED ON THE STATION X.  PFLABEL's stack is
+     ;; deliberately lopsided -- row 0 left of the station X, the rest right, and
+     ;; the 2 x offset straddle gives pfd:station-line room to run up between
+     ;; them.  PFINVERT draws no station line, so that geometry only produces a
+     ;; first gap a third wider than the rest and a fan hanging off to the right
+     ;; of the structure it belongs to.
      ;;
      ;; pfd:draw-label-stack still does the drawing -- untouched, so PFLABEL is
      ;; untouched.  Two arguments steer it:
      ;;   offset = gapn/2  makes the straddle 2 x offset = gapn, so EVERY
      ;;                    centre-to-centre gap is one gapn;
-     ;;   lineX  = drawX - halfw + gapn/2  slides the whole fan left by half
-     ;;                    its width, which centres it on drawX.
-     ;; halfw is centre-to-outermost-column, so the fan spans drawX +/- halfw
-     ;; and an odd row count puts the middle row exactly on the station X.
+     ;;   lineX  = drawX - halfw + gapn/2  slides the fan left by half its width,
+     ;;                    which centres it on drawX.
+     ;; halfw is centre-to-outermost-column, so the fan spans drawX +/- halfw and
+     ;; an odd row count puts the middle row exactly on the station X.
      ;; Row ORDER is untouched: I.O. still reads leftmost, I.I. rightmost.
      (setq baseY  (- (pf:elev->profile-y (apply 'min elevs) xf)
                      (* ht *pfi-invert-offset-factor*))
@@ -484,18 +472,15 @@
 ;;; ==========================================================================
 
 ;; (pfi:line-min-sta context) -> lowest station of any structure on the primary
-;;   line (across ALL inlets, not just the selected subset), or nil.  This is
-;;   the leftmost structure on the grid -- the one whose stack shifts clear of
-;;   the elevation-axis labels.
-;;
-;;   THE TICKET ALREADY CARRIES THIS.  pfi:rd-sel / pfi:rd-all file the gather's
+;;   line (across ALL inlets, not just the selected subset), or nil.  This is the
+;;   leftmost structure on the grid -- the one whose stack shifts clear of the
+;;   elevation-axis labels.
+;;   THE TICKET ALREADY CARRIES THIS: pfi:rd-sel / pfi:rd-all file the gather's
 ;;   pending list under 'pend, station-sorted ascending, so the minimum is its
 ;;   first station.  Recomputing it was a full inlet x line membership scan --
-;;   every point in it costing a cl_location_at_pt -- to learn one number the
-;;   caller was already holding.  Same fix pflabel:label-all got; PFINVERT never
-;;   received it.  The walk survives ONLY for a caller that hands us a ticket
-;;   with no 'pend (nothing does today, but pfi:run is the documented entry
-;;   point for the palette's deferred command too).
+;;   every point costing a cl_location_at_pt -- to learn a number the caller was
+;;   already holding.  The walk survives ONLY for a caller handing in a ticket
+;;   with no 'pend.
 (defun pfi:line-min-sta (context / pend lines primary inlets best e pt hits ph)
   (if (setq pend (cdr (assoc 'pend context)))
     (caar pend)
@@ -513,13 +498,12 @@
 
 ;; (pfi:merge-nodes pend) -> ((sta ename blkname (mate-ename ...)) ...)
 ;;   ONE STACK PER NODE.  Structures whose stations match within *pfr-node-tol*
-;;   are one shared structure drafted as two or more blocks -- one registered
-;;   per line, which is how a junction is drawn.  Labeled independently they
-;;   produced identical stacks at the same station X and the same base Y,
-;;   superimposed into what looks like a single half-empty label (field report
-;;   2026-07-29: five structures on 'B', two labels on the sheet).  Merged, the
-;;   node draws once and its blocks' memberships are unioned by pfi:node-hits,
-;;   so every line at the node gets its row exactly once.
+;;   are one shared structure drafted as two or more blocks -- one registered per
+;;   line, which is how a junction is drawn.  Labeled independently they produce
+;;   identical stacks at the same station X and base Y, superimposed into what
+;;   looks like a single half-empty label.  Merged, the node draws once and its
+;;   blocks' memberships are unioned by pfi:node-hits, so every line at the node
+;;   gets its row exactly once.
 ;;   Entries keep pfa:pending's (sta ename blkname) shape with the mates
 ;;   appended, so the leader is still (cadr) and the station still (car).
 (defun pfi:merge-nodes (pend / out cur p)

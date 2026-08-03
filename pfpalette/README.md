@@ -31,29 +31,20 @@ handlers, the refresh entry point, and the defer channel:
 
 - `C:PFPALETTE` — toggle; runs `pfp:skin` and `pfp:refresh` after Form-Show.
   **Nothing on the open path sizes the form, and nothing should.**
-  - A `pfp:size-to-design` (`dcl-Form-Resize` to `*pfp-design-size*`, every
-    open) lived here for part of 2026-07-30, against the report that the
-    palette opened too big. **Deleted the same day — it was the wrong layer.**
-    The opening rect is decided by three Studio properties, not one:
-    `Width`/`Height` say what to draw, `Min Width`/`Min Height` are a floor the
-    runtime clamps *up* to, `Max Width`/`Max Height` a ceiling. A form with
-    `Width` 420 and `Min Width` 900 opens at 900 and `Resize(420)` does nothing
-    — which is the exact shape of "verified 420 × 670, still opens too big".
-  - **Settled in Studio 2026-07-30: `Min Width` and `Max Width` are both the
-    palette's own width.** The frame is pinned; there is nothing for a runtime
-    call to set. Note the consequence, which is intended — the palette can no
-    longer be widened by dragging, floating or docked.
-  - **The rule that leaves behind: a form-rect complaint is a Studio answer.**
-    Read `Width`/`Height`, Min and Max together before writing any LISP.
-    **There is no form-size getter** (`dcl-Form-GetWidth` does not exist — it
-    is what killed `PFPREAD` run 1), so LISP cannot even see what it would be
+  - **Fix an opening-size complaint in Studio, not here.** `Min Width`/
+    `Min Height` are a floor the runtime clamps *up* to, so `dcl-Form-Resize`
+    cannot shrink the form. `Min Width` and `Max Width` are both pinned to the
+    palette's own width — the intended consequence being that the palette can no
+    longer be widened by dragging, floating or docked. Full decode in
+    [../pfsuite-odcl/PALETTE-LAYOUT.md](../pfsuite-odcl/PALETTE-LAYOUT.md) §2.
+  - **There is no form-size getter** (`dcl-Form-GetWidth` does not exist — it is
+    what killed `PFPREAD` run 1), so LISP cannot even see the values it would be
     arguing with. `dcl-Form-Resize` survives in `C:PFPSCALE` only, where a
     deliberate temporary override is the point.
-  - `*pfp-design-size*` is `420 × 670`, read off Studio 2026-07-30 (was `900 ×
-    670`, left behind by the 07-28 Registry rework). **`C:PFPSCALE` is now its
-    only reader**, which is what makes a stale copy survivable — every PFPSCALE
-    effect is undone by toggling the palette. Min/Max are not mirrored here at
-    all; they are Studio's alone.
+  - `*pfp-design-size*` is `420 × 670`, mirrored from Studio. **`C:PFPSCALE` is
+    its only reader**, which is what makes a stale copy survivable — every
+    PFPSCALE effect is undone by toggling the palette. Min/Max are not mirrored
+    here at all; they are Studio's alone.
 - `C:PFPRELOAD` — **run after EVERY Studio save.** See Invariants.
 - `pfp:refresh` — THE one data-fill entry point (registry scan → labels +
   **both** trees), error-guarded, modeless-legal (pure reads). Also the single
@@ -486,10 +477,15 @@ handlers, the refresh entry point, and the defer channel:
   `c:pfsuite/pfsPalette/tvwLines#OnSelChanged` (fills metaList +
   lvwLinkage).
 - Internal: `pfp:ensure`, `pfp:seed-labels`, `pfp:fill-tree`,
-  `pfp:sel-row`, `pfp:meta-rows`, `pfp:linkage-files`, `pfp:fill-linkage`,
-  `pfp:file-cell`, `pfp:dash`.
+  `pfp:sel-row`, `pfp:meta-rows`, `pfp:why-rows`, `pfp:linkage-files`,
+  `pfp:fill-linkage`, `pfp:file-cell`, `pfp:dash`.
+- **`pfp:why-rows` (2026-08-01, DATA-FLOW §3.2):** metaList now shows the
+  stored findings sentence under the Checks row — one indented row per
+  finding, only for STALE/FAILING passes, via `pfa:status-why` (pure
+  ledger read, palette-legal). The Checks roll-up counts **2** passes
+  since `STATUS_XING` was retired the same day (§4.1).
 
-### Diagnostics (§6) — built during the 2026-07-27 shakedown
+### Diagnostics (§6)
 
 | Command | Use |
 |---|---|
@@ -508,7 +504,7 @@ labels carried `Foreground Color` -24 and `Font Size` 0.
 Helpers behind them: `pfp:callable-p`, `pfp:selfcheck`, `pfp:try`,
 `pfp:ask`, `pfp:pause`, `pfp:read-ctrl`.
 
-### Native look (§7) — added 2026-07-27
+### Native look (§7)
 
 | Command | Use |
 |---|---|
@@ -525,7 +521,7 @@ restores the defaults: `*pfp-skin-mode*` (`'font` default | `'full` |
 `pfp:may`, `pfp:skin-one`, `pfp:tally`, `pfp:peek`, `pfp:num`,
 `pfp:capture`, `pfp:scale-to`, `pfp:font-at`, `pfp:move-one`.
 
-### Help (§10) — added 2026-07-30
+### Help (§10)
 
 `C:PFPHELP` shows the palette's help page: what each tab is, what anchoring
 means and stores, what each of the three passes finds, and **every status
@@ -670,4 +666,6 @@ the rows; the tables are the only place they live.
   floor is now load-bearing.**
 - .odcl control names are unverifiable statically — **mitigated** by
   `PFPDIAG` (names resolve), though it cannot detect a *duplicate* name.
-  [../Low_Priority_issues.md](../Low_Priority_issues.md) #3.
+  [../pfsuite-md/OPEN-ISSUES.md](../pfsuite-md/OPEN-ISSUES.md), PFPALETTE
+  "duplicate `(Name)` check"; the `PFPDIAG` mitigation itself is recorded in
+  [../pfsuite-md/CLOSED_ISSUES.md](../pfsuite-md/CLOSED_ISSUES.md).

@@ -36,7 +36,7 @@ without OpenDCL), not deleted.
 | Run in CAD | **Yes — milestone 2 shaken down 2026-07-27.** Tree paints immediately, columns survive repeat toggles, footer labels populate, metaList fits without scrolling. |
 | **Gate: deferred fire** | ✅ **PASSED 2026-07-27.** `getpoint` prompted and returned from a palette-queued command, one `U` peeled the work, and the gate refused against a live `PLINE`. `pfp:cmd-idle-p` + `pfp:defer` now live in `pfpalette.lsp` §2. |
 | **Gate: write-free** | ✅ **PASSED 2026-07-27.** Clean drawing 29→29, populated 21→21 (`PFPDBMOD` delta). §5's contract is verified in CAD, not just by inspection. |
-| Engines | `pflabel:run` / `pfi:run` / `pfxl:run` extracted (REFACTOR-PLAN step 1). Called only by their own `C:PF*` so far — no deferred fire yet. |
+| Engines | `pflabel:run` / `pfi:run` / `pfxl:run` extracted. Called only by their own `C:PF*` so far — no deferred fire yet. |
 | Audit | 2026-07-26 full audit; the "Option A" fix batch is applied (§9). |
 
 **Both gates that blocked Phases 2–4 are open.** Remaining before Phase 2 is
@@ -66,7 +66,7 @@ pfsuite/
 ├── pftools-load.lsp     ← the entry point (STAYS AT ROOT; *pftools-dir* = this root)
 ├── pfdialog.dcl         ← shared asset, root (path = *pftools-dir* + name)
 ├── pfsuite.odcl         ← shared asset, root (same reason)
-├── README.md  OPEN-ISSUES.md  TESTING.md  REFACTOR-PLAN.md  …
+├── README.md  OPEN-ISSUES.md  TESTING.md  CLOSED_ISSUES.md  …
 ├── pftools-cfg/   pftools-cfg.lsp  + README.md      1  constants
 ├── pftools-lib/   pftools-lib.lsp  + README.md      2  pure engine
 ├── pfdraw/        pfdraw.lsp       + README.md      3  drawing boundary
@@ -85,7 +85,7 @@ Load order: cfg → lib → draw → anchor → settings → setup → **pro** �
 xlabel → invert → report → palette; a file may only depend on files that load
 before it.
 
-**`pfpro` (2026-07-29, untested in CAD)** is the only command that WRITES a
+**`pfpro` is the only command that WRITES a
 `.pro` — everywhere else in the suite a profile is authored data that is read
 and never drawn. It cuts `Type_Name_INV.pro` / `_TOP.pro` from a polyline the
 drafter drew in a profile grid, using the anchor's own transform inverted
@@ -374,7 +374,7 @@ once commands are queued; the ticket is not. PFXLABEL's equivalent is the
 Engine status: extracted and paren-verified (`pflabel:run`, `pfi:run`,
 `pfxl:run`), byte-identical bodies, **regression gate not yet run** — all
 three commands must produce identical output from the command line before any
-palette wiring (REFACTOR-PLAN).
+palette wiring.
 
 ---
 

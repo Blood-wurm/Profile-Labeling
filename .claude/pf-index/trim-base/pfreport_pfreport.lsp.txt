@@ -1,0 +1,684 @@
+(vl-load-com)
+(setq *pfr-fatal* '())
+(setq *pfr-warn*  '())
+(defun pfr:fatal (msg) (setq *pfr-fatal* (cons msg *pfr-fatal*)) nil)
+(defun pfr:warn  (msg) (setq *pfr-warn*  (cons msg *pfr-warn*))  nil)
+(defun pfr:report ( / m)
+  (foreach m (reverse *pfr-warn*)  (prompt (strcat "\n  NOTE:  " m)))
+  (foreach m (reverse *pfr-fatal*) (prompt (strcat "\n  ERROR: " m)))
+  (princ))
+(defun pfr:set-nth (i v lst / n out e)
+  (setq n 0 out '())
+  (foreach e lst
+    (setq out (cons (if (= n i) v e) out) n (1+ n)))
+  (reverse out))
+(defun pfr:trim-num (s)
+  (if (vl-string-search "." s)
+    (progn
+      (while (and (> (strlen s) 1) (= (substr s (strlen s) 1) "0"))
+        (setq s (substr s 1 (1- (strlen s)))))
+      (if (= (substr s (strlen s) 1) ".")
+        (setq s (substr s 1 (1- (strlen s)))))))
+  (cond
+    ((and (>= (strlen s) 3) (= (substr s 1 3) "-0.")) (strcat "-" (substr s 3)))
+    ((and (>= (strlen s) 2) (= (substr s 1 2) "0."))  (substr s 2))
+    (T s)))
+(defun pfr:num (v / a lead scan dp)
+  (if (not (numberp v)) (setq v 0))
+  (setq v (float v) a (abs v))
+  (cond
+    ((< a 1e-12) "0")
+    (T
+     (if (>= a 1.0)
+       (setq lead (strlen (rtos a 2 0)))
+       (progn
+         (setq scan a lead 0)
+         (while (< scan 0.1) (setq scan (* scan 10.0) lead (1+ lead)))
+         (setq lead (- lead))))
+     (setq dp (max 0 (min 12 (- *pfr-sigfigs* lead))))
+     (pfr:trim-num (rtos v 2 dp)))))
+(defun pfr:q   (s)       (strcat "\"" (if s s "") "\""))
+(defun pfr:kv  (key val) (strcat (pfr:q key) "," (pfr:num val)))
+(defun pfr:kvi (key n)   (strcat (pfr:q key) "," (itoa n)))
+(defun pfr:kvs (key s)   (strcat (pfr:q key) "," (pfr:q s)))
+(defun pfr:kv2 (key a b) (strcat (pfr:q key) "," (pfr:num a) "," (pfr:num b)))
+(defun pfr:kv0 (key)     (strcat (pfr:q key) ",0"))
+(defun pfr:g (key p) (cdr (assoc key p)))
+(defun pfr:p (key val p / cell)
+  (if (setq cell (assoc key p))
+    (subst (cons key val) cell p)
+    (cons (cons key val) p)))
+(defun pfr:nd-xy   (nd) (nth 0 nd))
+(defun pfr:nd-id   (nd) (nth 1 nd))
+(defun pfr:nd-sta  (nd) (nth 2 nd))
+(defun pfr:nd-line (nd) (nth 3 nd))
+(defun pfr:nd-rim  (nd) (nth 4 nd))
+(defun pfr:nd-blk  (nd) (nth 5 nd))
+(defun pfr:xy (clfile sta / r)
+  (setq r (vl-catch-all-apply *pf-road-fn*
+            (list "cl_location_at_sta" clfile sta)))
+  (if (and (not (vl-catch-all-error-p r)) (listp r) (listp (car r)))
+    (list (car (car r)) (cadr (car r)))))
+(defun pfr:norm360 (d)
+  (setq d (rem d 360.0))
+  (if (< d 0.0) (+ d 360.0) d))
+(defun pfr:bearing (dn up / dx dy)
+  (setq dx (- (car up) (car dn))
+        dy (- (cadr up) (cadr dn)))
+  (if (and (equal dx 0.0 1e-9) (equal dy 0.0 1e-9))
+    0.0
+    (- (pfr:norm360 (/ (* 180.0 (atan dy dx)) pi)))))
+(defun pfr:groups (verts / out cur prev v)
+  (setq out '() cur '() prev nil)
+  (foreach v verts
+    (if (or (null prev) (<= (- (car v) (car prev)) *pfi-struct-width-max*))
+      (setq cur (cons v cur))
+      (setq out (cons (reverse cur) out) cur (list v)))
+    (setq prev v))
+  (if cur (setq out (cons (reverse cur) out)))
+  (reverse out))
+(defun pfr:grp-lo  (g) (car g))
+(defun pfr:grp-hi  (g) (last g))
+(defun pfr:grp-mid (g) (* 0.5 (+ (car (pfr:grp-lo g)) (car (pfr:grp-hi g)))))
+(defun pfr:lead-num (s / i n c out started)
+  (setq i 1 n (strlen s) out "" started nil)
+  (while (<= i n)
+    (setq c (substr s i 1))
+    (cond
+      ((pf:digit-p c)          (setq out (strcat out c) started T))
+      ((and started (= c ".")) (setq out (strcat out c)))
+      (started                 (setq i n))
+      ((= c "-")               (setq out "-"))
+      (T                       (setq out "")))
+    (setq i (1+ i)))
+  (if started (atof out)))
+(defun pfr:text-pt (ed / j1 j2)
+  (setq j1 (cdr (assoc 72 ed))
+        j2 (cdr (assoc 73 ed)))
+  (if (and (assoc 11 ed)
+           (or (and j1 (/= j1 0)) (and j2 (/= j2 0))))
+    (cdr (assoc 11 ed))
+    (cdr (assoc 10 ed))))
+(defun pfr:elev-texts ( / ss i ed s pt out p)
+  (setq ss  (ssget "_X" '((0 . "TEXT") (410 . "Model")))
+        out '() i 0)
+  (if ss
+    (while (< i (sslength ss))
+      (setq ed (entget (ssname ss i))
+            s  (cdr (assoc 1 ed))
+            pt (pfr:text-pt ed))
+      (if (and s pt)
+        (foreach p *pfr-elev-prefixes*
+          (if (and (>= (strlen s) (strlen p))
+                   (= (strcase (substr s 1 (strlen p))) p))
+            (setq out (cons (list (car pt) (cadr pt) p
+                                  (pfr:lead-num (substr s (1+ (strlen p))))
+                                  s)
+                            out)))))
+      (setq i (1+ i))))
+  out)
+(defun pfr:band-texts (texts xf / ylo yhi out e)
+  (setq ylo (pf:xf-basey xf)
+        yhi (+ (pf:xf-topy xf) (* *pfr-label-band* (pf:xf-sf xf)))
+        out '())
+  (foreach e texts
+    (if (and (>= (cadr e) ylo) (<= (cadr e) yhi))
+      (setq out (cons e out))))
+  out)
+(defun pfr:rim-at (band xf sta others / x eps best bd e ex d ox s raw)
+  (setq x    (pf:station->profile-x sta xf)
+        eps  (* *pfr-rim-eps-factor* (pf:text-height (pf:xf-hplot xf)))
+        best nil bd nil raw nil)
+  (foreach e band
+    (setq ex (car e) d (abs (- ex x)))
+    (if (<= d eps)
+      (progn
+        (setq ox nil)
+        (foreach s others
+          (if (< (abs (- ex (pf:station->profile-x s xf))) d) (setq ox T)))
+        (if (and (null ox) (or (null bd) (< d bd)))
+          (setq bd d best e raw (nth 4 e))))))
+  (cond
+    ((null best) (cons nil "no elevation label row found at this structure"))
+    ((null (nth 3 best))
+     (cons nil (strcat "the elevation row is still the placeholder (\""
+                       (if raw raw "") "\")")))
+    (T (cons (nth 3 best) (caddr best)))))
+(defun pfr:struct-id (ename lines index / pt hits alpha names ranks)
+  (setq pt    (cdr (assoc 10 (entget ename)))
+        hits  (pfa:lines-at ename pt lines)
+        alpha (pf:sort-line-infos-alpha hits)
+        names (mapcar 'car alpha)
+        ranks (mapcar '(lambda (li)
+                         (pf:rank-on-line (cadr li)
+                                          (cdr (assoc (car li) index))
+                                          *pf-rank-ascending* *pf-range-eps*))
+                      alpha))
+  (if names (pf:combine-id names ranks) ""))
+(defun pfr:struct-at (pending sta / best bd d e)
+  (setq best nil bd nil)
+  (foreach e pending
+    (setq d (abs (- (car e) sta)))
+    (if (and (<= d *pfi-struct-width-max*) (or (null bd) (< d bd)))
+      (setq bd d best e)))
+  best)
+(defun pfr:node-of (grp clfile pending lines index band xf allstas
+                    / mid xy st sta id rim)
+  (setq mid (pfr:grp-mid grp)
+        xy  (pfr:xy clfile mid)
+        st  (pfr:struct-at pending mid)
+        sta (if st (car st) mid)
+        id  (if st (pfr:struct-id (cadr st) lines index) "")
+        rim (pfr:rim-at band xf sta (vl-remove sta allstas)))
+  (list (cons 'sta mid)
+        (cons 'xy  xy)
+        (cons 'id  id)
+        (cons 'blk (if st (caddr st)))
+        (cons 'rim (car rim))
+        (cons 'why (if (car rim) nil (cdr rim)))))
+(defun pfr:line-pipes (r lines index texts inlets
+                       / anchor xf clfile name sf3 inv top mat verts grps
+                         band pending allstas nodes out i n g gk gk1 lo hi
+                         dnv upv dnn upn dnxy upxy mid size pipe nd bad)
+  (setq anchor  (nth 3 r)
+        name    (cadr r)
+        xf      (pfa:anchor->xform anchor)
+        clfile  (pf:xf-get 'clfile xf)
+        sf3     (pfxl:src-files (car r) name)
+        inv     (car sf3)
+        top     (cadr sf3)
+        mat     (caddr sf3)
+        verts   (pf:pro-verts inv)
+        grps    (if verts (pfr:groups verts))
+        band    (pfr:band-texts texts xf)
+        pending (pfa:pend-for name lines inlets)
+        allstas (mapcar 'car pending))
+  (cond
+    ((null verts)
+     (pfr:fatal (strcat "'" name "': the _INV .pro has no readable vertices.")))
+    ((< (length grps) 2)
+     (pfr:fatal (strcat "'" name "': the _INV .pro holds "
+                        (itoa (length grps))
+                        " structure(s) -- no pipe run to export.")))
+    (T
+     (setq nodes '() bad nil)
+     (foreach g grps
+       (setq nodes (cons (pfr:node-of g clfile pending lines index band xf
+                                      allstas)
+                         nodes)))
+     (setq nodes (reverse nodes))
+     (foreach nd nodes
+       (if (null (pfr:g 'xy nd))
+         (progn
+           (pfr:fatal (strcat "'" name "': the .cl returned no plan coordinate "
+                              "at Sta " (pf:fmt-station (pfr:g 'sta nd))
+                              " -- re-bind the .cl with PFSETUP (edit)."))
+           (setq bad T)))
+       (if (pfr:g 'why nd)
+         (pfr:warn (strcat "'" name "' Sta " (pf:fmt-station (pfr:g 'sta nd))
+                           ": " (pfr:g 'why nd) " -- rim exported as 0."))))
+     (if bad
+       nil
+       (progn
+         (setq out '() i 0 n (length grps))
+         (while (< i (1- n))
+           (setq gk   (nth i grps)
+                 gk1  (nth (1+ i) grps)
+                 lo   (pfr:grp-hi gk)
+                 hi   (pfr:grp-lo gk1)
+                 dnv  (if *pfr-sta-upstream* lo hi)
+                 upv  (if *pfr-sta-upstream* hi lo)
+                 dnn  (nth (if *pfr-sta-upstream* i (1+ i)) nodes)
+                 upn  (nth (if *pfr-sta-upstream* (1+ i) i) nodes)
+                 dnxy (pfr:xy clfile (car dnv))
+                 upxy (pfr:xy clfile (car upv))
+                 mid  (* 0.5 (+ (car lo) (car hi)))
+                 size (cdr (pf:pipe-at inv top mid)))
+           (cond
+             ((or (null dnxy) (null upxy))
+              (pfr:fatal (strcat "'" name "': no plan coordinate from the .cl "
+                                 "between Sta " (pf:fmt-station (car lo))
+                                 " and " (pf:fmt-station (car hi)) ".")))
+             (T
+              (if (null size)
+                (pfr:warn (strcat "'" name "' Sta " (pf:fmt-station (car lo))
+                                  " to " (pf:fmt-station (car hi))
+                                  ": no pipe size (no _TOP .pro bound, or it "
+                                  "is unreadable there) -- Rise/Span exported "
+                                  "as 0.")))
+              (setq pipe (list (cons 'line   name)
+                               (cons 'clfile clfile)
+                               (cons 'mat    mat)
+                               (cons 'dn-sta (car dnv))
+                               (cons 'up-sta (car upv))
+                               (cons 'dn-inv (cdr dnv))
+                               (cons 'up-inv (cdr upv))
+                               (cons 'dn-xy  dnxy)
+                               (cons 'up-xy  upxy)
+                               (cons 'dn-nd  dnn)
+                               (cons 'up-nd  upn)
+                               (cons 'size   size)
+                               (cons 'idx    0)
+                               (cons 'no     0)
+                               (cons 'dsno   0)
+                               (cons 'brg    0.0))
+                    out  (cons pipe out))))
+           (setq i (1+ i)))
+         (prompt (strcat "\n  '" name "': " (itoa (length out)) " pipe(s), "
+                         (itoa n) " structure(s)."))
+         (reverse out))))))
+(defun pfr:node-index (tbl xy / i found nd)
+  (setq i 0 found nil)
+  (foreach nd tbl
+    (if (and (null found) (pfr:nd-xy nd) xy
+             (<= (distance (pfr:nd-xy nd) xy) *pfr-node-tol*))
+      (setq found i))
+    (setq i (1+ i)))
+  found)
+(defun pfr:build-nodes (pipes / tbl out p i k nd idx e)
+  (setq tbl '() out '() i 0)
+  (foreach p pipes
+    (foreach k '(dn-nd up-nd)
+      (setq nd  (pfr:g k p)
+            idx (pfr:node-index tbl (pfr:g 'xy nd)))
+      (if (null idx)
+        (setq tbl (append tbl (list (list (pfr:g 'xy nd) (pfr:g 'id nd)
+                                          (pfr:g 'sta nd) (pfr:g 'line p)
+                                          (pfr:g 'rim nd) (pfr:g 'blk nd)))))
+        (progn
+          (setq e (nth idx tbl))
+          (if (and (= (pfr:nd-id e) "") (/= (pfr:g 'id nd) ""))
+            (setq e (pfr:set-nth 1 (pfr:g 'id nd) e)))
+          (if (and (null (pfr:nd-rim e)) (pfr:g 'rim nd))
+            (setq e (pfr:set-nth 4 (pfr:g 'rim nd) e)))
+          (if (and (null (pfr:nd-blk e)) (pfr:g 'blk nd))
+            (setq e (pfr:set-nth 5 (pfr:g 'blk nd) e)))
+          (setq tbl (pfr:set-nth idx e tbl)))))
+    (setq p   (pfr:p 'idx i p)
+          p   (pfr:p 'dn-node (pfr:node-index tbl (pfr:g 'xy (pfr:g 'dn-nd p))) p)
+          p   (pfr:p 'up-node (pfr:node-index tbl (pfr:g 'xy (pfr:g 'up-nd p))) p)
+          out (cons p out)
+          i   (1+ i)))
+  (cons (reverse out) tbl))
+(defun pfr:ds-idx (pipes p / found q)
+  (setq found nil)
+  (foreach q pipes
+    (if (and (null found)
+             (/= (pfr:g 'idx q) (pfr:g 'idx p))
+             (= (pfr:g 'up-node q) (pfr:g 'dn-node p)))
+      (setq found (pfr:g 'idx q))))
+  found)
+(defun pfr:order (pipes nodes / p q outs seen n numbered left keep progress
+                   out d nd)
+  (setq outs '())
+  (foreach p pipes
+    (if (null (pfr:ds-idx pipes p)) (setq outs (cons p outs))))
+  (setq outs (reverse outs))
+  (cond
+    ((null outs)
+     (pfr:fatal "no outfall -- every pipe drains into another one; the selection loops."))
+    ((cdr outs)
+     (pfr:fatal (strcat "the selection is not ONE system: " (itoa (length outs))
+                        " pipes have no downstream neighbour --"))
+     (foreach p outs
+       (setq nd (nth (pfr:g 'dn-node p) nodes))
+       (pfr:fatal
+         (strcat "    '" (pfr:g 'line p) "' at Sta "
+                 (pf:fmt-station (pfr:g 'dn-sta p))
+                 (if (and (pfr:nd-id nd) (/= (pfr:nd-id nd) ""))
+                   (strcat " (" (pfr:nd-id nd) ")") "")
+                 " ends at a structure no other selected pipe leaves.")))))
+  (setq seen '())
+  (foreach p pipes
+    (foreach q pipes
+      (if (and (< (pfr:g 'idx p) (pfr:g 'idx q))
+               (= (pfr:g 'up-node p) (pfr:g 'up-node q))
+               (not (member (pfr:g 'up-node p) seen)))
+        (progn
+          (setq seen (cons (pfr:g 'up-node p) seen))
+          (pfr:fatal (strcat "two pipes leave the same structure: '"
+                             (pfr:g 'line p) "' Sta "
+                             (pf:fmt-station (pfr:g 'up-sta p)) " and '"
+                             (pfr:g 'line q) "' Sta "
+                             (pf:fmt-station (pfr:g 'up-sta q)) "."))))))
+  (if *pfr-fatal*
+    nil
+    (progn
+      (setq numbered '() left pipes n 0 out '() progress T)
+      (while (and left progress)
+        (setq progress nil keep '())
+        (foreach p left
+          (setq d (pfr:ds-idx pipes p))
+          (if (or (null d) (assoc d numbered))
+            (setq n        (1+ n)
+                  numbered (cons (cons (pfr:g 'idx p) n) numbered)
+                  out      (cons (pfr:p 'no n p) out)
+                  progress T)
+            (setq keep (cons p keep))))
+        (setq left (reverse keep)))
+      (cond
+        (left
+         (foreach p left
+           (pfr:fatal (strcat "'" (pfr:g 'line p) "' Sta "
+                              (pf:fmt-station (pfr:g 'dn-sta p))
+                              " never reaches the outfall (disconnected).")))
+         nil)
+        (T
+         (setq out (reverse out))
+         (mapcar '(lambda (x / y)
+                    (setq y (pfr:ds-idx pipes x))
+                    (pfr:p 'dsno (if y (cdr (assoc y numbered)) 0) x))
+                 out))))))
+(defun pfr:bearings (pipes)
+  (mapcar '(lambda (p)
+             (pfr:p 'brg (pfr:bearing (pfr:g 'dn-xy p) (pfr:g 'up-xy p)) p))
+          pipes))
+(defun pfr:node-label (nd)
+  (if (and (pfr:nd-id nd) (/= (pfr:nd-id nd) ""))
+    (pfr:nd-id nd)
+    (strcat "'" (pfr:nd-line nd) "' Sta " (pf:fmt-station (pfr:nd-sta nd)))))
+(defun pfr:validate (pipes nodes / p i nd adverse byline nm cell dn-in out-up
+                      drop)
+  (setq byline '())
+  (foreach p pipes
+    (setq nm   (pfr:g 'line p)
+          cell (assoc nm byline))
+    (if (null cell)
+      (setq byline (cons (list nm 0 0) byline) cell (assoc nm byline)))
+    (setq adverse (<= (pfr:g 'up-inv p) (pfr:g 'dn-inv p)))
+    (setq byline (subst (list nm (1+ (cadr cell))
+                              (+ (caddr cell) (if adverse 1 0)))
+                        cell byline))
+    (if adverse
+      (pfr:warn (strcat "'" nm "' Sta " (pf:fmt-station (pfr:g 'dn-sta p))
+                        " to " (pf:fmt-station (pfr:g 'up-sta p))
+                        ": ADVERSE -- upstream invert "
+                        (rtos (pfr:g 'up-inv p) 2 2)
+                        " is not above downstream "
+                        (rtos (pfr:g 'dn-inv p) 2 2) "."))))
+  (foreach cell byline
+    (if (and (> (cadr cell) 1) (= (cadr cell) (caddr cell)))
+      (pfr:fatal
+        (strcat "'" (car cell) "': EVERY pipe reads adverse.  The station "
+                "direction convention is backwards for this project -- set "
+                "*pfr-sta-upstream* to " (if *pfr-sta-upstream* "nil" "T")
+                " in pftools-cfg.lsp and re-run."))))
+  (setq i 0)
+  (foreach nd nodes
+    (setq out-up nil dn-in nil)
+    (foreach p pipes
+      (if (= (pfr:g 'up-node p) i) (setq out-up (pfr:g 'up-inv p)))
+      (if (and (= (pfr:g 'dn-node p) i)
+               (or (null dn-in) (< (pfr:g 'dn-inv p) dn-in)))
+        (setq dn-in (pfr:g 'dn-inv p))))
+    (if (and out-up dn-in)
+      (progn
+        (setq drop (- dn-in out-up))
+        (cond
+          ((< drop (- *pfr-invert-tol*))
+           (pfr:fatal (strcat "the invert RISES through structure "
+                              (pfr:node-label nd) ": " (rtos dn-in 2 2)
+                              " in, " (rtos out-up 2 2)
+                              " out.  Fix the .pro or the drawing.")))
+          ((> drop *pfr-drop-max*)
+           (pfr:warn (strcat "structure " (pfr:node-label nd) " drops "
+                             (rtos drop 2 2)
+                             " ft -- exported as authored; confirm it is a "
+                             "designed drop structure."))))))
+    (setq i (1+ i)))
+  (princ))
+(setq *pfr-zero-hydrology*
+  '("Known Q = " "Sub Drainage Area 1 = " "Sub Drainage Area 2 = "
+    "Sub Drainage Area 3 = " "Drainage Area = " "Runoff Coeff. = "
+    "Inlet Time = "))
+(setq *pfr-zero-inlet*
+  '("Inlet Length = " "Inlet throat height = " "Grate Opening Area = "
+    "Grate Width = " "Grate Length = " "Known Capacity = " "Gutter Width = "
+    "Gutter Slope = " "Inlet Cross Slope Sw = " "Inlet Cross Slope Sx = "
+    "Inlet Sag = "))
+(defun pfr:nvalue (mat / cell)
+  (if (and mat (setq cell (assoc (strcase mat) *pfr-nvalues*)))
+    (cdr cell)
+    *pfr-nvalue-default*))
+(defun pfr:slope (p / len)
+  (setq len (abs (- (pfr:g 'up-sta p) (pfr:g 'dn-sta p))))
+  (if (< len 1e-9)
+    0.0
+    (* (/ (- (pfr:g 'up-inv p) (pfr:g 'dn-inv p)) len)
+       (if *pfr-slope-percent* 100.0 1.0))))
+(defun pfr:deflection (p pipes / d q)
+  (setq d (pfr:g 'dsno p))
+  (if (= d 0)
+    (pfr:g 'brg p)
+    (progn
+      (setq q (car (vl-member-if '(lambda (x) (= (pfr:g 'no x) d)) pipes)))
+      (if q (- (pfr:g 'brg p) (pfr:g 'brg q)) (pfr:g 'brg p)))))
+(defun pfr:record (p pipes nodes / dn up size rise dnn upn out k)
+  (setq dn   (pfr:g 'dn-xy p)
+        up   (pfr:g 'up-xy p)
+        dnn  (nth (pfr:g 'dn-node p) nodes)
+        upn  (nth (pfr:g 'up-node p) nodes)
+        size (pfr:g 'size p)
+        rise (if size (/ (float size) 12.0) 0.0))
+  (setq out
+    (list
+      (pfr:kvi "Line No. = "            (pfr:g 'no p))
+      (pfr:kvs "Line ID = "             (pfr:g 'line p))
+      (pfr:kvi "Downstream Line No. = " (pfr:g 'dsno p))
+      (pfr:kv2 "X,Y Coord Dn = " (car dn) (cadr dn))
+      (pfr:kv2 "X,Y Coord Up = " (car up) (cadr up))
+      (pfr:kv  "Deflection Angle = "    (pfr:deflection p pipes))
+      (pfr:kv  "Bearing = "             (pfr:g 'brg p))))
+  (foreach k *pfr-zero-hydrology* (setq out (append out (list (pfr:kv0 k)))))
+  (setq out
+    (append out
+      (list
+        (pfr:kv "Line Length = " (abs (- (pfr:g 'up-sta p) (pfr:g 'dn-sta p))))
+        (pfr:kv "Invert Elev Dn = " (pfr:g 'dn-inv p))
+        (pfr:kv "Line Slope = "     (pfr:slope p))
+        (pfr:kv "Invert Elev Up = " (pfr:g 'up-inv p))
+        (pfr:kv "Rise = " rise)
+        (pfr:kv "Span = " rise)
+        (pfr:kv "N-Value = " (pfr:nvalue (pfr:g 'mat p)))
+        (pfr:kvs "Line Type = " *pfr-line-type*)
+        (pfr:kv "Junction Loss Coeff = " *pfr-junction-loss*)
+        (pfr:kv "Ground / Rim Elev Dn = "
+                (if (pfr:nd-rim dnn) (pfr:nd-rim dnn) 0))
+        (pfr:kv "Ground / Rim Elev Up = "
+                (if (pfr:nd-rim upn) (pfr:nd-rim upn) 0))
+        (pfr:kv0 "Junction Type = ")
+        (pfr:kvi "Downstream Inlet No. = " (pfr:g 'dsno p)))))
+  (foreach k *pfr-zero-inlet* (setq out (append out (list (pfr:kv0 k)))))
+  (append out
+    (list (pfr:kvs "Inlet ID = " (pfr:nd-id upn))
+          (pfr:kv0 "Local Inlet Depression = ")
+          (pfr:kv0 "Gutter N-Value = ")
+          (pfr:q "---------------------------------------"))))
+(defun pfr:write (file pipes nodes / f l p)
+  (if (null (setq f (open file "w")))
+    (progn (prompt (strcat "\nCould not open " file " for writing.")) nil)
+    (progn
+      (foreach l *pfr-header*
+        (write-line (pf:subst-token l "<NLINES>" (itoa (length pipes))) f))
+      (write-line (pfr:q "LINE DATA =============================") f)
+      (foreach p pipes
+        (foreach l (pfr:record p pipes nodes) (write-line l f)))
+      (foreach l *pfr-trailer* (write-line l f))
+      (close f)
+      T)))
+(defun pfr:candidates ( / out r cl sf3)
+  (setq out '())
+  (foreach r (pfa:registry)
+    (cond
+      ((not (eq (caddr r) 'ANCHORED))
+       (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
+                       "' is registered but not anchored -- a stub has no grid, so "
+                       "no rim elevations.  Place it with PFSETUP.")))
+      ((null (setq cl (pfa:entry-cl r)))
+       (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
+                       "' has no .cl on record.")))
+      ((null (findfile cl))
+       (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
+                       "' -- .cl on record not found on disk: " cl)))
+      ((null (car (setq sf3 (pfxl:src-files (car r) (cadr r)))))
+       (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
+                       "' has no _INV .pro bound -- every invert comes from it.")))
+      ((null (findfile (car sf3)))
+       (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
+                       "' -- _INV .pro not found on disk: " (car sf3))))
+      (T (setq out (cons r out)))))
+  (reverse out))
+(defun pfr:row (r / sf3)
+  (setq sf3 (pfxl:src-files (car r) (cadr r)))
+  (strcat (pfset:pad (car r) 11)
+          (pfset:pad (cadr r) 14)
+          (pfset:pad (if (cadr sf3) "yes" "NO") 9)
+          (if (caddr sf3) (caddr sf3) "-")))
+(defun pfr:rd-sel ( / s idxs i out)
+  (setq s (get_tile "rp_list"))
+  (if (or (null s) (= s ""))
+    (set_tile "error" "Select the profiles that make up ONE system.")
+    (progn
+      (setq idxs (read (strcat "(" s ")")) out '())
+      (foreach i idxs (setq out (cons (nth i rp-rows) out)))
+      (setq rp-res (reverse out))
+      (done_dialog 1))))
+(defun pfr:rd-all ()
+  (setq rp-res rp-rows)
+  (done_dialog 1))
+(defun pfr:run-dialog (rp-rows / dcl_id rp-res r result)
+  (setq rp-res nil dcl_id (load_dialog (pfset:dcl-file)))
+  (if (< dcl_id 0)
+    (progn (prompt "\nCould not load pfdialog.dcl.") nil)
+    (if (not (new_dialog "pfrpt_run" dcl_id))
+      (progn (unload_dialog dcl_id)
+             (prompt "\nCould not open the export dialog.") nil)
+      (progn
+        (set_tile "rp_title"
+                  "PFREPORT -- Hydraflow Storm Sewers (.stm) export")
+        (start_list "rp_list")
+        (foreach r rp-rows (add_list (pfr:row r)))
+        (end_list)
+        (set_tile "rp_count"
+                  (strcat (itoa (length rp-rows))
+                          " profile(s) ready.  Pick every line in the system."))
+        (set_tile "error" "")
+        (action_tile "rp_sel" "(pfr:rd-sel)")
+        (action_tile "rp_all" "(pfr:rd-all)")
+        (action_tile "cancel" "(done_dialog 0)")
+        (action_tile "help"
+          (strcat "(pfset:help \"Pick the registered profiles that form ONE "
+                  "storm system -- trunk plus every branch.  They must "
+                  "connect: the export stops and names the offender if the "
+                  "picked set is not one network with exactly one outfall."
+                  "\\n\\nPipes, structures, inverts and lengths come from each "
+                  "line's bound _INV .pro; sizes from its _TOP .pro (the "
+                  "Crown column above); plan coordinates from its .cl; rim "
+                  "elevations are READ from the drafter-filled elevation rows "
+                  "PFLABEL drew at the top of the grid.\\n\\nHydrology "
+                  "(areas, runoff C, inlet times, grate geometry) exports "
+                  "ZEROED -- PFTools does not hold it.  Enter it in "
+                  "Hydraflow.\")"))
+        (setq result (vl-catch-all-apply 'start_dialog '()))
+        (unload_dialog dcl_id)
+        (cond
+          ((vl-catch-all-error-p result)
+           (prompt (strcat "\nDialog error: "
+                           (vl-catch-all-error-message result)))
+           nil)
+          ((= result 1) rp-res)
+          (T nil))))))
+(defun pfr:line-table (sel / pairs r cl seen ty)
+  (setq pairs '() seen '())
+  (foreach r sel
+    (if (setq cl (pfa:entry-cl r))
+      (progn
+        (setq pairs (cons (cons cl (cadr r)) pairs)
+              ty    (pf:type-of cl))
+        (if (not (member ty seen))
+          (setq seen  (cons ty seen)
+                pairs (append (reverse (pfa:registry-pairs cl)) pairs))))))
+  (pfa:build-lines (pf:dedupe-pairs (reverse pairs))))
+(defun pfr:default-path (sel / dir)
+  (setq dir (cond ((pfset:root-get)) (T (pfset:dir))))
+  (strcat dir (strcase (car (car sel))) "_" (cadr (car sel))
+          (if (cdr sel) "_SYSTEM" "")))
+(defun pfr:run (sel / lines index inlets texts pipes r built nodes file types)
+  (setq *pfr-fatal* '() *pfr-warn* '())
+  (setq types '())
+  (foreach r sel
+    (if (not (member (car r) types)) (setq types (cons (car r) types))))
+  (if (cdr types)
+    (pfr:warn (strcat "the selection mixes utility types ("
+                      (pf:join (reverse types) ", ")
+                      ") -- confirm these really are one system.")))
+  (prompt "\nBuilding the line table...")
+  (setq lines  (pfr:line-table sel)
+        inlets (pfa:gather-inlets)
+        index  (pflabel:index-stations inlets lines)
+        texts  (pfr:elev-texts))
+  (prompt (strcat "\n" (itoa (length texts))
+                  " elevation label row(s) in model space; "
+                  (itoa (length inlets)) " structure block(s)."))
+  (setq pipes '())
+  (foreach r sel
+    (if (setq built (pfr:line-pipes r lines index texts inlets))
+      (setq pipes (append pipes built))))
+  (cond
+    (*pfr-fatal*
+     (prompt "\n\nPFREPORT ABORTED -- a selected profile could not be read:")
+     (pfr:report))
+    ((null pipes)
+     (prompt "\nNothing to export -- no pipe runs were found.")
+     (pfr:report))
+    (T
+     (setq built (pfr:build-nodes pipes)
+           pipes (car built)
+           nodes (cdr built))
+     (prompt (strcat "\n" (itoa (length pipes)) " pipe(s) across "
+                     (itoa (length nodes)) " structure(s)."))
+     (setq pipes (pfr:order pipes nodes))
+     (cond
+       ((null pipes)
+        (prompt "\n\nPFREPORT ABORTED -- the picked set is not one system:")
+        (pfr:report))
+       (T
+        (setq pipes (pfr:bearings pipes))
+        (pfr:validate pipes nodes)
+        (cond
+          (*pfr-fatal*
+           (prompt "\n\nPFREPORT ABORTED -- fix these first:")
+           (pfr:report))
+          (T
+           (pfr:report)
+           (setq file (getfiled "Export Hydraflow Storm Sewers File"
+                                (pfr:default-path sel) "stm" 1))
+           (cond
+             ((null file) (prompt "\nExport cancelled -- no file chosen."))
+             ((pfr:write file pipes nodes)
+              (prompt (strcat "\n\nWrote " (itoa (length pipes))
+                              " line(s) to " file))
+              (prompt (strcat "\n  Rainfall is NOT PFTools data: this file "
+                              "carries the reference curve \"" *pfr-idf-name*
+                              "\".  Load the project's own IDF in Hydraflow "
+                              "before running hydrology."))
+              (prompt (strcat "\n  Drainage areas, runoff C, inlet times and "
+                              "grate geometry are ZEROED by design."))))))))))
+  (princ))
+(defun pfr:cmd ( / rows sel)
+  (setq rows (pfr:candidates))
+  (if (null rows)
+    (prompt (strcat "\nNo profile is ready to export.  PFREPORT needs an ANCHORED "
+                    "registry entry with both a .cl and an _INV .pro bound -- "
+                    "run PFSETUP."))
+    (progn
+      (setq sel (pfr:run-dialog rows))
+      (if (null sel)
+        (prompt "\nPFREPORT cancelled.")
+        (pfr:run sel))))
+  (princ))
+(defun c:PFREPORT ()
+  (pf:run-command "PFREPORT" nil 'pfr:cmd))
+(defun c:PFR () (c:PFREPORT))
+(princ "\npfreport.lsp loaded (Hydraflow .stm export).  Command: PFREPORT (alias PFR).")
+(princ)

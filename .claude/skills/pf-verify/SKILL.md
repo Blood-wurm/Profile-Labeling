@@ -7,12 +7,26 @@ description: Run the pfsuite static gates after editing any .lsp — paren balan
 
 ## Static gates — run these yourself
 
-```
-bash .claude/skills/pf-verify/pfcheck.sh            # all, ~6s
-bash .claude/skills/pf-verify/pfcheck.sh parens     # or: dupes undefined order dead api
+```powershell
+$s = (Get-Location).Path
+while ($s -and -not (Test-Path "$s\.claude\skills\pf-verify\pfcheck.ps1")) { $s = Split-Path $s -Parent }
+Invoke-Expression (Get-Content -Raw "$s\.claude\skills\pf-verify\pfcheck.ps1")
+pfcheck            # all six gates, ~5s
+pfcheck parens     # or: dupes undefined order dead api
 ```
 
-Exit 0 = pass. Six checks, string- and comment-aware so prose never trips them:
+PowerShell, no bash — this runs on the work machine too. Two things about that
+preamble are load-bearing:
+
+- **Load by content, not by path.** `powershell -File pfcheck.ps1` is blocked
+  outright when execution policy is `Restricted`, the locked-down default.
+  `Invoke-Expression` on the text is not.
+- **Walk up to find it.** The session working directory is `V5/pfsuite`, but
+  the skills live at `V5/.claude`, so a bare `.claude\...` path does not
+  resolve. The loop finds the root from anywhere in the tree.
+
+Returns 0 = pass, 1 = fail, and prints `STATIC GATES: PASS|FAIL` as its last
+line. Six checks, string- and comment-aware so prose never trips them:
 
 1. **paren balance** — per file, reporting the line the outermost unclosed
    form opens at. This is the failure mode of hand-edited AutoLISP and there
@@ -25,7 +39,7 @@ Exit 0 = pass. Six checks, string- and comment-aware so prose never trips them:
    `.claude/pf-index/order-baseline.txt`; the gate reports only *new* ones.
 5. **dead code** — defined but referenced nowhere in .lsp code, action-string
    callbacks, .dcl or .odcl. Advisory (25 today; this is the repo's tracked
-   LOW item in `pfsuite-md/Low_Priority_issues.md`).
+   LOW item — `pfsuite-md/OPEN-ISSUES.md` LOW-6).
 6. **README API drift** — a symbol documented in a module README's
    `## Public API` with no defun behind it.
 
@@ -38,7 +52,7 @@ gets ignored. If a new forward reference is deliberate, **document it in the
 module README first** (the existing four all say "resolved at call time"),
 then append the exact line to the baseline. Never baseline silently.
 
-If you changed a signature, `pf.sh refs <symbol>` (skill `pf-find`) is part of
+If you changed a signature, `pf refs <symbol>` (skill `pf-find`) is part of
 verification, not part of exploration — the static gates check that callers
 exist, not that they pass the right number of arguments.
 

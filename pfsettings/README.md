@@ -25,9 +25,9 @@ don't let them bleed together.
 
 ## Public API
 
-All pure reads/UI unless noted (settings-file writes touch disk, never the
-drawing; `pfset:nod` with create T is the one drawing-write path and is
-just `pfa:nod-dict`).
+All pure reads/UI (settings-file writes touch disk, never the drawing —
+the module has no drawing-write path since its NOD passthrough was
+quarantined 2026-08-01).
 
 **Settings:** `pfset:settings` (auto-loads once), `pfset:put-setting`,
 `pfset:merge`, `pfset:read-settings` / `pfset:write-settings` (disk),
@@ -47,11 +47,11 @@ per-type last-directory memory (dirvar = QUOTED global symbol).
 **Shared dialogs (modal; command context only):** `pfset:dcl-file` (the
 ONE pfdialog.dcl path, off `*pftools-dir*`), `pfset:load-dcl`,
 `pfset:help`, `pfset:pad`, `pfset:confirm title lines` (Yes/No; No is
-default and the Esc path), `pfset:pick-index`, `pfset:pick-from-list`,
-`pfset:ask-name`, `pfset:scan-dialog`.
+default and the Esc path), `pfset:pick-index`, `pfset:pick-from-list`.
 
-**NOD:** `pfset:nod create` — settings-side name for `pfa:nod-dict`;
-create nil never writes.
+Quarantined to `_attic` 2026-08-01 (DATA-FLOW §5, no callers in .lsp or
+.dcl): the ask-name and scan-dialog helpers, and the NOD passthrough —
+readers call `pfa:nod-dict` directly.
 
 ## Invariants
 
@@ -65,4 +65,4 @@ create nil never writes.
 
 - The per-type last-browsed-directory memory is clobbered by pfsetup's
   company-folder routing on every pick, so it never takes effect —
-  [../Low_Priority_issues.md](../Low_Priority_issues.md) #7.
+  [../pfsuite-md/OPEN-ISSUES.md](../pfsuite-md/OPEN-ISSUES.md) LOW-3.

@@ -1,0 +1,56 @@
+(vl-load-com)
+(if (not (boundp '*pfpt-sent*))   (setq *pfpt-sent*   nil))
+(if (not (boundp '*pfpt-ent*))    (setq *pfpt-ent*    nil))
+(if (not (boundp '*pfpt-undo-open*)) (setq *pfpt-undo-open* nil))
+(if (not (boundp '*pfp-was-open*))   (setq *pfp-was-open*   nil))
+(defun pfpt:body ( / before pt)
+  (prompt (strcat "\n[command] CMDACTIVE=" (itoa (getvar "CMDACTIVE"))
+                  "  CMDNAMES=\"" (getvar "CMDNAMES") "\""))
+  (prompt (if *pfpt-sent*
+            "\n  [3] PASS  arrived from the palette click, not the keyboard."
+            "\n  [3] ----  run directly (no palette click) -- context test only."))
+  (setq before (entlast))
+  (pf:undo-begin '*pfpt-undo-open*)
+  (command "._LINE" '(0.0 0.0 0.0) '(120.0 90.0 0.0) "")
+  (pf:undo-end '*pfpt-undo-open*)
+  (setq *pfpt-ent* (entlast))
+  (prompt (if (equal before *pfpt-ent*)
+            "\n  [4] FAIL  (command) drew nothing in the deferred context."
+            "\n  [4] PASS  (command) drew inside one undo group -- type U once to verify."))
+  (setq pt (getpoint "\n  [5] Pick any point to prove interactive input: "))
+  (prompt (if pt
+            "\n  [5] PASS  getpoint returned -- real command context confirmed."
+            "\n  [5] ----  getpoint cancelled (Esc) -- inconclusive, re-run."))
+  (setq *pfpt-sent* nil)
+  (prompt "\n=== end of proof ===")
+  (princ))
+(defun c:PFPTEST ()
+  (pf:run-command "PFPTEST" nil 'pfpt:body))
+(defun c:PFPTESTRESET ()
+  (setq *pfpt-sent* nil *pfpt-undo-open* nil)
+  (prompt "\nPFPTESTRESET: proof state cleared.")
+  (princ))
+(defun c:pfsuite/pfsPalette#OnDocActivated ( / )
+  (prompt (strcat "\n[lifecycle] OnDocActivated -- doc \""
+                  (getvar "DWGNAME") "\""))
+  (if *pfp-was-open*
+    (progn
+      (setq *pfp-was-open* nil)
+      (prompt "\n  [L3] PASS  fired on a CLOSED form -- re-showing.")
+      (vl-catch-all-apply
+        '(lambda () (dcl-Form-Show pfsuite/pfsPalette)) '())))
+  (pfp:refresh)
+  (princ))
+(defun c:pfsuite/pfsPalette#OnEnteringNoDocState ( / )
+  (prompt "\n[lifecycle] OnEnteringNoDocState -- closing the palette.")
+  (setq *pfp-was-open* T)
+  (vl-catch-all-apply
+    '(lambda () (dcl-Form-Close pfsuite/pfsPalette)) '())
+  (princ))
+(princ "\npfp-proof.lsp loaded (PHASE 1, TEMPORARY).")
+(princ "\n  Studio: tick pfsPalette \"DocActivated\" and")
+(princ "\n          \"EnteringNoDocState\".  Then PFPALETTE.")
+(princ "\n  Defer test:     PFPTEST, read [3]-[5], then type U once.")
+(princ "\n                  ([1]/[2] retired with btnHelp -- it is Help now.)")
+(princ "\n  Lifecycle test: L1 switch drawings, L2 close all, L3 reopen one.")
+(princ)

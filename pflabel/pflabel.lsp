@@ -123,17 +123,14 @@
 ;; writer -- position 4 -- cannot reach up to this file at 7.  No alias left
 ;; behind; same precedent as pfa:entry-cl, moved out of pfxlabel 2026-07-26.
 
-;; THE WHOLE GATHER moved to pfanchor SECTION 4c, 2026-07-29 -- line-loaded-p,
+;; THE WHOLE GATHER lives in pfanchor SECTION 4c -- line-loaded-p,
 ;; registry-pairs, pending, pass-xs, labeled-x-p, cluster-xs, orphan-xs,
-;; inlet-sig, lines-sig, the memo pair, pend-for, status-for and
-;; gather-compute, all now pfa:.  Not one of them called anything in this file;
-;; each was membership-and-ledger knowledge sitting in the labeling module by
-;; history.  The palette at position 11 needed per-target counts, and pfanchor
-;; at 4 -- which every module already depends on -- could not serve them from
-;; up here at 7.  No aliases left behind, same as the 2026-07-27 move.
-;;
-;; index-stations stays: it is combined-ID RANKING, not membership, and its
-;; only consumers are this file and pfreport.
+;; inlet-sig, lines-sig, the memo pair, pend-for, status-for and gather-compute,
+;; all pfa:.  It is membership-and-ledger knowledge, and the palette at position
+;; 11 needs per-target counts that pfanchor at 4 can serve and this file at 7
+;; cannot.  No aliases left behind.
+;; index-stations stays: it is combined-ID RANKING, not membership, and its only
+;; consumers are this file and pfreport.
 
 ;; (pflabel:index-stations inlets line-table) -> (name . sorted-stations)*
 ;;   The ranking input: every station on every line, so pf:rank-on-line can

@@ -1,6 +1,6 @@
 ---
 name: pf-change
-description: Orientation and rules for changing anything in the pfsuite AutoLISP/OpenDCL suite — which module owns a prefix, the load-order guardrail, the palette write-free contract, the pf:run-command wrapper, and which of the fifteen .md files to open for a given question. Read this before editing a .lsp, .dcl or .odcl, or before opening any project doc, so you consult 30 lines instead of 3000.
+description: Orientation and rules for changing anything in the pfsuite AutoLISP/OpenDCL suite — which module owns a prefix, the load-order guardrail, the palette write-free contract, the pf:run-command wrapper, and which of the project .md files to open for a given question. Read this before editing a .lsp, .dcl or .odcl, or before opening any project doc, so you consult 30 lines instead of 3000.
 ---
 
 # Changing pfsuite
@@ -17,15 +17,15 @@ an edit. This skill is the map.
 | `pfd:` | `pfdraw` | the only drawing boundary |
 | **`pfset:`** | **`pfsettings`** | user state, NOD, shared dialogs |
 | **`pfs:`** | **`pfsetup`** | `C:PFSETUP` |
-| `pflabel:` | `pflabel` | `pfxl:` `pfxlabel` · `pfi:` `pfinvert` · `pfr:` `pfreport` · `pfp:` `pfpalette` · `pfrem:` PFREMOVE (in pfanchor) |
+| `pflabel:` | `pflabel` | `pfxl:` `pfxlabel` · `pfi:` `pfinvert` · `pfr:` `pfreport` · `pfsew:` `pf2sew` · `pfp:` `pfpalette` · `pfrem:` PFREMOVE (in pfanchor) |
 
 `pfset:` and `pfs:` are different modules four load positions apart. Confusing
-them is the easiest mistake to make here — check with `pf.sh find` first.
+them is the easiest mistake to make here — check with `pf find` first.
 
 ## Load order is law
 
-`pftools-cfg → pftools-lib → pfdraw → pfanchor → pfsettings → pfsetup →
-pflabel → pfxlabel → pfinvert → pfreport → pfpalette`
+`pftools-cfg → pftools-lib → pfdraw → pfanchor → pfsettings → pfsetup → pfpro →
+pflabel → pfxlabel → pfinvert → pfreport → pf2sew → pfpalette`
 
 A file may only depend on files above it. Four documented exceptions resolve
 at call time and are baselined; adding a fifth needs a README note first.
@@ -67,16 +67,19 @@ Don't read these speculatively — they total ~3600 lines. Route:
 |---|---|
 | what a module does / its API / its invariants | `pfsuite/<module>/README.md` — **always try this first** |
 | status, structure, milestones, OpenDCL constraints | `pfsuite/README.md` (§1 status, §2 structure, §5 OpenDCL, §6 paths into commands) |
-| known bugs, per-command | `pfsuite-md/OPEN-ISSUES.md` (headed by command) |
-| low-priority backlog | `pfsuite-md/Low_Priority_issues.md` (11 lines) |
+| known bugs, per-command | `pfsuite-md/OPEN-ISSUES.md` (headed by command; low-priority backlog is its last section, `LOW-1`…`LOW-8`) |
+| what was fixed, and the outstanding CAD gates | `pfsuite-md/CLOSED_ISSUES.md` (gate table at the top) |
+| next-cycle scope | `pfsuite-md/Version 5.1.md` |
 | manual CAD test steps | `pfsuite-md/TESTING.md` (§0 load … §8 free-swing attacks) |
 | palette structure, anchoring, events, wiring plan | `pfsuite-odcl/PALETTE-LAYOUT.md` |
 | palette shakedown + recorded results | `pfsuite-odcl/PALETTE-TESTING.md` (§6 results, §7 triage) |
-| engine extraction / order ticket | `pfsuite-md/REFACTOR-PLAN.md` |
+| engine extraction / the gather hoist | `pfsuite/pf2sew.md` §8 step 1 — **that section IS the ticket** (`REFACTOR-PLAN.md` was deleted in the restructure and never relocated) |
+| the order ticket / deferred fire | `pfsuite-odcl/PALETTE-LAYOUT.md` §9 |
 | the membership-index design (not yet built) | `pfanchor/INDEX-DESIGN.md`, `INDEX-VALUES.md` |
+| the Carlson `.SEW` format, its evidence, the build record | `pfsuite/pf2sew.md` (§2 format, §5 type map, §8 build, §9 Jake's unknowns) |
 | how the restructure was done | `pfsuite-md/RESTRUCTURE-PROMPT.md` — historical, completed |
 
-Prefer `pf.sh api <module>` over reading a whole README, and a heading-anchored
+Prefer `pf api <module>` over reading a whole README, and a heading-anchored
 `Read` with `offset` over a whole project doc.
 
 ## Editing mechanics
@@ -84,7 +87,7 @@ Prefer `pf.sh api <module>` over reading a whole README, and a heading-anchored
 - Anchor `Edit` on unique surrounding text; AutoLISP repeats short forms constantly.
 - Keep the `;; (name args) -> result` comment above every new defun — the
   symbol index harvests that line, and a missing one costs future lookups.
-- Keep `;;; SECTION n --` banners accurate; `pf.sh outline` is built on them.
+- Keep `;;; SECTION n --` banners accurate; `pf outline` is built on them.
 - After any `.odcl` edit, the change does not reach the runtime until
   `PFPRELOAD`. Say so whenever you hand back an `.odcl` change.
 - Run `pf-verify` before reporting done, and name any CAD gate you could not run.

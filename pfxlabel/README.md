@@ -50,15 +50,15 @@ Dialog: `pfxl_run`.
 - `pfxl:flush-pass` — Esc ledger flush (the `pf:run-command` hook):
   appends the partial pass's handles to the XING ledger inside the
   still-open group.
-- `pfxl:write-status anchor` **W** — writes `STATUS_XING` after a pass.
-  **New 2026-07-27:** PFXLABEL wrote no status at all, so a crossings pass
-  left nothing behind saying whether its inputs were sound. Validates the
-  TARGET `.cl` against the checksum META recorded at setup — the same
-  comparison PFLABEL makes, because a crossing's target station comes off
-  the same alignment. Per-SOURCE freshness stays `SCOPE`'s job: it already
-  holds a `<base>|<target-cksum>|<source-cksum>` triple per pair and
-  short-circuits discovery on it, so copying those here would be a fifth
-  copy of a fact that already has an owner.
+- `pfxl:report-status anchor` — PRINTS the freshness verdict after a
+  pass; stores nothing. Was write-status until 2026-08-01, when
+  `STATUS_XING` was retired (DATA-FLOW §4.1): it validated the TARGET
+  `.cl` against META `(301)` through the same code as `STATUS_LABEL` —
+  identical inputs, identical verdict, so the record could never disagree
+  with LABEL's and the Checks roll-up counted one question twice.
+  Per-SOURCE freshness stays `SCOPE`'s job: it already holds a
+  `<base>|<target-cksum>|<source-cksum>` triple per pair and
+  short-circuits discovery on it.
 - `C:PFXLABEL` / `C:PFX` — `pf:run-command "PFXLABEL" 'pfxl:flush-pass
   'pfxl:cmd`.
 

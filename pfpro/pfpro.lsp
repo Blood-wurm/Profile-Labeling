@@ -101,24 +101,21 @@
 ;;; --------------------------------------------------------------------------
 ;;; SECTION 2  --  Which grid does that polyline belong to?
 ;;; --------------------------------------------------------------------------
-;;; Jake asked for ONE pick, so the anchor resolves from the pick itself:
-;;; the nearest anchor to the polyline's LEFTMOST ENDPOINT.  No bounding box and
-;;; no containment test -- which also means pfa:extents is never consulted, so a
-;;; legacy anchor with no WIDTH recorded resolves exactly like any other.
-;;;
-;;; Two guards ride along, and neither costs a prompt:
-;;;
+;;; ONE PICK, so the anchor resolves from the pick itself: the nearest anchor to
+;;; the polyline's LEFTMOST ENDPOINT.  No bounding box and no containment test,
+;;; which also means pfa:extents is never consulted -- a legacy anchor with no
+;;; WIDTH recorded resolves exactly like any other.
+;;; Two guards ride along, neither costing a prompt:
 ;;;   1. The anchor's insert must be at or below-left of that endpoint.  The
-;;;      insert IS the grid's lower-left (leftx, basey), and a profile always
-;;;      draws up and to the right of it (pf:elev->profile-y from the datum,
-;;;      pf:station->profile-x from sta0).  Without this, stacked grids -- the
+;;;      insert IS the grid's lower-left (leftx, basey) and a profile always
+;;;      draws up and to the right of it.  Without this, stacked grids -- the
 ;;;      normal sheet layout -- steal each other's polylines: a pipe drawn high
-;;;      in its own grid is nearer to the insert of the grid ABOVE it than to
-;;;      its own.  Delete the two <= tests to get pure nearest-insert.
-;;;   2. COPIES are excluded, the way pfa:find-anchor excludes them and
-;;;      pfa:all-anchors does not.  A copy sits elsewhere in the drawing and
-;;;      would win outright for a polyline drawn inside it, and pfa:files-put
-;;;      would then bind into a cloned ledger nothing else resolves.
+;;;      in its own grid is nearer the insert of the grid ABOVE it.  Delete the
+;;;      two <= tests for pure nearest-insert.
+;;;   2. COPIES are excluded, as pfa:find-anchor excludes them and
+;;;      pfa:all-anchors does not.  A copy would win outright for a polyline
+;;;      drawn inside it, and pfa:files-put would bind into a cloned ledger
+;;;      nothing else resolves.
 
 ;; (pfpro:left-end pts) -> (x y)   the ENDPOINT with the lower X.
 ;;   Endpoints, not the whole vertex list: the polyline may be drawn in either
@@ -284,7 +281,7 @@
 ;;; --------------------------------------------------------------------------
 ;;; SECTION 5  --  The writer
 ;;; --------------------------------------------------------------------------
-;;; Format verified against a Carlson-written .pro (Jake, 2026-07-29):
+;;; Format verified against a Carlson-written .pro:
 ;;;
 ;;;   115.5906,749.2500,0.0     <- sta,elev,vertical-curve-length; 4 decimals
 ;;;   ...                          on both, col 3 always 0.0 for a pipe run

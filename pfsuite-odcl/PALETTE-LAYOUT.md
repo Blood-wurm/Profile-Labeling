@@ -124,12 +124,7 @@ Derived from `tarLines`: Left 10 + Width 876 + Right From Right 10 = 896; Top 40
 | Background Color | `-24` | OpenDCL enumerated value, not a hex (§7) |
 | Title Bar Text | `Bryant Engineering Profile Suite` | |
 
-### The form opens at Min, not at Width — 2026-07-30
-
-**Reported: the palette opens far larger than the Studio design.** The cause was
-not on the open path, and the first fix attempt looked in the wrong place: a
-`pfp:size-to-design` was added to `C:PFPALETTE` to `dcl-Form-Resize` the form to
-`*pfp-design-size*` on every open. It was **deleted the same day**.
+### The form opens at Min, not at Width
 
 **Three properties decide the opening rect, not one.** `Width`/`Height` say what
 to draw; `Min Width`/`Min Height` are a floor the runtime clamps *up* to; `Max`
@@ -137,64 +132,26 @@ is a ceiling. A form with `Width` 420 and `Min Width` 900 opens at **900**, and
 `Resize(420)` does nothing — which is exactly the shape of "the design size is
 verified at 420 × 670 and it still opens too big."
 
-**Settled in Studio: `Min Width` and `Max Width` are now both 420.** The frame
-is pinned to the design width. Intended consequence, worth knowing before the
-next resize test: **the palette can no longer be widened by dragging**, floating
-or docked, and every horizontal test in §1.6/§8 is now a test of one width.
+**Settled in Studio: `Min Width` and `Max Width` are both 420.** The frame is
+pinned to the design width. Intended consequence, worth knowing before the next
+resize test: **the palette can no longer be widened by dragging**, floating or
+docked, so every horizontal test in §1.6/§8 is now a test of one width.
 
-**The rule: a form-rect complaint is a Studio answer.** Read `Width`/`Height`,
-`Min` and `Max` *together* before writing any LISP. There is no form-size getter
-(`dcl-Form-GetWidth` does not exist — it is what killed `PFPREAD` run 1), so
-LISP cannot see what it would be arguing with. `dcl-Form-Resize` survives in
-`C:PFPSCALE` alone, where a deliberate temporary override is the whole point.
+**Fix an opening-size complaint in Studio, not in LISP.** Read `Width`/`Height`,
+`Min` and `Max` *together* before writing any code. There is no form-size getter
+(`dcl-Form-GetWidth` does not exist — it is what killed `PFPREAD` run 1), so LISP
+cannot even see the values it would be arguing with, and a resize call cannot
+beat the clamp. `dcl-Form-Resize` survives in `C:PFPSCALE` alone, where a
+deliberate temporary override is the whole point.
 
-### The Min Width / Min Height defect — historical, superseded by the above
-
-**`Min Height` (700) exceeds `Height` (670).** The runtime floor is taller than
-the design size, so what you lay out in Studio is 30px off from anything the
-runtime renders, and every bottom-anchored control sits low at minimum size.
-
-**`Min Width` (570) is too narrow for the Registry button rows.** Those are five
-fixed-width buttons ending near x=889. At 570 the last three are past the right
-edge, and any anchored right computes a negative x on the way down and vanishes
-off the *left* side.
-
-The two values also look transposed. **Fix: `Min Width` ≥ 900, `Min Height`
-≤ 670.**
-
-> **Live candidate for root README §8** — "buttons vanished during one resize
-> test with anchoring provably identical to buttons that survived," unresolved.
-> A 570px floor makes that reproducible: the survivors were left-anchored, the
-> casualties right-anchored, and nothing about the flags looks different until
-> the form is narrow enough for the difference to bite. Confirm or rule out
-> before spending more time on §8.
->
-> **2026-07-27 — §8 closed BY CONSTRUCTION.** With `Min Width` ≥ 900 the form
-> cannot narrow at all, so nothing can compute a negative x and the resize test
-> passes trivially (PALETTE-TESTING 1.6a). Consistent with the theory; not a
-> test of it. **The 900px floor was load-bearing until 2026-07-28.**
->
-> **The cost:** `Dockable Sides` is Left + Right because this palette is meant
-> to be a vertical strip, and a strip with a hard 900px floor is a wide one.
-> The floor was forced by the five fixed-width Registry button rows (§3 — no
-> layout flow, so a fixed row can't redistribute). A genuinely narrow palette
-> needs those rows reflowed: icon buttons, two stacked rows, or a toolbar.
->
-> **2026-07-28 — the floor came down to 390, by Studio rework.** The Registry
-> tab was rebuilt so the rows and the three panes hold together at 390:
-> `tvwLines` narrowed to roughly half its width with `metaList`/`lvwLinkage`
-> moved across, and the two button rows re-spaced to stay visible at the new
-> floor. A runtime `#OnSize` layout pass was written and then removed the same
-> day — geometry stays entirely Studio's.
->
-> **§8 is therefore no longer closed by construction.** 900 is reachable no
-> more; 390 is, and the guarantee is now the rects and anchors themselves.
-> That is the stronger claim, and an **untested** one until the resize is run
-> in CAD. Re-run PALETTE-TESTING 1.6a at 390 before treating §8 as shut, and
-> check the two rules in §3 against every right-referenced control.
+**Why the frame is pinned rather than narrow.** `Dockable Sides` is Left + Right
+because this palette is meant to be a vertical strip. The width floor is forced
+by the five fixed-width Registry button rows (§3) — there is no layout flow, so a
+fixed row cannot redistribute. A genuinely narrow palette needs those rows
+reflowed: icon buttons, two stacked rows, or a toolbar. That is a named,
+unscheduled redesign.
 
 ---
-
 ## 3. Anchoring
 
 Each axis has two "Use" flags selecting **which edge each side is measured
@@ -662,252 +619,148 @@ reactor filtered to `PF*` · `btnRefresh`
 
 ## 8. Colors
 
-> ## 2026-07-27 — RESOLVED FROM THE VENDOR DOCS, AND IT WAS A BUG
->
-> The blank footer labels (PALETTE-TESTING 2.3/2.4) were a **colour** fault all
-> along, and this section's "decision pending" is what left the door open.
->
-> **1. `-24` is not a theme colour. It is `Transparent`.** The negative range is
-> a documented system-colour enumeration:
->
-> | | | | | | |
-> |---|---|---|---|---|---|
-> | -1 scroll bar | -5 menu | -9 **window text** | -13 app workspace | -17 button shadow | -21 button highlight |
-> | -2 desktop | -6 window | -10 caption text | -14 highlight | -18 grayed text | -22 ACAD model bg |
-> | -3 active caption | -7 window frame | -11 active border | -15 highlighted text | -19 **button text** | -23 ACAD layout bg |
-> | -4 inactive caption | -8 menu text | -12 inactive border | -16 **button face** | -20 inactive caption | -24 **transparent** |
->
-> **2. A Label has nothing that can override its `Foreground Color`.** The
-> [Label control
-> reference](https://www.opendcl.com/HelpFiles/ENU/Reference/Control/Label.htm)
-> lists: `Background Color`, `Foreground Color`, `Border Style`,
-> `Justification`, `Font` / `Font Bold` / `Font Italic` / `Font Size` /
-> `Font Strikeout` / `Font Underline`, `Visible`, `Enabled`, geometry,
-> tooltips. **No `Use Visual Style`** — confirmed absent in Studio on both
-> labels — and no `Transparent` flag. So `Foreground Color` is authoritative,
-> and a `Foreground Color` of **-24 is transparent text**: invisible docked,
-> floating, at any size, under any theme. -24 is easy to set on the wrong
-> property believing it means "default", and the form legitimately carries it
-> as a *background*. `Font Size` 0 gives the same visible result by a different
-> route.
->
-> The gray box is the same enumeration from the other side — a
-> transparent-*background* control mis-composites when docked and paints as an
-> opaque rectangle.
->
-> **The fix, on `lblProject` and `lblCounts`:** `Foreground Color` = **-19**
-> (button text, so it still tracks the host theme) and a real `Font Size`. If
-> the gray box survives, `Background Color` = **-16** (button face) rather than
-> transparent.
->
-> **This retires Tier 3's blocker.** A runtime colour API exists *and* a full
-> system-colour enumeration exists, so tracking `COLORTHEME` at runtime is now
-> a choice rather than an impossibility. Tier 1 "set nothing and inherit"
-> remains the simplest, but note it is not the current state: something has
-> already been set on these labels, and that is the bug.
->
-> **An earlier revision of this note prescribed `Use Visual Style` = False**,
-> taken from a forum thread about the 8.0.0.13 label-foreground regression
-> without checking that Labels expose the property. They do not.
+Built as `pfpalette.lsp` **§7** (`pfp:skin`, `C:PFPTHEME`). The decision is
+**mostly inherit**, and not by preference — the controls that carry this
+palette's content cannot be coloured at all.
 
-> ## 2026-07-27 — DECIDED FROM THE PROPERTY REFERENCE: mostly Tier 1, and not by choice
->
-> Built as `pfpalette.lsp` **§7** (`pfp:skin`, `C:PFPTHEME`). The deciding
-> facts are the **applies-to lists on the property pages**, which neither tier
-> above had been checked against:
->
-> | | Background | Foreground | Font + Font Size |
-> |---|---|---|---|
-> | Label, Option List, Check Box | ✅ | ✅ | ✅ |
-> | List View | ✅ | ❌ | ✅ |
-> | Tree, Frame, Tab Strip, Text Button | ❌ | ❌ | ✅ |
-> | Palette (the form) | ✅ | ❌ | — |
->
-> **A dark scheme is not reachable.** Tree exposes no colour property of any
-> kind and List View exposes no foreground, so a dark pass would leave
-> `tvwLines` and `tarLines` light while giving the three List Views a dark
-> background under black text. **Dark has to come from the Windows theme**,
-> which the Tree and List common controls follow on their own. Tier 3 is
-> therefore not the answer, and the earlier revision of this note — which
-> recorded it as decided — was wrong.
->
-> **What §7 does by default (`'font` mode):** one font across all 29 controls
-> (Font + Font Size is the one property pair every type accepts), the form
-> background, and Label colours. Nothing there can misfire. `'full` adds
-> Option List, Check Box and List View backgrounds and is opt-in, because
-> those types carry `Use Visual Style` and the vendor says a visual style
-> **may override** background and foreground — a colour set there may silently
-> do nothing, and switching the style off to force it looks less native.
->
-> **Font names and the size sign, corrected.** The properties are `Font` (face
-> name, String) and `Font Size` — accessors `dcl-Control-SetFont` /
-> `dcl-Control-SetFontSize`. There is no `FontName` and no `FontHeight` —
-> `PFPINK` called both, and is deleted. **Negative sizes are
-> in screen pixels, positive in points** (1/72") computed from screen
-> resolution and display size — so positive is the DPI-aware form. Default
-> face is `MS Shell Dlg`, OpenDCL's own default and the standard dialog font
-> in every localized Windows.
->
-> **No colour is bit-packed.** A `Color` may be a negative logical value *or*
-> a list of three 0–255 integers, both documented. §7 passes the list form,
-> so the packed form's undocumented byte order never arises. An earlier
-> revision of this note asserted BGR from the "255 (red)" comment in the
-> since-deleted `PFPINK` — an inference from a diagnostic that had never been
-> run, and exactly the kind of guess the list form makes unnecessary.
->
-> **The one rule to carry forward:** a property may only be called on a
-> control whose type the vendor documents it for, **reads included** — a
-> getter is a property accessor, so `GetForeColor` on a List View raises the
-> same uncatchable modal dialog the setter would. `pfp:type-can` is that gate.
-> The first §7 draft invented a chrome/data split instead of reading the
-> lists, and would have hit a missing property 13 times.
->
-> **The RGB tables are starting points, not a spec.** Eyedropper a docked
-> Properties palette — Autodesk publishes no RGB for palette chrome, and the
-> one documented dark value (33,40,48) is the *drawing area*.
->
-> **Theme flips while open are manual.** `C:PFPTHEME` re-skins. A
-> `vlr-sysvar-reactor` on `COLORTHEME` would automate it, deliberately not
-> installed — a reactor outlives the palette, and §10 admits exactly one.
->
-> **Runtime formatting never persists.** Close destroys the controls, so
-> `pfp:skin` runs on every open from `C:PFPALETTE`. The skin therefore
-> *masks* the blank-footer-label bug rather than curing it: a real
-> `Foreground Color` and `Font Size` still belong in Studio, because a session
-> with mode `'off` gets transparent text back.
+### What each control type accepts
 
-**Superseded — kept for the reasoning.** "Native" for a docked palette means
-matching the host, and the host theme moves: `COLORTHEME` (0 dark / 1 light) is
-user-switchable at any time, so a hardcoded scheme is wrong the moment someone
-flips it.
+The applies-to lists on the property reference pages are the authority. Never
+infer a property from what a similar control accepts.
 
-| Tier | Approach | Cost |
-|---|---|---|
-| **1 (recommended)** | Set nothing; every control inherits Windows/AutoCAD theming. | Abandons the dark mockup scheme. |
-| 2 | A system-color enumeration value on the form and panels. `-24` may already be one. | Only covers what OpenDCL enumerates. |
-| 3 | Runtime switch: read `(getvar "COLORTHEME")` in `pfp:refresh` and set colors. | **Requires a runtime color API that is not verified.** |
+| | Background | Foreground | Font + Font Size |
+|---|---|---|---|
+| Label, Option List, Check Box | ✅ | ✅ | ✅ |
+| List View | ✅ | ❌ | ✅ |
+| Tree, Frame, Tab Strip, Text Button | ❌ | ❌ | ✅ |
+| Palette (the form) | ✅ | ❌ | — |
 
-No color functions appear in the `Opendcl_Reference` samples, which attest only
-`dcl_Control_SetCaption` / `SetEnabled` / `SetText` / `SetValue`. If no runtime
-color API exists, colors are design-time only and Tier 3 is impossible.
+**A dark scheme is not reachable.** Tree exposes no colour property of any kind
+and List View exposes no foreground, so a dark pass would leave `tvwLines` and
+`tarLines` light while giving the three List Views a dark background under black
+text. **Dark has to come from the Windows theme**, which the Tree and List
+common controls follow on their own.
 
-> **2026-07-27 — a runtime color API EXISTS. Tier 3 is possible.**
-> `PFPPROBE` called `dcl-Control-SetForeColor` against a live control and it
-> returned without error, as did `dcl-Control-SetVisible` and
-> `dcl-Control-SetText`. The samples simply never exercised them; absence from
-> `Opendcl_Reference` was never evidence of absence from the API.
->
-> This removes the blocker on Tier 3 — read `(getvar "COLORTHEME")` and set
-> colors at runtime, so the palette tracks the host when the user flips theme.
-> It does **not** decide the question: Tier 1 (inherit everything) is still the
-> only option that is consistent across tab strips, buttons, frames and radios,
-> which are Windows-themed no matter what the form says. What changed is that
-> Tier 3 is now a *choice* rather than an impossibility.
->
-> Found incidentally while chasing the blank footer labels, which is worth
-> noting on its own: the probe commands in `../pfpalette/pfpalette.lsp` §6 are
-> the cheapest way to settle any "does this API exist" question in this file.
-> Verify before recording another constraint as unattested.
+**What §7 does by default (`'font` mode):** one font across all 29 controls
+(Font + Font Size is the one property pair every type accepts), the form
+background, and Label colours. Nothing there can misfire. `'full` adds Option
+List, Check Box and List View backgrounds and is opt-in, because those types
+carry `Use Visual Style` and the vendor says a visual style **may override**
+background and foreground — a colour set there may silently do nothing, and
+switching the style off to force it looks less native.
 
-Tier 1 is also the only option consistent across *all* controls — the tab strip,
-buttons, frames and radios are Windows-themed regardless.
+### The system-colour enumeration
 
-**One check settles it:** open the Background Color dropdown in Studio. The named
-entries reveal whether OpenDCL offers system/AutoCAD-tracking colors, and what
-`-24` actually is.
+A `Color` is a negative logical value *or* a list of three 0–255 integers. Both
+are documented; §7 passes the list form, so the packed form's undocumented byte
+order never arises. **Nothing bit-packs a colour.**
 
-The mockup's target scheme (dark `#2B2B2B` / `#232323` panels / `#4A9EEA`
-accent, light `#F0F0F0` / `#FFFFFF` panels) is preserved in this file's history
-if Tier 3 turns out to be available.
+| | | | | | |
+|---|---|---|---|---|---|
+| -1 scroll bar | -5 menu | -9 **window text** | -13 app workspace | -17 button shadow | -21 button highlight |
+| -2 desktop | -6 window | -10 caption text | -14 highlight | -18 grayed text | -22 ACAD model bg |
+| -3 active caption | -7 window frame | -11 active border | -15 highlighted text | -19 **button text** | -23 ACAD layout bg |
+| -4 inactive caption | -8 menu text | -12 inactive border | -16 **button face** | -20 inactive caption | -24 **transparent** |
+
+### The blank footer labels were a colour bug
+
+`lblProject` and `lblCounts` carried `Foreground Color` **-24**, which is
+`Transparent`, not "default" — invisible docked, floating, at any size, under any
+theme. `Font Size` 0 gives the same result by a different route. The gray box is
+the same enumeration from the other side: a transparent-*background* control
+mis-composites when docked and paints as an opaque rectangle.
+
+**The Studio fix:** `Foreground Color` = **-19** (button text, so it still tracks
+the host theme) and a real `Font Size`. If the gray box survives, set
+`Background Color` = **-16** (button face) rather than transparent.
+
+A Label has **no `Use Visual Style`** and no `Transparent` flag, so
+`Foreground Color` is authoritative on it.
+
+**`pfp:skin` masks this bug rather than curing it.** Runtime formatting never
+persists — Close destroys the controls — so a session with mode `'off` gets
+transparent text back. The real values belong in Studio.
+
+### Rules to carry forward
+
+- **A property may only be called on a type the vendor documents it for, reads
+  included.** A getter is a property accessor, so `GetForeColor` on a List View
+  raises the same uncatchable modal the setter would. `pfp:type-can` is that
+  gate.
+- **The font properties are `Font` (face name) and `Font Size`** — accessors
+  `dcl-Control-SetFont` / `dcl-Control-SetFontSize`. There is no `FontName` and
+  no `FontHeight`. **Negative sizes are screen pixels, positive are points**
+  (1/72"), so positive is the DPI-aware form. Default face `MS Shell Dlg`.
+- **The RGB tables in §7 are starting points, not a spec.** Eyedropper a docked
+  Properties palette — Autodesk publishes no RGB for palette chrome, and the one
+  documented dark value (33,40,48) is the *drawing area*.
+- **Theme flips while the palette is open are manual** — `C:PFPTHEME` re-skins.
+  A `vlr-sysvar-reactor` on `COLORTHEME` would automate it and is deliberately
+  not installed: a reactor outlives the palette, and §10 admits exactly one.
 
 ---
-
 ## 9. Wiring plan
 
-**Phase 0 — unblock.** `pfp:odcl-path` folder segment ✅ done. Then in Studio:
-`Min Width`/`Min Height` (§2), `tarLines` vertical anchor → `0/0` and
-`detailsList` → `0/1` (§3), pick-button 4/5 swap (§5). Then the **engine
-regression gate** — all three commands from the command line producing identical
-output (REFACTOR-PLAN). Skipping it means every engine bug surfaces as "the
-palette broke it."
+| Phase | State |
+|---|---|
+| 0 — unblock | ✅ Studio geometry settled (§2, §3, §5) |
+| 1 — prove the deferred fire | ✅ passed in CAD |
+| 2 — ticket channel | folded into Phase 4 |
+| 3 — Registry verbs | ✅ built, static-clean, **unverified in CAD** |
+| 4 — Commands tab | ✅ built, static-clean, **unverified in CAD** |
+| 5 — lifecycle | ⛔ blocked, see §7 |
+| 6 — colors | ✅ built, static-clean, **unverified in CAD** |
 
-**Phase 1 — prove the deferred fire. ✅ PASSED 2026-07-27.** A throwaway button
-calling `vla-SendCommand` on the active document to run a trivial drawing
-command. All four checks held: real command context (`getpoint` prompted *and*
-returned — the strongest signal available), undo group intact (one `U` peeled
-it), palette survived the round trip (Help greyed and came back), and
-`CMDACTIVE` gating refused against a live `PLINE`.
+**Phase 1 — what it proved.** A throwaway button calling `vla-SendCommand` on the
+active document. All four checks held: real command context (`getpoint` prompted
+*and* returned — the strongest signal available), undo group intact (one `U`
+peeled it), palette survived the round trip, and `CMDACTIVE` gating refused
+against a live `PLINE`. `pfp:cmd-idle-p` and `pfp:defer` now live in
+`../pfpalette/pfpalette.lsp` **SECTION 2** and are the only channel any verb may
+use. They were *removed* from `pfp-proof.lsp` rather than copied — two
+definitions of the gate would let the proof pass against code the palette does
+not run.
 
-`pfp:cmd-idle-p` and `pfp:defer` now live in `../pfpalette/pfpalette.lsp`
-**SECTION 2** and are the only channel any verb may use. They were *removed*
-from `pfp-proof.lsp` rather than copied — two definitions of the gate would let
-the proof pass against code the palette doesn't run.
+**Phase 3 — Registry verbs.** `*pfp-verb*` + `C:PFPVERB` (pfpalette §8), with
+`btnAnchor` / `btnEdit` / `btnNew` / `btnZoom` / `btnRemove` deferring through
+`pfp:fire` and `btnRefresh` calling `pfp:refresh` inline. The five pick buttons
+are NOT wired — §5 says why. `tvwLines#OnSelChanged` records `*pfp-sel*`, which
+`pfp:refresh` clears, so a verb cannot fire against a row the last write
+invalidated.
 
-**Phase 2 — the ticket channel.** Thin `C:PFLABELRUN` / `C:PFINVERTRUN` /
-`C:PFXLABELRUN` reading a global ticket and calling `pfX:run` under
-`pf:run-command`. Plus the `*pf-preset-target*` graft into `pfs:choose-or-place`
-— consumed and cleared at the top, so the deferred command never opens `pf_pick`.
-That global was never implemented (`Low_Priority_issues.md:4`) and
-`pfs:choose-or-place` **may write** (a registered pick anchors on the fly), so a
-palette-initiated path must not be able to trigger a placement.
-
-**Phase 3 — Registry verbs.**
-
-> **2026-07-28 — BUILT, static-clean, unverified in CAD.** `*pfp-verb*` +
-> `C:PFPVERB` (pfpalette §8) are in, with `btnAnchor` / `btnEdit` / `btnNew` /
-> `btnZoom` deferring through `pfp:fire` and `btnRefresh` calling `pfp:refresh`
-> inline. `btnRemove` and the five pick buttons are NOT wired — §5 says why.
-> `tvwLines#OnSelChanged` now also records `*pfp-sel*`, which `pfp:refresh`
-> clears, so a verb cannot fire against a row the last write invalidated.
->
-> **The pfsetup side underneath it** is also built and static-clean.
-> The record layer was split out of the modal (`pfs:validate`, `pfs:remember`,
-> `pfs:seed-*`, `pfs:complete-res`), the `*pfs-preset-res*` graft is in with the
-> read-and-clear, scales and datum are prompted for a record that arrives
-> without them, and Anchor All is gone. No palette code was touched. The gate
-> before anything is wired to it: `C:PFSETUP` from the command line, behaving
-> exactly as it did — see `../pfsuite-md/TESTING.md`.
+The pfsetup side underneath it is also built: the record layer was split out of
+the modal (`pfs:validate`, `pfs:remember`, `pfs:seed-*`, `pfs:complete-res`), the
+`*pfs-preset-res*` graft is in with the read-and-clear, and scales and datum are
+prompted for a record that arrives without them. The gate before anything else is
+wired: `C:PFSETUP` from the command line, behaving exactly as it did — see
+`../pfsuite-md/TESTING.md`.
 
 | Button | Path |
 |---|---|
 | `btnRefresh` | direct call to `pfp:refresh` — the only verb that doesn't defer |
-| `btnZoom` | deferred |
-| `btnAnchor` `btnEdit` `btnNew` `btnRemove` | deferred via the dispatcher |
-| `btnPick*` ×5 | `getfiled`, then a gated write |
+| `btnAnchor` `btnEdit` `btnNew` `btnZoom` `btnRemove` | deferred via the dispatcher |
+| `btnPick*` ×5 | `getfiled`, then a gated write — not wired |
 
-**Decision: one dispatcher command, `C:PFPVERB`, reading a `*pfp-verb*` ticket.**
-Rationale: keeps `pfs:place-one` / `pfs:edit-one` private instead of promoting
-pfsetup internals to public API; gives one `SendCommand` target instead of five;
-and puts the `CMDACTIVE` gate, the undo mark, and the palette-disable in a single
-place rather than repeating them per button.
+**ONE DISPATCHER PER TAB, not one command per button.** `C:PFPVERB` for Registry
+verbs, `C:PFPRUN` for the Commands tab. It keeps `pfs:place-one` / `pfs:edit-one`
+private instead of promoting pfsetup internals to public API, gives one
+`SendCommand` target instead of five, and puts the `CMDACTIVE` gate, the undo
+mark and the refresh in a single place.
 
-**Phase 4 — Commands tab. ✅ BUILT 2026-07-29, static-clean, UNVERIFIED IN CAD.**
-`detailsList` columns and `tarLines` fill landed with §5b; `btnRun` → ticket →
-`SendCommand`, `btnClear`, and the per-pass gather landed with §9. Not built:
-the enable/disable state machine (no `optTools` command names, so the group is
-simply greyed) and the Crossings reshape (moot — see §6 *Still missing*).
+**The `*pf-preset-target*` graft was never needed.** The dispatcher calls the
+engines directly and never reaches `pfs:choose-or-place`, so that permitted graft
+stays unspent; see §10. A Registered row is refused outright instead.
 
-**Phase 2 was folded into Phase 4 rather than built separately.** Its thin
-`C:PFLABELRUN` / `C:PFINVERTRUN` / `C:PFXLABELRUN` became one dispatcher,
-`C:PFPRUN`, for the same reason Phase 3 collapsed five verb commands into
-`C:PFPVERB`: one `SendCommand` target, one `CMDACTIVE` gate, one ticket
-discipline. The `*pf-preset-target*` graft it specified was **not needed** —
-the dispatcher calls the engines directly and never reaches
-`pfs:choose-or-place`. That permitted graft stays unspent; see §10.
+**Not built:** the Label/Tools enable-disable state machine (no `optTools`
+command names beyond the two `pfpro` ones, so the group is simply greyed).
 
-**Phase 5 — lifecycle.** `DocActivated` and `EnteringNoDocState` per §7.
-
-**Phase 6 — colors. ✅ BUILT 2026-07-27, UNVERIFIED IN CAD.** `pfp:skin` +
-`C:PFPTHEME` per §8; `C:PFPSCALE` for the size question. The property names,
-the applies-to lists, the `Color` forms and the font-size sign are all settled
-from the vendor reference. What still needs one CAD run: whether `'font` mode
-paints the two footer labels (the strongest single signal — Label supports both
-colours and a real size, so it is the control the whole design rests on),
-whether the geometry setters exist, and what the eyedropper says the RGB rows
-should be if `'theme` is ever wanted for the light side.
+**What still needs a CAD run for §8:** whether `'font` mode paints the two footer
+labels — the strongest single signal, since Label supports both colours and a
+real size, so it is the control the whole design rests on — whether the geometry
+setters exist, and what the eyedropper says the RGB rows should be if `'theme` is
+ever wanted for the light side.
 
 ---
-
 ## 10. Invariant — the command line stays independent
 
 **The palette ADDS commands. It never modifies existing ones.** Every command

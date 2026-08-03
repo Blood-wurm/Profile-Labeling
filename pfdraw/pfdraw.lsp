@@ -8,10 +8,9 @@
 (vl-load-com)
 
 ;; (pfd:ensure-layer-c name noplot color) -> nil   (creates the layer if missing)
-;;   CREATE-ONLY, and deliberately so: an existing layer is never recoloured, so
-;;   a drawing where someone has set this layer by hand keeps that colour.  The
-;;   consequence is that COLOR only ever reaches a drawing that has never
-;;   carried the layer -- changing it here does not repaint old drawings.
+;;   CREATE-ONLY: an existing layer is never recoloured, so a drawing where
+;;   someone set this layer by hand keeps that colour.  COLOR therefore only
+;;   reaches a drawing that has never carried the layer.
 (defun pfd:ensure-layer-c (name noplot color)
   (if (null (tblsearch "LAYER" name))
     (progn
@@ -32,10 +31,8 @@
   (pfd:ensure-layer-c name noplot 7))
 
 ;; (pfd:anno-layer) -> "PF-ANNO"   ensures the layer, then names it
-;;   THE annotation layer for every label pass.  The one place the suite decides
-;;   where a label goes -- callers ask for it, they do not build a layer name.
-;;   Create-only per pfd:ensure-layer-c above: a drawing that already carries
-;;   PF-ANNO keeps its own colour and plot flag.
+;;   THE annotation layer for every label pass -- callers ask for it, they do
+;;   not build a layer name.  Create-only, per pfd:ensure-layer-c.
 (defun pfd:anno-layer ()
   (pfd:ensure-layer-c *pf-anno-layer* T *pf-anno-layer-color*)
   *pf-anno-layer*)

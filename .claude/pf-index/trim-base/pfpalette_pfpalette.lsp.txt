@@ -1,0 +1,1372 @@
+(vl-load-com)
+(if (not (boundp '*pfp-loaded*))     (setq *pfp-loaded* nil))
+(if (not (boundp '*pfp-tree-map*))   (setq *pfp-tree-map* '()))
+(if (not (boundp '*pfp-dbmod-mark*)) (setq *pfp-dbmod-mark* nil))
+(defun pfp:odcl-path () (strcat *pftools-dir* "pfsuite-odcl/pfsuite.odcl"))
+(defun pfp:ensure ( / ce)
+  (setq ce (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (command "_OPENDCL")
+  (setvar "CMDECHO" ce)
+  (if (not *pfp-loaded*)
+    (setq *pfp-loaded* (dcl-Project-Load (pfp:odcl-path))))
+  *pfp-loaded*)
+(defun c:PFPALETTE ( / )
+  (if (pfp:ensure)
+    (if (dcl-Form-IsActive pfsuite/pfsPalette)
+      (dcl-Form-Close pfsuite/pfsPalette)
+      (progn
+        (dcl-Form-Show pfsuite/pfsPalette)
+        (pfp:skin nil nil)
+        (pfp:refresh)))
+    (prompt "\nPFPALETTE: could not load the OpenDCL project."))
+  (princ))
+(defun c:PFPRELOAD ( / ce r)
+  (setq ce (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (command "_OPENDCL")
+  (setvar "CMDECHO" ce)
+  (vl-catch-all-apply
+    '(lambda () (if (dcl-Form-IsActive pfsuite/pfsPalette)
+                  (dcl-Form-Close pfsuite/pfsPalette))) '())
+  (setq *pfp-loaded* nil
+        r (vl-catch-all-apply 'dcl-Project-Load (list (pfp:odcl-path) T)))
+  (if (vl-catch-all-error-p r)
+    (prompt (strcat "\nPFPRELOAD: FAILED -- " (vl-catch-all-error-message r)))
+    (progn
+      (setq *pfp-loaded* r)
+      (prompt "\nPFPRELOAD: .odcl re-read from disk.  Run PFPALETTE.")))
+  (princ))
+(defun pfp:refresh ( / res)
+  (setq *pfp-sel* nil *pfp-tar-sel* nil *pfp-last-key* nil)
+  (setq res (vl-catch-all-apply
+              '(lambda ( / reg)
+                 (setq reg (pfa:registry))
+                 (pfp:seed-labels reg)
+                 (setq *pfp-tree-map*
+                         (pfp:fill-tree pfsuite/pfsPalette/tvwLines reg)
+                       *pfp-tar-map*
+                         (pfp:fill-tree pfsuite/pfsPalette/tarLines reg))
+                 (pfp:fill-details nil)
+                 (pfp:fill-items nil)
+                 (pfp:cmd-init))
+              '()))
+  (if (vl-catch-all-error-p res)
+    (prompt (strcat "\nPFPALETTE: registry read failed -- "
+                    (vl-catch-all-error-message res))))
+  (princ))
+(defun pfp:cmd-idle-p ()
+  (and (= 0 (getvar "CMDACTIVE"))
+       (= "" (getvar "CMDNAMES"))))
+(defun pfp:defer (cmdline / doc)
+  (cond
+    ((not (pfp:cmd-idle-p))
+     (prompt (strcat "\nPFPALETTE: command line busy (" (getvar "CMDNAMES")
+                     ") -- finish it and try again."))
+     nil)
+    (T
+     (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+     (vla-SendCommand doc (strcat cmdline "\n"))
+     T)))
+(defun pfp:file-cell (p)
+  (if (and p (/= p ""))
+    (strcat (vl-filename-base p) (vl-filename-extension p))
+    "(not set)"))
+(defun pfp:dash (s) (if (and s (/= s "")) s "-"))
+(defun c:pfsuite/pfsPalette#OnInitialize ( / )
+  (dcl-ListView-AddColumns pfsuite/pfsPalette/metaList
+    (list (list "Property" 0 110) (list "Value" 0 410)))
+  (dcl-ListView-AddColumns pfsuite/pfsPalette/lvwLinkage
+    (list (list "Item" 0 90) (list "File" 0 440)))
+  (dcl-ListView-AddColumns pfsuite/pfsPalette/detailsList
+    (list (list "Property" 0 150) (list "Value" 0 370)))
+  (if (eq *pfp-items-mode* 'listview)
+    (dcl-ListView-AddColumns pfsuite/pfsPalette/lvwCommand
+      (list (list "Item" 0 150) (list "Station" 0 110) (list "Status" 0 110))))
+  (princ))
+(defun pfp:caption (ctrl label text / r)
+  (cond
+    ((null ctrl)
+     (prompt (strcat "\nPFPALETTE: control \"" label "\" is not in the loaded"
+                     " project -- check its (Name) in Studio."))
+     nil)
+    (T
+     (setq r (vl-catch-all-apply 'dcl-Control-SetCaption (list ctrl text)))
+     (cond
+       ((vl-catch-all-error-p r)
+        (prompt (strcat "\nPFPALETTE: SetCaption failed on \"" label "\" -- "
+                        (vl-catch-all-error-message r)))
+        nil)
+       (T T)))))
+(defun pfp:seed-labels (reg / root n anchored)
+  (setq root (pfset:root-get))
+  (pfp:caption pfsuite/pfsPalette/lblProject "lblProject"
+    (strcat "Project: " (if root root "(none)")))
+  (setq n        (length reg)
+        anchored (length (vl-remove-if-not
+                           '(lambda (r) (eq (caddr r) 'ANCHORED)) reg)))
+  (pfp:caption pfsuite/pfsPalette/lblCounts "lblCounts"
+    (strcat (itoa n) " line" (if (= n 1) "" "s") "  ("
+            (itoa anchored) " anchored, "
+            (itoa (- n anchored)) " registered)"))
+  (princ))
+(defun pfp:fill-tree (ctrl reg / cur-type pkey ckey first r map)
+  (dcl-Tree-Clear ctrl)
+  (setq map '() cur-type nil pkey nil first nil)
+  (foreach r reg
+    (if (not (equal (car r) cur-type))
+      (setq cur-type (car r)
+            pkey (dcl-Tree-AddParent ctrl cur-type -1 -1 -1)))
+    (if (null first) (setq first pkey))
+    (setq ckey (dcl-Tree-AddChild ctrl pkey (cadr r) -1 -1 -1)
+          map  (cons (cons ckey r) map)))
+  (if first (dcl-Tree-SelectItem ctrl first))
+  map)
+(defun pfp:sel-row (key map) (cdr (assoc key map)))
+(defun pfp:status-cell (anchor / roll)
+  (setq roll (pfa:status-roll anchor))
+  (strcat (pfa:status-label (car roll))
+          (if (nth 3 roll)
+            (strcat " (" (pf:join (nth 3 roll) ", ") ")")
+            "")))
+(defun pfp:why-rows (anchor / out p f)
+  (setq out '())
+  (foreach p '("LABEL" "INVERT")
+    (foreach f (pfa:status-why anchor p)
+      (setq out (cons (list (strcat "  " p) -1 f -1) out))))
+  (reverse out))
+(defun pfp:meta-rows (row / type name ename at cl mat)
+  (setq type (car row) name (cadr row))
+  (cond
+    ((eq (caddr row) 'ANCHORED)
+     (setq ename (nth 3 row)
+           at    (pfa:read-attribs ename)
+           cl    (cdr (assoc 1 (pfa:meta-get ename)))
+           mat   (cdr (assoc 5 (pfa:files-get ename))))
+     (append
+       (list (list "Type"       -1 type                          -1)
+             (list "Line"       -1 name                          -1)
+             (list "State"      -1 "Anchored"                    -1)
+             (list "Checks"     -1 (pfp:status-cell ename)       -1))
+       (pfp:why-rows ename)
+       (list (list "Datum"      -1 (pfp:dash (pfa:att "DATUM" at)) -1)
+             (list "Start sta"  -1 (pfp:dash (pfa:att "STA0"  at)) -1)
+             (list "H plot"     -1 (pfp:dash (pfa:att "HPLOT" at)) -1)
+             (list "V plot"     -1 (pfp:dash (pfa:att "VPLOT" at)) -1)
+             (list "Centerline" -1 (pfp:file-cell cl)            -1)
+             (list "Material"   -1 (pfp:dash mat)                -1))))
+    (T
+     (list (list "Type"       -1 type                          -1)
+           (list "Line"       -1 name                          -1)
+           (list "State"      -1 "Registered"                  -1)
+           (list "Centerline" -1 (pfp:file-cell (nth 2 (nth 4 row))) -1)))))
+(defun pfp:linkage-files (row / ename files stub)
+  (cond
+    ((eq (caddr row) 'ANCHORED)
+     (setq ename (nth 3 row)
+           files (pfa:files-get ename))
+     (list (cdr (assoc 1 (pfa:meta-get ename)))
+           (if files (cdr (assoc 1 files)))
+           (if files (cdr (assoc 2 files)))
+           (if files (cdr (assoc 3 files)))
+           (if files (cdr (assoc 4 files)))))
+    (T
+     (setq stub (nth 4 row))
+     (list (nth 2 stub) (nth 3 stub) (nth 4 stub) nil nil))))
+(defun pfp:fill-linkage (row / f)
+  (setq f (if row (pfp:linkage-files row) '(nil nil nil nil nil)))
+  (dcl-ListView-FillList pfsuite/pfsPalette/lvwLinkage
+    (list (list "Centerline (.cl)" -1 (pfp:file-cell (nth 0 f)) -1)
+          (list "Invert _INV .pro" -1 (pfp:file-cell (nth 1 f)) -1)
+          (list "Crown _TOP .pro"  -1 (pfp:file-cell (nth 2 f)) -1)
+          (list "Existing .tin"    -1 (pfp:file-cell (nth 3 f)) -1)
+          (list "DESIGN_* .tin"    -1 (pfp:file-cell (nth 4 f)) -1)))
+  (princ))
+(if (not (boundp '*pfp-last-key*)) (setq *pfp-last-key* nil))
+(defun pfp:route-sel (Key)
+  (if (and Key (equal Key *pfp-last-key*))
+    (pfp:trace-sel "SKIP" nil Key)
+    (pfp:route-sel-do Key))
+  (princ))
+(defun pfp:route-sel-do (Key / reg tar res)
+  (setq *pfp-last-key* Key
+        reg (pfp:sel-row Key *pfp-tree-map*)
+        tar (pfp:sel-row Key *pfp-tar-map*)
+        *pf-quiet* T
+        res (vl-catch-all-apply
+              '(lambda ()
+                 (cond
+                   (reg (pfp:show-registry reg))
+                   (tar (pfp:show-commands tar))
+                   (T (pfp:show-registry nil) (pfp:show-commands nil))))
+              '()))
+  (setq *pf-quiet* nil)
+  (if (vl-catch-all-error-p res)
+    (prompt (strcat "\nPFPALETTE: selection fill failed -- "
+                    (vl-catch-all-error-message res))))
+  (princ))
+(defun pfp:show-registry (row)
+  (dcl-ListView-FillList pfsuite/pfsPalette/metaList
+    (if row (pfp:meta-rows row) '()))
+  (pfp:fill-linkage row)
+  (setq *pfp-sel* row)
+  (princ))
+(defun pfp:show-commands (row)
+  (pfp:fill-details row)
+  (pfp:fill-items row)
+  (setq *pfp-tar-sel* row)
+  (princ))
+(defun c:pfsuite/pfsPalette/tvwLines#OnSelChanged (Label Key / )
+  (pfp:trace-sel "TVW" Label Key)
+  (pfp:route-sel Key)
+  (princ))
+(defun pfp:trace-sel (tag Label Key / reg tar)
+  (if *pfp-trace*
+    (progn
+      (setq reg (pfp:sel-row Key *pfp-tree-map*)
+            tar (pfp:sel-row Key *pfp-tar-map*))
+      (prompt (strcat "\n" tag "#OnSelChanged  Label=" (if Label Label "nil")
+                      "\n    tree-map: "
+                      (if reg (strcat "YES -> " (car reg) " " (cadr reg)) "no")
+                      "   tar-map: "
+                      (if tar (strcat "YES -> " (car tar) " " (cadr tar)) "no")
+                      "   -> routed to "
+                      (cond (reg "Registry") (tar "Commands") (T "cleared"))))))
+  (princ))
+(if (not (boundp '*pfp-tar-map*)) (setq *pfp-tar-map* '()))
+(if (not (boundp '*pfp-tar-sel*)) (setq *pfp-tar-sel* nil))
+(defun pfp:count-cell (done out)
+  (strcat (itoa done) " labeled, " (itoa out) " outstanding"))
+(defun pfp:drift-cell (n)
+  (if (or (null n) (= n 0))
+    "-"
+    (strcat (itoa n) " Incorrect label(s)")))
+(defun pfp:detail-rows (row / c)
+  (cond
+    ((null row) '())
+    ((not (eq (caddr row) 'ANCHORED))
+     (list (list "Type"   -1 (car row)  -1)
+           (list "Line"   -1 (cadr row) -1)
+           (list "State"  -1 "Registered" -1)
+           (list "Counts" -1 "anchor this line to see counts" -1)))
+    ((null (setq c (pfa:target-counts (nth 3 row))))
+     (list (list "Type"   -1 (car row)  -1)
+           (list "Line"   -1 (cadr row) -1)
+           (list "State"  -1 "Anchored" -1)
+           (list "Counts" -1 "no .cl on record -- run PFSETUP (edit)" -1)))
+    (T
+     (list (list "Type"  -1 (car row)  -1)
+           (list "Line"  -1 (cadr row) -1)
+           (list "State" -1 "Anchored" -1)
+           (list "Lines in gather set" -1
+                 (itoa (cdr (assoc 'lines c))) -1)
+           (list "Structures on line" -1
+                 (itoa (cdr (assoc 'structures c))) -1)
+           (list "Structure labels" -1
+                 (pfp:count-cell (cdr (assoc 'label-done c))
+                                 (cdr (assoc 'label-out  c))) -1)
+           (list "Invert labels" -1
+                 (pfp:count-cell (cdr (assoc 'invert-done c))
+                                 (cdr (assoc 'invert-out  c))) -1)
+           (list "Crossings on record" -1
+                 (itoa (cdr (assoc 'crossings c))) -1)
+           (list "Crossing labels" -1
+                 (pfp:count-cell (cdr (assoc 'xing-done c))
+                                 (cdr (assoc 'xing-out  c))) -1)
+           (list "Drift" -1 (pfp:drift-cell (cdr (assoc 'drift c))) -1)))))
+(defun pfp:fill-details (row / rows res)
+  (pf:load-apis)
+  (setq res (vl-catch-all-apply 'pfp:detail-rows (list row)))
+  (setq rows (if (vl-catch-all-error-p res)
+               (progn
+                 (prompt (strcat "\nPFPALETTE: target counts failed -- "
+                                 (vl-catch-all-error-message res)))
+                 (list (list "Error" -1
+                             (vl-catch-all-error-message res) -1)))
+               res))
+  (dcl-ListView-FillList pfsuite/pfsPalette/detailsList rows)
+  (princ))
+(setq *pfp-items-mode* 'listview)
+(setq *pfp-lb-clear*   '("dcl-ListBox-Clear"   "dcl_ListBox_Clear"))
+(setq *pfp-lb-addlist* '("dcl-ListBox-AddList" "dcl_ListBox_AddList"))
+(if (not (boundp '*pfp-item-sel*)) (setq *pfp-item-sel* nil))
+(defun c:pfsuite/pfsPalette/lvwCommand#OnSelChanged (ItemIndexOrCount Value / )
+  (setq *pfp-item-sel* (list ItemIndexOrCount Value))
+  (princ))
+(defun pfp:items-pass ( / rec hit i)
+  (setq i 0)
+  (if (and (setq rec (assoc "optLabel" *pfp-opt-vals*))
+           (setq hit (pfp:cap-match "optLabel" (cadr rec))))
+    (setq i (cdr hit)))
+  (cond ((= i 1) *pfi-pass-name*)
+        ((= i 2) "XING")
+        (T       "LABEL")))
+(defun pfp:item-status (state)
+  (cond ((eq state 'LABELED) "labeled")
+        ((eq state 'NEW)     "NEW -- not on record")
+        ((eq state 'MOVED)   "MOVED -- station changed")
+        (T                   "outstanding")))
+(defun pfp:item-rows (row / pass res items out e)
+  (cond
+    ((null row) '())
+    ((not (eq (caddr row) 'ANCHORED))
+     (list (list "(not anchored)" "-" "anchor this line first")))
+    ((null (setq res (pfa:target-items (nth 3 row) (setq pass (pfp:items-pass)))))
+     (list (list "(unreadable)" "-" "no .cl on record -- run PFSETUP (edit)")))
+    ((null (setq items (cdr res)))
+     (list (list (if (= pass "XING")
+                   "(nothing crosses this line)"
+                   "(no structures on this line)")
+                 "-" "-")))
+    (T
+     (setq out '())
+     (foreach e items
+       (setq out (cons (list (car e)
+                             (pf:fmt-station (cadr e))
+                             (pfp:item-status (caddr e)))
+                       out)))
+     (reverse out))))
+(defun pfp:rows->lv (rows / out r)
+  (setq out '())
+  (foreach r rows
+    (setq out (cons (list (car r) -1 (cadr r) -1 (caddr r) -1) out)))
+  (reverse out))
+(defun pfp:rows->lb (rows / out r)
+  (setq out '())
+  (foreach r rows
+    (setq out (cons (strcat (pfset:pad (car r) 20)
+                            (pfset:pad (cadr r) 14)
+                            (caddr r))
+                    out)))
+  (reverse out))
+(defun pfp:fill-items (row / rows res)
+  (setq *pfp-item-sel* nil)
+  (cond
+    ((null *pfp-items-mode*) nil)
+    ((null pfsuite/pfsPalette/lvwCommand)
+     (prompt (strcat "\nPFPALETTE: control \"lvwCommand\" is not in the loaded"
+                     " project -- check its (Name) in Studio.")))
+    (T
+      (pf:load-apis)
+      (setq *pf-quiet* T
+            res        (vl-catch-all-apply 'pfp:item-rows (list row)))
+      (setq *pf-quiet* nil)
+      (setq rows (if (vl-catch-all-error-p res)
+                   (progn
+                     (prompt (strcat "\nPFPALETTE: item list failed -- "
+                                     (vl-catch-all-error-message res)))
+                     (list (list "(error)" "-"
+                                 (vl-catch-all-error-message res))))
+                   res))
+      (if (eq *pfp-items-mode* 'listbox)
+        (progn
+          (pfp:first-callable *pfp-lb-clear*
+                              (list pfsuite/pfsPalette/lvwCommand))
+          (if rows
+            (pfp:first-callable *pfp-lb-addlist*
+                                (list pfsuite/pfsPalette/lvwCommand
+                                      (pfp:rows->lb rows)))))
+        (dcl-ListView-FillList pfsuite/pfsPalette/lvwCommand
+                               (pfp:rows->lv rows)))))
+  (princ))
+(if (not (boundp '*pfp-trace*)) (setq *pfp-trace* nil))
+(defun c:pfsuite/pfsPalette/tarLines#OnSelChanged (Label Key / )
+  (pfp:trace-sel "TAR" Label Key)
+  (pfp:route-sel Key)
+  (princ))
+(defun pfp:live-keys (map / n c)
+  (setq n 0)
+  (foreach c map (if (car c) (setq n (1+ n))))
+  n)
+(defun c:PFPTREES ( / )
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPTREES: run PFPALETTE first."))
+    (T
+     (prompt "\n=== PFPTREES -- runtime rects ===")
+     (foreach pair (list (cons "tvwLines" pfsuite/pfsPalette/tvwLines)
+                         (cons "tarLines" pfsuite/pfsPalette/tarLines)
+                         (cons "detailsList" pfsuite/pfsPalette/detailsList))
+       (prompt (strcat "\n  " (car pair) ":"))
+       (if (null (cdr pair))
+         (prompt "  NIL -- not defined in the loaded project")
+         (foreach g '("GetLeft" "GetTop" "GetWidth" "GetHeight" "GetVisible")
+           (prompt (strcat "  " (substr g 4) "="
+                           (pfp:ask (strcat "dcl-Control-" g)
+                                    (list (cdr pair))))))))
+     (prompt (strcat "\n  Overlapping tvwLines/tarLines rects => tvwLines is"
+                     " covering the Commands tab and taking the clicks."))))
+  (princ))
+(defun c:PFPTAR ( / )
+  (cond
+    (*pfp-trace*
+     (setq *pfp-trace* nil)
+     (prompt "\nPFPTAR: trace OFF.  Run PFPTAR again to turn it back on.")
+     (princ))
+    (T (pfp:tar-report))))
+(defun pfp:tar-report ( / )
+  (setq *pfp-trace* T)
+  (prompt "\n=== PFPTAR ===")
+  (prompt (strcat "\n  tarLines control symbol: "
+                  (if pfsuite/pfsPalette/tarLines
+                    "bound"
+                    "NIL -- the project never defined it; check (Name) in Studio")))
+  (prompt (strcat "\n  detailsList control symbol: "
+                  (if pfsuite/pfsPalette/detailsList
+                    "bound"
+                    "NIL -- the project never defined it; check (Name) in Studio")))
+  (prompt (strcat "\n  *pfp-tar-map*:  " (itoa (length *pfp-tar-map*))
+                  " entries, " (itoa (pfp:live-keys *pfp-tar-map*))
+                  " with a real key"))
+  (prompt (strcat "\n  *pfp-tree-map*: " (itoa (length *pfp-tree-map*))
+                  " entries, " (itoa (pfp:live-keys *pfp-tree-map*))
+                  " with a real key   (the working tree, for comparison)"))
+  (if (= 0 (pfp:live-keys *pfp-tar-map*))
+    (prompt (strcat "\n  >> EVERY tarLines key is nil: the Tree calls did"
+                    " nothing.  The control is named and bound but is not"
+                    " accepting TreeView calls -- check its TYPE in Studio"
+                    " against tvwLines.")))
+  (prompt "\n  Trace is ON.  Click a LINE in the Commands tree now.")
+  (prompt "\n  Run PFPTAR again to turn it OFF.")
+  (princ))
+(setq *pfp-controls*
+  '("tabMain" "lblProject" "lblCounts" "btnRefresh" "btnHelp"
+    "tvwLines" "metaList" "lvwLinkage"
+    "btnPickCL" "btnPickINV" "btnPickTOP" "btnPickDESIGN" "btnPickEXIST"
+    "btnAnchor" "btnEdit" "btnNew" "btnRemove" "btnZoom"
+    "tarLines" "frmLabel" "optLabel" "frmTools" "optTools"
+    "frmOptions" "optRun" "detailsList" "lvwCommand" "chkbxZoom"
+    "btnClear" "btnRun"))
+(defun c:PFPDIAG ( / nm val found miss)
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPDIAG: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPDIAG: the palette is CLOSED, so no control symbol exists")
+     (prompt "\n         and every name would read MISSING.  Run PFPALETTE")
+     (prompt "\n         first, then PFPDIAG."))
+    (T
+     (setq found '() miss '())
+     (foreach nm *pfp-controls*
+       (setq val (eval (read (strcat "pfsuite/pfsPalette/" nm))))
+       (if val (setq found (cons nm found)) (setq miss (cons nm miss))))
+     (prompt (strcat "\n=== PFPDIAG -- " (itoa (length found)) " of "
+                     (itoa (length *pfp-controls*)) " controls resolved ==="))
+     (if miss
+       (progn
+         (prompt "\n  MISSING (check the (Name) in Studio):")
+         (foreach nm (reverse miss) (prompt (strcat "\n    " nm))))
+       (prompt "\n  All control names resolve."))
+     (prompt "\n=== end of PFPDIAG ===")))
+  (princ))
+(defun pfp:callable-p (fname) (not (null (eval (read fname)))))
+(defun pfp:selfcheck ()
+  (prompt (strcat "\n  [detector self-check: dcl-Control-SetCaption callable -> "
+                  (if (pfp:callable-p "dcl-Control-SetCaption") "T" "nil  <-- SUSPECT")
+                  "]"))
+  (princ))
+(defun pfp:try (fname args / r)
+  (if (not (pfp:callable-p fname))
+    "no such function"
+    (progn
+      (setq r (vl-catch-all-apply (read fname) args))
+      (if (vl-catch-all-error-p r)
+        (strcat "FAILED -- " (vl-catch-all-error-message r))
+        "ok"))))
+(defun c:PFPPROBE ( / )
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPPROBE: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPPROBE: run PFPALETTE first -- controls exist only while open."))
+    (T
+     (prompt "\n=== PFPPROBE -- watch the PALETTE, not just this report ===")
+     (prompt (strcat "\n  [A] btnHelp    SetCaption -> "
+                     (pfp:try "dcl-Control-SetCaption"
+                              (list pfsuite/pfsPalette/btnHelp "<<PROBE-A>>"))))
+     (prompt (strcat "\n  [B] lblProject SetCaption -> "
+                     (pfp:try "dcl-Control-SetCaption"
+                              (list pfsuite/pfsPalette/lblProject "<<PROBE-B>>"))))
+     (prompt (strcat "\n  [D] lblProject SetVisible -> "
+                     (pfp:try "dcl-Control-SetVisible"
+                              (list pfsuite/pfsPalette/lblProject T))))
+     (prompt (strcat "\n  [E] lblProject SetForeColor -> "
+                     (pfp:try "dcl-Control-SetForeColor"
+                              (list pfsuite/pfsPalette/lblProject 255))))
+     (prompt "\n  Now LOOK at the palette:")
+     (prompt "\n    Help button reads <<PROBE-A>>?   SetCaption works here.")
+     (prompt "\n    Footer shows <<PROBE-B/C>>?      which setter is the right one.")
+     (prompt "\n    Text appeared only after [D]/[E]? hidden or same-colour.")
+     (prompt "\n  Toggle PFPALETTE off/on to restore -- Close destroys controls.")
+     (prompt "\n=== end of PFPPROBE ===")))
+  (princ))
+(defun pfp:ask (fname args / r)
+  (if (not (pfp:callable-p fname))
+    "no such function"
+    (progn
+      (setq r (vl-catch-all-apply (read fname) args))
+      (if (vl-catch-all-error-p r)
+        (strcat "-- " (vl-catch-all-error-message r))
+        (vl-princ-to-string r)))))
+(defun pfp:pause (msg)
+  (getstring (strcat "\n  >> " msg " -- look, then press Enter: "))
+  (princ))
+(defun pfp:read-ctrl (nm ctrl / g)
+  (prompt (strcat "\n  " nm ":"))
+  (foreach g '("GetCaption" "GetVisible" "GetEnabled"
+               "GetLeft" "GetTop" "GetWidth" "GetHeight")
+    (prompt (strcat "\n      " g "  -> "
+                    (pfp:ask (strcat "dcl-Control-" g) (list ctrl)))))
+  (princ))
+(defun c:PFPREAD ( / )
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPREAD: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPREAD: run PFPALETTE first -- controls exist only while open."))
+    (T
+     (prompt "\n=== PFPREAD -- runtime state ===")
+     (pfp:selfcheck)
+     (prompt (strcat "\n  FORM  GetWidth  -> "
+                     (pfp:ask "dcl-Form-GetWidth"  (list pfsuite/pfsPalette))))
+     (prompt (strcat "\n  FORM  GetHeight -> "
+                     (pfp:ask "dcl-Form-GetHeight" (list pfsuite/pfsPalette))))
+     (pfp:read-ctrl "lblProject (BLANK)"  pfsuite/pfsPalette/lblProject)
+     (pfp:read-ctrl "lblCounts  (BLANK)"  pfsuite/pfsPalette/lblCounts)
+     (pfp:read-ctrl "btnHelp    (PAINTS)" pfsuite/pfsPalette/btnHelp)
+     (pfp:read-ctrl "btnRefresh (PAINTS)" pfsuite/pfsPalette/btnRefresh)
+     (pfp:read-ctrl "tabMain    (suspect)" pfsuite/pfsPalette/tabMain)
+     (prompt "\n=== end of PFPREAD ===")
+     (prompt "\n  Run this DOCKED and FLOATING, then diff the two dumps.")))
+  (princ))
+(defun c:PFPDETAIL ( / reg row rows cnt)
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPDETAIL: run PFPALETTE first."))
+    ((null (setq reg (pfa:registry)))
+     (prompt "\nPFPDETAIL: the registry is empty -- nothing to summarise."))
+    ((null (setq row (car (vl-remove-if-not
+                            '(lambda (r) (eq (caddr r) 'ANCHORED)) reg))))
+     (prompt (strcat "\nPFPDETAIL: no ANCHORED line in the registry -- every"
+                     " row is a stub, so every count is unknowable by design.")))
+    (T
+     (prompt (strcat "\nPFPDETAIL: filling from " (car row) " '" (cadr row) "'"))
+     (setq cnt (vl-catch-all-apply 'pfa:target-counts (list (nth 3 row))))
+     (cond
+       ((vl-catch-all-error-p cnt)
+        (prompt (strcat "\n  pfa:target-counts THREW: "
+                        (vl-catch-all-error-message cnt))))
+       ((null cnt)
+        (prompt "\n  pfa:target-counts returned nil -- no xform, or no .cl bound."))
+       (T
+        (prompt (strcat "\n  counts ok: "
+                        (itoa (cdr (assoc 'structures cnt))) " structure(s), "
+                        (itoa (cdr (assoc 'crossings  cnt))) " crossing(s)"))))
+     (setq rows (pfp:detail-rows row))
+     (prompt (strcat "\n  rows built: " (itoa (length rows))))
+     (pfp:fill-details row)
+     (prompt (strcat "\n  Panel populated now?  YES -> the code is fine and"
+                     " tarLines#OnSelChanged is not ticked in Studio."
+                     "\n                        NO  -> the fault is the fill"
+                     " itself; report the row count above."))))
+  (princ))
+(defun c:PFPNUDGE ( / c)
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPNUDGE: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPNUDGE: run PFPALETTE first."))
+    (T
+     (setq c pfsuite/pfsPalette/lblProject)
+     (prompt "\n=== PFPNUDGE -- WATCH THE FOOTER after each step ===")
+     (pfp:selfcheck)
+     (prompt (strcat "\n  [0] SetCaption <<NUDGE>>, no nudge -> "
+                     (pfp:try "dcl-Control-SetCaption" (list c "<<NUDGE>>"))))
+     (pfp:pause "[0] BASELINE -- text there already?")
+     (prompt (strcat "\n  [1] SetEnabled nil/T (the old hack) -> "
+                     (pfp:try "dcl-Control-SetEnabled" (list c nil)) " / "
+                     (pfp:try "dcl-Control-SetEnabled" (list c T))))
+     (pfp:pause "[1] enable-toggle")
+     (prompt (strcat "\n  [2] SetVisible nil/T -> "
+                     (pfp:try "dcl-Control-SetVisible" (list c nil)) " / "
+                     (pfp:try "dcl-Control-SetVisible" (list c T))))
+     (pfp:pause "[2] visible-toggle")
+     (prompt (strcat "\n  [3] Control Update     -> "
+                     (pfp:try "dcl-Control-Update" (list c))))
+     (prompt (strcat "\n  [4] Control Invalidate -> "
+                     (pfp:try "dcl-Control-Invalidate" (list c))))
+     (prompt (strcat "\n  [5] Form Update        -> "
+                     (pfp:try "dcl-Form-Update" (list pfsuite/pfsPalette))))
+     (prompt (strcat "\n  [6] Form Invalidate    -> "
+                     (pfp:try "dcl-Form-Invalidate" (list pfsuite/pfsPalette))))
+     (pfp:pause "[3]-[6] whichever of those existed")
+     (prompt "\n  Which step made <<NUDGE>> appear?  That is the fix.")
+     (prompt "\n  None -> not a repaint fault.  Use PFPREAD / PFPMOVE.")
+     (prompt "\n=== end of PFPNUDGE ===")))
+  (princ))
+(defun c:PFPMOVE ( / c)
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPMOVE: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPMOVE: run PFPALETTE first."))
+    (T
+     (setq c pfsuite/pfsPalette/lblProject)
+     (prompt "\n=== PFPMOVE -- lblProject to (60,120), 400x30 ===")
+     (pfp:try "dcl-Control-SetCaption" (list c "<<MOVED-lblProject>>"))
+     (prompt (strcat "\n  SetLeft   -> " (pfp:try "dcl-Control-SetLeft"   (list c 60))))
+     (prompt (strcat "\n  SetTop    -> " (pfp:try "dcl-Control-SetTop"    (list c 120))))
+     (prompt (strcat "\n  SetWidth  -> " (pfp:try "dcl-Control-SetWidth"  (list c 400))))
+     (prompt (strcat "\n  SetHeight -> " (pfp:try "dcl-Control-SetHeight" (list c 30))))
+     (prompt "\n  LOOK: does <<MOVED-lblProject>> appear over the Registry tab?")
+     (prompt "\n    YES -> it was clipped or covered where it lives.")
+     (prompt "\n    NO  -> position is not the mechanism.")
+     (prompt "\n  Toggle PFPALETTE off/on to restore.")
+     (prompt "\n=== end of PFPMOVE ===")))
+  (princ))
+(defun c:PFPDBMOD ( / cur)
+  (setq cur (getvar "DBMOD"))
+  (if *pfp-dbmod-mark*
+    (prompt (strcat "\nPFPDBMOD: " (itoa *pfp-dbmod-mark*) " -> " (itoa cur)
+                    (if (= *pfp-dbmod-mark* cur)
+                      "   UNCHANGED -- write-free."
+                      "   CHANGED -- a read path wrote.  Find it.")))
+    (prompt (strcat "\nPFPDBMOD: mark set at " (itoa cur)
+                    ".  Act, then run PFPDBMOD again.")))
+  (setq *pfp-dbmod-mark* cur)
+  (princ))
+(setq *pfp-skin-mode* 'font)
+(setq *pfp-skin-scheme* 'sys)
+(setq *pfp-scheme-sys*
+  '((chrome-bg -16) (chrome-fg -19)
+    (data-bg    -6) (data-fg    -9)))
+(setq *pfp-scheme-dark*
+  '((chrome-bg  55  55  55) (chrome-fg 220 220 220)
+    (data-bg    43  43  43) (data-fg   220 220 220)))
+(setq *pfp-scheme-light*
+  '((chrome-bg 240 240 240) (chrome-fg   0   0   0)
+    (data-bg   255 255 255) (data-fg     0   0   0)))
+(setq *pfp-font-name* "MS Shell Dlg")
+(setq *pfp-font-size* 9)
+(setq *pfp-control-types*
+  '(("tabMain" . tab)
+    ("lblProject" . label) ("lblCounts" . label)
+    ("btnRefresh" . button) ("btnHelp" . button)
+    ("tvwLines" . tree) ("metaList" . list) ("lvwLinkage" . list)
+    ("btnPickCL" . button) ("btnPickINV" . button) ("btnPickTOP" . button)
+    ("btnPickDESIGN" . button) ("btnPickEXIST" . button)
+    ("btnAnchor" . button) ("btnEdit" . button) ("btnNew" . button)
+    ("btnRemove" . button) ("btnZoom" . button)
+    ("tarLines" . tree)
+    ("frmLabel" . frame) ("optLabel" . optlist)
+    ("frmTools" . frame) ("optTools" . optlist)
+    ("frmOptions" . frame) ("optRun" . optlist)
+    ("detailsList" . list)
+    ("lvwCommand" . list)
+    ("chkbxZoom" . check)
+    ("btnClear" . button) ("btnRun" . button)))
+(setq *pfp-can-backcolor* '(label list optlist check))
+(setq *pfp-can-forecolor* '(label optlist check))
+(setq *pfp-font-mode-colour* '(label))
+(setq *pfp-data-types* '(list tree))
+(setq *pfp-design-size* '(420 670))
+(if (not (boundp '*pfp-rect-base*)) (setq *pfp-rect-base* nil))
+(defun pfp:colour (scheme key / v)
+  (setq v (cdr (assoc key scheme)))
+  (cond ((null v) nil)
+        ((= 1 (length v)) (car v))
+        (T v)))
+(defun pfp:scheme ( / ct)
+  (if (eq *pfp-skin-scheme* 'sys)
+    *pfp-scheme-sys*
+    (progn
+      (setq ct (getvar "COLORTHEME"))
+      (if (and ct (= 0 ct)) *pfp-scheme-dark* *pfp-scheme-light*))))
+(defun pfp:type-can (nm prop / ty)
+  (setq ty (cdr (assoc nm *pfp-control-types*)))
+  (cond
+    ((null ty) nil)
+    ((eq prop 'font) T)
+    ((eq prop 'bg) (and (member ty *pfp-can-backcolor*) T))
+    (T             (and (member ty *pfp-can-forecolor*) T))))
+(defun pfp:may (nm prop / ty)
+  (setq ty (cdr (assoc nm *pfp-control-types*)))
+  (and (pfp:type-can nm prop)
+       (or (eq prop 'font)
+           (not (eq *pfp-skin-mode* 'font))
+           (and (member ty *pfp-font-mode-colour*) T))))
+(defun pfp:skin-one (nm bg fg size / c out p)
+  (setq c   (eval (read (strcat "pfsuite/pfsPalette/" nm)))
+        out '())
+  (if (null c)
+    (setq out (list (strcat "control is nil -- " nm)))
+    (foreach p (list (list "dcl-Control-SetBackColor" bg              'bg)
+                     (list "dcl-Control-SetForeColor" fg              'fg)
+                     (list "dcl-Control-SetFont"      *pfp-font-name* 'font)
+                     (list "dcl-Control-SetFontSize"  size            'font))
+      (if (and (cadr p) (pfp:may nm (caddr p)))
+        (setq out (cons (strcat (car p) " -> " (pfp:try (car p) (list c (cadr p))))
+                        out)))))
+  (reverse out))
+(defun pfp:tally (lines / acc s hit)
+  (setq acc '())
+  (foreach s lines
+    (if (setq hit (assoc s acc))
+      (setq acc (subst (cons s (1+ (cdr hit))) hit acc))
+      (setq acc (cons (cons s 1) acc))))
+  (reverse acc))
+(defun pfp:skin (verbose size / scheme cbg cfg dbg dfg lines nm ty r)
+  (if (null size) (setq size *pfp-font-size*))
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (if verbose (prompt "\n  skin: the palette is closed -- nothing to paint.")))
+    ((eq *pfp-skin-mode* 'off)
+     (if verbose (prompt "\n  skin: mode is 'off -- inheriting the host.")))
+    (T
+     (setq scheme (pfp:scheme)
+           cbg    (pfp:colour scheme 'chrome-bg)
+           cfg    (pfp:colour scheme 'chrome-fg)
+           dbg    (pfp:colour scheme 'data-bg)
+           dfg    (pfp:colour scheme 'data-fg)
+           lines  (list (strcat "dcl-Form-SetBackColor -> "
+                                (pfp:try "dcl-Form-SetBackColor"
+                                         (list pfsuite/pfsPalette cbg)))))
+     (foreach nm *pfp-controls*
+       (setq ty (cdr (assoc nm *pfp-control-types*)))
+       (if (member ty *pfp-data-types*)
+         (setq lines (append lines (pfp:skin-one nm dbg dfg size)))
+         (setq lines (append lines (pfp:skin-one nm cbg cfg size)))))
+     (foreach r (pfp:tally lines)
+       (if (or verbose (not (wcmatch (car r) "*-> ok")))
+         (prompt (strcat "\n  " (itoa (cdr r)) "x  " (car r)))))))
+  (princ))
+(defun c:PFPTHEME ( / ct g L D)
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPTHEME: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPTHEME: the palette is CLOSED -- run PFPALETTE first."))
+    (T
+     (setq ct (getvar "COLORTHEME"))
+     (prompt (strcat "\n=== PFPTHEME -- COLORTHEME "
+                     (if ct (itoa ct) "(unavailable)")
+                     (cond ((null ct) "") ((= 0 ct) " (dark)") (T " (light)"))
+                     ",  mode "   (vl-princ-to-string *pfp-skin-mode*)
+                     ",  scheme " (vl-princ-to-string *pfp-skin-scheme*) " ==="))
+     (pfp:selfcheck)
+     (pfp:skin T nil)
+     (setq L "lblProject" D "metaList")
+     (prompt "\n  readback            lblProject (Label)   |   metaList (List View)")
+     (foreach g '(("GetBackColor" . bg)   ("GetForeColor" . fg)
+                  ("GetFont"      . font) ("GetFontSize"  . font))
+       (prompt (strcat "\n    " (car g) "  " (pfp:peek L (car g) (cdr g))
+                       "   |   "            (pfp:peek D (car g) (cdr g)))))
+     (prompt "\n  n/a = the vendor does not document that property for that type.")
+     (prompt "\n=== end of PFPTHEME ===")))
+  (princ))
+(defun pfp:peek (nm getter prop / c)
+  (if (and (pfp:type-can nm prop)
+           (setq c (eval (read (strcat "pfsuite/pfsPalette/" nm)))))
+    (pfp:ask (strcat "dcl-Control-" getter) (list c))
+    "n/a"))
+(defun pfp:num (fname ctrl / r)
+  (if (pfp:callable-p fname)
+    (progn
+      (setq r (vl-catch-all-apply (read fname) (list ctrl)))
+      (if (and (not (vl-catch-all-error-p r)) (numberp r)) r))))
+(defun pfp:capture ( / out nm c l tp w h)
+  (setq out '())
+  (foreach nm *pfp-controls*
+    (if (setq c (eval (read (strcat "pfsuite/pfsPalette/" nm))))
+      (progn
+        (setq l  (pfp:num "dcl-Control-GetLeft"   c)
+              tp (pfp:num "dcl-Control-GetTop"    c)
+              w  (pfp:num "dcl-Control-GetWidth"  c)
+              h  (pfp:num "dcl-Control-GetHeight" c))
+        (if (and l tp w h) (setq out (cons (list nm l tp w h) out))))))
+  (reverse out))
+(defun pfp:scale-to (f v) (max 1 (fix (+ 0.5 (* f v)))))
+(defun pfp:move-one (nm l tp w h / c out p)
+  (setq c   (eval (read (strcat "pfsuite/pfsPalette/" nm)))
+        out '())
+  (if (null c)
+    (setq out (list (strcat "control is nil -- " nm)))
+    (foreach p (list (cons "dcl-Control-SetLeft"   l)
+                     (cons "dcl-Control-SetTop"    tp)
+                     (cons "dcl-Control-SetWidth"  w)
+                     (cons "dcl-Control-SetHeight" h))
+      (setq out (cons (strcat (car p) " -> " (pfp:try (car p) (list c (cdr p))))
+                      out))))
+  (reverse out))
+(defun pfp:font-at (f)
+  (if *pfp-font-size*
+    (* (if (minusp *pfp-font-size*) -1 1)
+       (pfp:scale-to f (abs *pfp-font-size*)))))
+(defun c:PFPSCALE ( / fx fy w h r lines rect e)
+  (cond
+    ((not (pfp:ensure))
+     (prompt "\nPFPSCALE: could not load the OpenDCL project."))
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPSCALE: the palette is CLOSED -- run PFPALETTE first."))
+    (T
+     (if (null *pfp-rect-base*)
+       (progn
+         (setq *pfp-rect-base* (pfp:capture))
+         (prompt (strcat "\n  baseline captured from "
+                         (itoa (length *pfp-rect-base*)) " controls."))))
+     (if (null *pfp-rect-base*)
+       (prompt "\nPFPSCALE: no rect getter returned a number -- cannot scale.")
+       (progn
+         (initget 6)
+         (setq fx (getreal "\nX factor (Left + Width) <0.85>: "))
+         (if (null fx) (setq fx 0.85))
+         (initget 6)
+         (setq fy (getreal (strcat "\nY factor (Top + Height) <"
+                                   (rtos fx 2 3) ">: ")))
+         (if (null fy) (setq fy fx))
+         (setq w (pfp:scale-to fx (car  *pfp-design-size*))
+               h (pfp:scale-to fy (cadr *pfp-design-size*)))
+         (prompt (strcat "\n=== PFPSCALE  X x" (rtos fx 2 3)
+                         "  Y x" (rtos fy 2 3)
+                         "  -- form -> " (itoa w) " x " (itoa h) " ==="))
+         (setq r (pfp:try "dcl-Form-Resize" (list pfsuite/pfsPalette w h)))
+         (prompt (strcat "\n  dcl-Form-Resize -> " r))
+         (if (/= w (car *pfp-design-size*))
+           (prompt (strcat "\n  NOTE: Studio pins Min Width = Max Width = "
+                           (itoa (car *pfp-design-size*))
+                           " -- the FRAME will not move; only the controls do.")))
+         (setq lines '())
+         (foreach rect *pfp-rect-base*
+           (setq lines (append lines
+                               (pfp:move-one (car rect)
+                                             (pfp:scale-to fx (cadr   rect))
+                                             (pfp:scale-to fy (caddr  rect))
+                                             (pfp:scale-to fx (cadddr rect))
+                                             (pfp:scale-to fy (last   rect))))))
+         (foreach e (pfp:tally lines)
+           (prompt (strcat "\n  " (itoa (cdr e)) "x  " (car e))))
+         (if *pfp-font-size* (pfp:skin nil (pfp:font-at (min fx fy))))
+         (prompt "\n  LOOK, then toggle PFPALETTE off/on to restore.")
+         (prompt "\n  Keep them?  Multiply the Studio rects per axis in Studio.")
+         (prompt "\n=== end of PFPSCALE ===")))))
+  (princ))
+(if (not (boundp '*pfp-verb*)) (setq *pfp-verb* nil))
+(if (not (boundp '*pfp-sel*))  (setq *pfp-sel*  nil))
+(defun pfp:fire (verb row)
+  (setq *pfp-verb* (cons verb row))
+  (cond ((pfp:defer "PFPVERB") T)
+        (T (setq *pfp-verb* nil) nil)))
+(defun pfp:need-row (row state)
+  (cond
+    ((null row) (prompt "\nPFPALETTE: select a line first.") nil)
+    ((and (eq state 'ANCHORED) (not (eq (caddr row) 'ANCHORED)))
+     (prompt (strcat "\nPFPALETTE: '" (cadr row)
+                     "' is Registered, not Anchored -- use Anchor."))
+     nil)
+    ((and (eq state 'STUB) (eq (caddr row) 'ANCHORED))
+     (prompt (strcat "\nPFPALETTE: '" (cadr row)
+                     "' is already Anchored -- use Edit."))
+     nil)
+    (T row)))
+(defun pfp:need-sel (state) (pfp:need-row *pfp-sel* state))
+(defun pfp:row->res (row / stub ty mat pro)
+  (setq stub (nth 4 row)
+        ty   (car row)
+        mat  (cdr (assoc (strcase ty) *pfs-mat-last*))
+        pro  '())
+  (if (and (nth 3 stub) (/= (nth 3 stub) ""))
+    (setq pro (append pro (list (nth 3 stub)))))
+  (if (and (nth 4 stub) (/= (nth 4 stub) ""))
+    (setq pro (append pro (list (nth 4 stub)))))
+  (list (cons 'type ty)
+        (cons 'name (cadr row))
+        (cons 'cl   (nth 2 stub))
+        (cons 'pro  pro)
+        (cons 'tin  '())
+        (cons 'material (if mat mat ""))
+        (cons 'repick nil)))
+(defun pfp:zoom-anchor (anchor / ins ext w h)
+  (setq ins (cdr (assoc 10 (entget anchor)))
+        ext (pfa:extents anchor)
+        w   (car ext)
+        h   (cadr ext))
+  (if (and h (> h 0.0))
+    (pf:zoom-cwh (list (+ (car ins) (* 0.5 (if w w 0.0)))
+                       (+ (cadr ins) (* 0.5 h))
+                       0.0)
+                 (* 1.15 h))
+    (progn
+      (prompt "\n  No extents on record (legacy anchor) -- centering only.")
+      (pf:zoom-cwh (list (car ins) (cadr ins) 0.0) (getvar "VIEWSIZE"))))
+  (princ))
+(defun pfp:verb-run ( / tkt verb row)
+  (setq tkt        *pfp-verb*
+        *pfp-verb* nil
+        verb       (car tkt)
+        row        (cdr tkt))
+  (cond
+    ((null tkt) (prompt "\nPFPVERB: no pending action (run it from the palette)."))
+    ((eq verb 'anchor)
+     (setq *pfs-preset-res* (pfp:row->res row))
+     (pfs:place-one (nth 4 row)))
+    ((eq verb 'edit)   (pfs:edit-one  (nth 3 row)))
+    ((eq verb 'new)    (pfs:place-one nil))
+    ((eq verb 'zoom)   (pfp:zoom-anchor (nth 3 row)))
+    ((eq verb 'remove)
+     (if (entget (nth 3 row))
+       (progn (pfp:zoom-anchor      (nth 3 row))
+              (pfrem:remove-anchor  (nth 3 row)))
+       (prompt (strcat "\nPFPVERB: '" (cadr row)
+                       "' is already gone -- the panel was stale. Refreshing."))))
+    (T (prompt (strcat "\nPFPVERB: unknown action " (vl-princ-to-string verb)))))
+  (setq *pfs-preset-res* nil)
+  (pfp:refresh)
+  (princ))
+(defun c:PFPVERB ()
+  (pf:run-command "PFPVERB" nil 'pfp:verb-run))
+(defun c:pfsuite/pfsPalette/btnAnchor#OnClicked ( / row)
+  (if (setq row (pfp:need-sel 'STUB)) (pfp:fire 'anchor row))
+  (princ))
+(defun c:pfsuite/pfsPalette/btnEdit#OnClicked ( / row)
+  (if (setq row (pfp:need-sel 'ANCHORED)) (pfp:fire 'edit row))
+  (princ))
+(defun c:pfsuite/pfsPalette/btnNew#OnClicked ()
+  (pfp:fire 'new nil)
+  (princ))
+(defun c:pfsuite/pfsPalette/btnZoom#OnClicked ( / row)
+  (if (setq row (pfp:need-sel 'ANCHORED)) (pfp:fire 'zoom row))
+  (princ))
+(defun c:pfsuite/pfsPalette/btnRemove#OnClicked ( / row)
+  (if (setq row (pfp:need-sel 'ANCHORED)) (pfp:fire 'remove row))
+  (princ))
+(defun c:pfsuite/pfsPalette/btnRefresh#OnClicked ( / n anchored)
+  (pfp:refresh)
+  (setq n        (length *pfp-tree-map*)
+        anchored (length (vl-remove-if-not
+                           '(lambda (c) (eq (caddr (cdr c)) 'ANCHORED))
+                           *pfp-tree-map*)))
+  (prompt (strcat "\nPFPALETTE: refreshed -- " (itoa n) " line"
+                  (if (= n 1) "" "s") " (" (itoa anchored) " anchored, "
+                  (itoa (- n anchored)) " registered)."))
+  (princ))
+(if (not (boundp '*pfp-order*)) (setq *pfp-order* nil))
+(setq *pfp-chk-getters* '("dcl-Control-GetValue" "dcl_Control_GetValue"))
+(if (not (boundp '*pfp-opt-base*)) (setq *pfp-opt-base* 0))
+(if (not (boundp '*pfp-opt-vals*)) (setq *pfp-opt-vals* '()))
+(defun pfp:opt-remember (nm Label Key / cell)
+  (setq *pfp-opt-vals*
+          (if (setq cell (assoc nm *pfp-opt-vals*))
+            (subst (list nm Label Key) cell *pfp-opt-vals*)
+            (cons (list nm Label Key) *pfp-opt-vals*)))
+  (princ))
+(setq *pfp-opt-captions*
+  '(("optLabel" ("*STRUCT*"   . 0) ("*INVERT*" . 1) ("*CROSS*" . 2))
+    ("optRun"   ("*OUTSTAND*" . 1) ("*ALL*"    . 0) ("*SEL*"   . 2))
+    ("optTools" ("*INV*"      . 0) ("*TOP*"    . 1))))
+(if (not (boundp '*pfp-active-group*)) (setq *pfp-active-group* 'LABEL))
+(defun c:pfsuite/pfsPalette/optLabel#OnSelChanged (nIndex sLabel / )
+  (setq *pfp-active-group* 'LABEL)
+  (pfp:opt-remember "optLabel" sLabel nIndex)
+  (pfp:fill-items *pfp-tar-sel*)
+  (princ))
+(defun c:pfsuite/pfsPalette/optRun#OnSelChanged (nIndex sLabel / )
+  (setq *pfp-active-group* 'LABEL)
+  (pfp:opt-remember "optRun" sLabel nIndex) (princ))
+(defun c:pfsuite/pfsPalette/optTools#OnSelChanged (nIndex sLabel / )
+  (setq *pfp-active-group* 'TOOLS)
+  (pfp:opt-remember "optTools" sLabel nIndex) (princ))
+(defun pfp:first-callable (cands args / out r f)
+  (setq out nil)
+  (foreach f cands
+    (if (and (null out) (pfp:callable-p f))
+      (progn
+        (setq r (vl-catch-all-apply (read f) args))
+        (if (not (vl-catch-all-error-p r)) (setq out (cons f r))))))
+  out)
+(defun pfp:cap-match (nm caption / p out)
+  (setq out nil)
+  (if (= (type caption) 'STR)
+    (foreach p (cdr (assoc nm *pfp-opt-captions*))
+      (if (and (null out) (wcmatch (strcase caption) (car p))) (setq out p))))
+  out)
+(defun pfp:opt-item (ctrl nm / rec hit)
+  (cond
+    ((null ctrl)
+     (prompt (strcat "\nPFPALETTE: control \"" nm "\" is not in the loaded"
+                     " project -- check its (Name) in Studio."))
+     nil)
+    ((null (setq rec (assoc nm *pfp-opt-vals*)))
+     (prompt (strcat "\nPFPALETTE: nothing has reported \"" nm "\" yet."
+                     "  Click one item in that group."))
+     nil)
+    ((setq hit (pfp:cap-match nm (cadr rec))) (cdr hit))
+    ((numberp (caddr rec)) (- (fix (caddr rec)) *pfp-opt-base*))
+    (T
+     (prompt (strcat "\nPFPALETTE: \"" nm "\" reported caption "
+                     (vl-princ-to-string (cadr rec)) " / key "
+                     (vl-princ-to-string (caddr rec))
+                     ",\n  which matches no entry in *pfp-opt-captions*."
+                     "  Add a pattern for it."))
+     nil)))
+(defun pfp:chk-on-p (ctrl label / hit v)
+  (cond
+    ((null ctrl) nil)
+    ((null (setq hit (pfp:first-callable *pfp-chk-getters* (list ctrl))))
+     (prompt (strcat "\nPFPALETTE: cannot read \"" label "\" -- assuming Zoom"
+                     " To is off.  Run PFPCTL."))
+     nil)
+    ((null (setq v (cdr hit))) nil)
+    ((numberp v) (/= 0 (fix v)))
+    (T T)))
+(setq *pfp-cmd-map* '((0 . LABEL) (1 . INVERT) (2 . XING)))
+(setq *pfp-tools-map* '((0 . "PFPROINV") (1 . "PFPROTOP")))
+(defun pfp:order-mode (cmd / i)
+  (cond
+    ((eq cmd 'XING) "All")
+    ((null (setq i (pfp:opt-item pfsuite/pfsPalette/optRun "optRun"))) nil)
+    ((= i 0) "All")
+    ((= i 1) "Out")
+    (T
+     (prompt (strcat "\nPFPALETTE: Label Selected is not wired to the palette."
+                     "  Run PFLABEL or PFINVERT from the command line to pick"
+                     " structures from the list."))
+     nil)))
+(defun pfp:order-fire ( / row i cmd mode)
+  (cond
+    ((null (setq row (pfp:need-row *pfp-tar-sel* 'ANCHORED)))
+     (prompt (strcat "\n  RUN is armed for the Label group -- that is the last"
+                     " group clicked.\n  For Create INV.pro / Create TOP.pro,"
+                     " click a Tools item first."))
+     nil)
+    ((null (setq i (pfp:opt-item pfsuite/pfsPalette/optLabel "optLabel"))) nil)
+    ((null (setq cmd (cdr (assoc i *pfp-cmd-map*))))
+     (prompt (strcat "\nPFPALETTE: optLabel returned item " (itoa i)
+                     " -- expected 0, 1 or 2.  Check the .odcl item list."))
+     nil)
+    ((null (setq mode (pfp:order-mode cmd))) nil)
+    (T
+     (setq *pfp-order*
+             (list (cons 'cmd  cmd)
+                   (cons 'row  row)
+                   (cons 'mode mode)
+                   (cons 'zoom (pfp:chk-on-p pfsuite/pfsPalette/chkbxZoom
+                                             "chkbxZoom"))))
+     (cond ((pfp:defer "PFPRUN") T)
+           (T (setq *pfp-order* nil) nil)))))
+(defun pfp:tools-fire ( / i cmd)
+  (cond
+    ((null (setq i (pfp:opt-item pfsuite/pfsPalette/optTools "optTools"))) nil)
+    ((null (setq cmd (cdr (assoc i *pfp-tools-map*))))
+     (prompt (strcat "\nPFPALETTE: that Tools item (" (itoa i) ") has no"
+                     " command wired to it yet -- only Profile from INV and"
+                     " Profile from TOP are wired."))
+     nil)
+    (T (pfp:defer cmd))))
+(defun pfp:order-gather (anchor pass / xf cl prim pairs lines inlets g)
+  (setq xf (pfa:anchor->xform anchor))
+  (cond
+    ((null xf)
+     (prompt "\nPFPRUN: target grid record unreadable -- cannot label.") nil)
+    ((null (setq cl (pf:xf-get 'clfile xf)))
+     (prompt "\nPFPRUN: no .cl on record for this target -- run PFSETUP (edit).")
+     nil)
+    (T
+     (setq prim   (pf:xf-get 'name xf)
+           pairs  (pf:dedupe-pairs (cons (cons cl prim) (pfa:registry-pairs cl)))
+           lines  (pfa:build-lines pairs)
+           inlets (pfa:gather-inlets)
+           g      (pfa:gather-compute anchor pass prim lines inlets))
+     (cond
+       ((null g)
+        (prompt (strcat "\nPFPRUN: centerline for '" prim
+                        "' could not be read -- nothing to label."))
+        nil)
+       (T (list lines inlets (car g) (cadr g)))))))
+(defun pfp:outstanding (pend status / out i)
+  (setq out '() i 0)
+  (foreach p pend
+    (if (not (nth i status)) (setq out (cons p out)))
+    (setq i (1+ i)))
+  (reverse out))
+(defun pfp:run-labels (cmd row mode / anchor pass g lines inlets pend status sel)
+  (setq anchor     (nth 3 row)
+        pass       (if (eq cmd 'INVERT) *pfi-pass-name* "LABEL")
+        *pf-quiet* T
+        g          (pfp:order-gather anchor pass)
+        *pf-quiet* nil)
+  (if g
+    (progn
+      (setq lines  (car g)   inlets (cadr g)
+            pend   (caddr g) status (cadddr g)
+            sel    (if (= mode "All") pend (pfp:outstanding pend status)))
+      (cond
+        ((null pend)
+         (prompt "\nPFPRUN: no structures on this line -- nothing to label."))
+        ((null sel)
+         (prompt (strcat "\nPFPRUN: every structure on this line already carries"
+                         " a " pass " label -- nothing outstanding.")))
+        (T
+         (prompt (strcat "\nPFPRUN: " (if (= mode "All") "Label All" "Outstanding")
+                         " -- " (itoa (length sel)) " of " (itoa (length pend))
+                         " structure(s)."))
+         (setq sel (list (cons 'mode   (if (= mode "All") "All" "Sel"))
+                         (cons 'sel    sel)
+                         (cons 'lines  lines)
+                         (cons 'inlets inlets)))
+         (if (eq cmd 'INVERT)
+           (pfi:run anchor sel)
+           (pflabel:run anchor sel))))))
+  (princ))
+(defun pfp:run-xings (row / anchor xf work recon sel)
+  (setq anchor (nth 3 row))
+  (if (null (setq xf (pfa:anchor->xform anchor)))
+    (prompt "\nPFPRUN: target grid record unreadable -- cannot label.")
+    (progn
+      (pf:undo-begin '*pfxl-undo-open*)
+      (pfxl:discover anchor)
+      (setq work  (pfa:xing-list anchor)
+            recon (pfa:recon xf work)
+            sel   (vl-remove-if
+                    '(lambda (x) (cdr (assoc (pfa:xr-key x) recon)))
+                    work))
+      (cond
+        ((null work) (prompt "\nPFPRUN: no crossings found for this target."))
+        ((null sel)
+         (prompt "\nPFPRUN: all crossings already labeled -- nothing to do."))
+        (T
+         (prompt (strcat "\nPFPRUN: " (itoa (length sel)) " of "
+                         (itoa (length work)) " crossing(s) outstanding."))
+         (pfxl:run anchor xf sel)))
+      (if *pfxl-undo-open* (pf:undo-end '*pfxl-undo-open*))))
+  (princ))
+(defun pfp:order-run ( / ord cmd row mode)
+  (setq ord        *pfp-order*
+        *pfp-order* nil
+        cmd        (cdr (assoc 'cmd  ord))
+        row        (cdr (assoc 'row  ord))
+        mode       (cdr (assoc 'mode ord)))
+  (setq *pf-zoom-to* (if (cdr (assoc 'zoom ord)) 'ON 'OFF))
+  (if (eq cmd 'XING)
+    (pfp:run-xings row)
+    (pfp:run-labels cmd row mode))
+  (setq *pf-quiet* T)
+  (if *pfp-tar-sel*
+    (vl-catch-all-apply 'pfp:fill-details (list *pfp-tar-sel*)))
+  (setq *pf-quiet* nil)
+  (if *pfp-tar-sel*
+    (vl-catch-all-apply 'pfp:fill-items (list *pfp-tar-sel*)))
+  (setq *pfp-last-key* nil)
+  (princ))
+(defun pfp:order-flush ( / cmd)
+  (setq cmd (cdr (assoc 'cmd *pfp-order*)))
+  (cond ((eq cmd 'LABEL)  'pflabel:flush-pass)
+        ((eq cmd 'INVERT) 'pfi:flush-pass)
+        (T                'pfxl:flush-pass)))
+(defun c:PFPRUN ()
+  (if (null *pfp-order*)
+    (progn
+      (prompt (strcat "\nPFPRUN: no order ticket -- use RUN on the palette's"
+                      " Commands tab."))
+      (princ))
+    (pf:run-command "PFPRUN" (pfp:order-flush) 'pfp:order-run)))
+(defun pfp:clear-target ()
+  (setq *pfp-tar-sel* nil)
+  (pfp:fill-details nil)
+  (pfp:fill-items nil)
+  (prompt "\nPFPALETTE: target cleared -- pick a line on the Commands tab.")
+  (princ))
+(defun pfp:cmd-init ( / )
+  (setq *pfp-active-group* 'LABEL)
+  (princ))
+(defun c:pfsuite/pfsPalette/btnRun#OnClicked ()
+  (if (eq *pfp-active-group* 'TOOLS)
+    (pfp:tools-fire)
+    (pfp:order-fire))
+  (princ))
+(defun c:pfsuite/pfsPalette/btnClear#OnClicked ()
+  (pfp:clear-target)
+  (princ))
+(defun pfp:api-names (pat / out s nm)
+  (setq out '())
+  (foreach s (atoms-family 0)
+    (setq nm (vl-symbol-name s))
+    (if (and (wcmatch nm "DCL*") (wcmatch nm pat)) (setq out (cons nm out))))
+  (if out (acad_strlsort out) '()))
+(defun c:PFPAPI ( / pat names nm)
+  (prompt (strcat "\n=== PFPAPI -- " (itoa (length (pfp:api-names "*")))
+                  " dcl* functions registered in this build ==="))
+  (foreach pat '("*OPTION*" "*RADIO*" "*CHECK*" "*VALUE*" "*CURSEL*" "*GETCUR*")
+    (setq names (pfp:api-names pat))
+    (prompt (strcat "\n  " pat "  (" (itoa (length names)) ")"))
+    (foreach nm names (prompt (strcat "\n      " nm))))
+  (prompt "\n  Anything else:  (pfp:api-names \"*TREE*\")  at the command line.")
+  (princ))
+(defun c:PFPCTL ( / f nm rec hit)
+  (cond
+    ((not (dcl-Form-IsActive pfsuite/pfsPalette))
+     (prompt "\nPFPCTL: run PFPALETTE first."))
+    (T
+     (prompt "\n=== PFPCTL -- Commands tab value controls ===")
+     (prompt "\n  Option Lists (from their events -- NEVER read with GetValue):")
+     (foreach nm '("optLabel" "optRun")
+       (setq rec (assoc nm *pfp-opt-vals*))
+       (prompt (strcat "\n    " nm " -> "
+                       (cond
+                         ((null rec)
+                          "NOTHING REPORTED YET -- click an item in that group")
+                         (T
+                          (strcat "Label=" (vl-princ-to-string (cadr rec))
+                                  "  Key="  (vl-princ-to-string (caddr rec))
+                                  "  -> "
+                                  (cond
+                                    ((setq hit (pfp:cap-match nm (cadr rec)))
+                                     (strcat "item " (itoa (cdr hit))
+                                             " (by caption " (car hit) ")"))
+                                    ((numberp (caddr rec))
+                                     (strcat "item "
+                                             (itoa (- (fix (caddr rec))
+                                                      *pfp-opt-base*))
+                                             " (by key, base "
+                                             (itoa *pfp-opt-base*) ")"))
+                                    (T "UNRESOLVED -- add a caption pattern"))))))))
+     (prompt "\n  Check Box (Value is a real property here):")
+     (foreach f *pfp-chk-getters*
+       (prompt (strcat "\n    " f " -> "
+                       (if (pfp:callable-p f)
+                         (pfp:ask f (list pfsuite/pfsPalette/chkbxZoom))
+                         "no such function"))))
+     (if (null *pfp-opt-vals*)
+       (prompt (strcat "\n  -> No event has fired.  Tick optLabel/optRun's event"
+                       " in Studio, PFPRELOAD,\n     then click an item."))
+       (prompt (strcat "\n  -> Events ARE firing.  If the item number looks off"
+                       " by one, set *pfp-opt-base*.")))))
+  (princ))
+(defun pfp:help-lines ()
+  (list
+    "PFTOOLS PALETTE"
+    ""
+    "Looking is free.  The palette only reads the drawing.  Nothing"
+    "is written until you press a button that draws."
+    ""
+    "--- REGISTRY TAB---------------------------------------------------"
+    ""
+    "WHAT IT IS"
+    "  Registry contains profile this drawing knows about, in one of two states:"
+    ""
+    "  Registered   The profile exists and maps to its .cl file, but"
+    "               has not been Anchored on the sheet.  Every profile is"
+    "               found automatically using Labels on PF-NAME and its .cl."
+    ""
+    "   Anchored    Registered AND Anchored -- the drawing knows where"
+    "               the grid sits."
+    ""
+    "  Registration knows that the profile exists.  Anchoring is what lets"
+    "  anything be DRAWN."
+    ""
+    "  Pick a line in the tree and the panels fill in its Registration"
+    "  status as well as all anchoring properties and any files associated"
+    "  with it"
+    ""
+    "ANCHOR"
+    "  Anchoring tells the drawing where a profile grid physically"
+    "  sits.  You type the datum elevation, then pick the grid's"
+    "  lower-left and top-right corners."
+    ""
+    "  ANCHOR will insert a block at the profile grid's datum"
+    "  The blocks attributes carry all the spatial data for that grid"
+    ""
+    "  STATUS WORDS  (these describe the FILES, not the labels)"
+    "  PASSING     every input file is as it was when the pass ran"
+    "  STALE       an input file has CHANGED since -- output may be"
+    "              wrong"
+    "  FAILING     an input file cannot be read at all"
+    "  UNCHECKED   no fingerprint on record -- run PFSETUP (edit)"
+    ""
+    ""
+    ""
+    "--- COMMANDS ---------------------------------------------------"
+    ""
+    "WHAT IT IS"
+    "  Every command that creates anything in the drawing is here."
+    ""
+    "WHAT IT DOES"
+    "  Pick a target line, pick which pass, check the list, run it."
+    ""
+    "  Label All"
+    "   Redraws the whole pass, replacing what the command drew last time."
+    ""
+    "  Label Outstanding"
+    "   Draws any labels that the command has not made yet."
+    ""
+    "NOTE: Only recognizes labels that it has previously made."
+    ""
+    "WHAT EACH PASS FINDS"
+    "  Structures  Every structure on the line.  Labels are stacked"
+    "                   at the top of the grid above each one.  Grid tops"
+    "                   step, so a station with no grid above it is"
+    "                   skipped and reported, never guessed at."
+    ""
+    "  Inverts     Pipe elevations, read from the line's bound"
+    "                _INV .pro file.  Nothing is measured off the"
+    "                drawing."
+    ""
+    "  Crossings   Where other utilities cross this one.  Found by"
+    "                  intersecting this line's centerline against every"
+    "                  other registered line's centerline.  The pipe"
+    "                  that gets drawn comes from the OTHER line's"
+    "                  profile file, so a crossing can only be drawn if"
+    "                  that line's files are bound."
+    ""
+    "THE SUMMARY PANEL"
+    "  Counts for the selected line -- how many structures, and how"
+    "  many of each label type are done versus outstanding."
+    ""
+    "  Drift       how many labels are drawn but no longer sit where"
+    "              their structure does.  Reads \"2 Incorrect"
+    "              label(s)\" when something has moved; \"-\" when all"
+    "              is well."
+    ""
+    "STATUS WORDS  (these describe each ITEM in the list below)"
+    "  labeled       already drawn by this pass"
+    "  outstanding   not drawn yet"
+    "  NEW           found on the ground, never filed"
+    "  MOVED         on record, but at a different station than it"
+    "                sits at now"
+    ""
+    "--- SETTINGS ---------------------------------------------------"
+    ""
+    "  Not in use yet."
+    ""
+    "----------------------------------------------------------------"
+    "Refresh happens by itself after any PF command and when you"
+    "come back to the drawing.  Press Refresh if the panels look"
+    "behind."))
+(defun pfp:help-show ( / dcl_id ln)
+  (cond
+    ((setq dcl_id (pfset:load-dcl))
+     (if (new_dialog "pfp_help" dcl_id)
+       (progn
+         (start_list "help_list")
+         (foreach ln (pfp:help-lines) (add_list ln))
+         (end_list)
+         (start_dialog)))
+     (unload_dialog dcl_id))
+    (T
+     (foreach ln (pfp:help-lines) (prompt (strcat "\n" ln)))))
+  (princ))
+(defun c:PFPHELP ()
+  (pfp:help-show)
+  (princ))
+(defun c:pfsuite/pfsPalette/btnHelp#OnClicked ()
+  (pfp:defer "PFPHELP")
+  (princ))
+(princ "\npfpalette.lsp loaded (V5 palette, milestone 2).  Command: PFPALETTE.")
+(princ "\n  AFTER EVERY STUDIO SAVE:  PFPRELOAD   (else the .odcl is not re-read)")
+(princ "\n  Diagnostics: PFPDIAG (names), PFPPROBE (setters), PFPREAD (rects),")
+(princ "\n               PFPMOVE (clipping),")
+(princ "\n               PFPNUDGE (repaint), PFPDBMOD (writes).")
+(princ "\n  Native look: PFPTHEME (re-skin after a COLORTHEME flip), PFPSCALE.")
+(princ "\n  Commands tab: PFPRUN (the RUN ticket), PFPCTL (control values),")
+(princ "\n                PFPAPI (what dcl* functions this build registers).")
+(princ "\n  Help: PFPHELP (also the Help button -- tick btnHelp \"Clicked\").")
+(princ)

@@ -403,6 +403,39 @@ pfrpt_run : dialog {
 }
 
 
+// ---- PF2SEW: Carlson Hydrology .sew export --------------------------------
+// Modelled on pfrpt_run and fed by the same pfr:candidates / pfr:row, so the
+// two exports offer an identical list.  Separate tile keys (sw_*) so both
+// dialogs can be open in one session without colliding.
+pfsew_run : dialog {
+  label = "PF2SEW - Carlson Hydrology Export";
+  : text { key = "sw_title"; label = ""; width = 62; }
+  spacer;
+  : text { key = "sw_head"; label = "  Type       Line          Crown    Material"; width = 62; }
+  : list_box {
+    key             = "sw_list";
+    width           = 62;
+    height          = 12;
+    multiple_select = true;
+  }
+  : text { key = "sw_count"; label = ""; width = 62; }
+  : text { label = "Crown = a _TOP .pro is bound; without one, pipe sizes export as 0."; }
+  : text { label = "Drainage areas export as 0 - PFTools does not hold them."; }
+  errtile;
+  : row {
+    fixed_width = true;
+    : button { key = "sw_sel"; label = "Export Selected"; mnemonic = "E"; width = 18; is_default = true; }
+    : button { key = "sw_all"; label = "Export All";      mnemonic = "A"; width = 18; }
+  }
+  : row {
+    fixed_width = true;
+    alignment   = "centered";
+    : button { key = "cancel"; label = "Cancel"; is_cancel = true; width = 11; }
+    : button { key = "help";   label = "Help";   width = 11; }
+  }
+}
+
+
 // ---- PFLABELSET: label text + text properties -----------------------------
 // Of the Prefix/Suffix fields: sta_pre / sta_suf / con_suf / gl_suf are
 // LIVE; con_pre / gl_pre are DEAD (*pf-rule-table* owns those prefixes) --

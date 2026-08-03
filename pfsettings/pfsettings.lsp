@@ -141,10 +141,8 @@
 ;;; Separate from anchors: holds what belongs to the DRAWING, not a profile.
 ;;; Reuses pfanchor's generic xrecord helpers on a soft-owned NOD dict.
 
-;; (pfset:nod create) -> PFTOOLS dictionary ename | nil.  One implementation
-;;   lives in pfanchor (the stub registry shares it); this is the settings-side
-;;   name.  create nil never writes (see pfa:nod-dict).
-(defun pfset:nod (create) (pfa:nod-dict create))
+;; pfset:nod quarantined to _attic 2026-08-01: a no-caller passthrough to
+;; pfa:nod-dict, which every reader already calls directly.
 
 ;;; ---- Project data root: NATIVE (Carlson tmpdir$) --------------------------
 ;;; Carlson binds tmpdir$ to the active project data folder, so the root is
@@ -339,31 +337,9 @@
       (if (/= 1 (start_dialog)) (setq res current))))
   res)
 
-;; (pfset:ask-name dcl_id default) -> chosen string (default on Cancel/empty)
-(defun pfset:ask-name (dcl_id default / res)
-  (setq res default)
-  (if (new_dialog "pf_name" dcl_id)
-    (progn
-      (set_tile "name" default)
-      (action_tile "accept" "(setq res (get_tile \"name\")) (done_dialog 1)")
-      (action_tile "cancel" "(done_dialog 0)")
-      (if (/= 1 (start_dialog)) (setq res default))))
-  (if (= res "") default res))
-
-;; (pfset:scan-dialog dcl_id files presel) -> list of selected indices | nil
-;;   Multi-select checklist over `files`.  presel = 0-based index | nil.
-(defun pfset:scan-dialog (dcl_id files presel / sel res)
-  (if (new_dialog "pf_scan" dcl_id)
-    (progn
-      (start_list "scan_list")
-      (foreach f files (add_list f))
-      (end_list)
-      (if presel (set_tile "scan_list" (itoa presel)))
-      (action_tile "accept" "(setq sel (get_tile \"scan_list\")) (done_dialog 1)")
-      (action_tile "cancel" "(done_dialog 0)")
-      (setq res (start_dialog))
-      (if (and (= res 1) sel (/= sel ""))
-        (read (strcat "(" sel ")"))))))
+;; pfset:ask-name / pfset:scan-dialog quarantined to _attic 2026-08-01: no
+;; .lsp caller, and the dead-code gate scans .dcl/.odcl too, so no dialog
+;; reaches them by name either (their pf_name / pf_scan dialogs went unused).
 
 
 (princ "\npfsettings.lsp loaded (user state).  Project root: native (tmpdir$).")

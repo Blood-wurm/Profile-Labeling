@@ -5,30 +5,19 @@
 ;;;
 ;;;     (load (strcat *pftools-dir* "pfpalette/pfp-proof.lsp"))
 ;;;
-;;; STATUS 2026-07-27: Phase 1 PASSED.  Section 1 has been promoted into
-;;; pfpalette.lsp (SECTION 2) and removed from here.  What is left is
-;;; Section 2/3 (the exercise, keep until Phase 2 replaces it with real verbs)
-;;; and Section 4 (lifecycle, OPEN -- see the status note there).
-;;;
 ;;; WHAT IT PROVES
-;;;   A modeless OpenDCL handler cannot call (command), (entsel) or (getpoint)
-;;;   -- root README 5.  Every palette verb therefore has to QUEUE a real
-;;;   command instead of doing the work itself.  vla-SendCommand is the
-;;;   candidate mechanism.  This file fires it from a genuine palette click
-;;;   and checks that what lands on the other side is a real command context.
+;;;   A modeless OpenDCL handler cannot call (command), (entsel) or (getpoint),
+;;;   so every palette verb has to QUEUE a real command instead of doing the
+;;;   work itself.  This fires vla-SendCommand and checks that what lands on
+;;;   the other side is a real command context.
 ;;;
-;;; NO LONGER HAS A BUTTON.  btnHelp was the Phase 1 trigger (form-level,
-;;; unwired, visible on every tab).  Phase 1 passed, and 2026-07-30 the button
-;;; became real Help -- pfpalette.lsp SECTION 10 owns
-;;; btnHelp#OnClicked now.  The handler that lived here has been deleted rather
-;;; than renamed: two defuns of that name across two files is a load-order coin
-;;; flip, and this is the copy that is finished with.
+;;;   Phase 1 PASSED.  The channel itself now ships in pfpalette.lsp SECTION 2;
+;;;   what is left here is the exercise (Sections 2/3) and the lifecycle
+;;;   handlers (Section 4, still open).
 ;;;
-;;; What that costs: tests [1] and [2] were the palette-click half of the proof
-;;; and cannot be re-run from a keyboard.  They are the half that already
-;;; passed.  [3]-[5] still run, and still answer the question that matters on a
-;;; re-run -- that what lands on the other side of a defer is a real command
-;;; context.
+;;;   Tests [1] and [2] were the palette-click half and cannot be re-run from a
+;;;   keyboard -- btnHelp is real Help now.  [3]-[5] still run and still answer
+;;;   the question that matters on a re-run.
 ;;;
 ;;; HOW TO RUN
 ;;;   1. Open a drawing.  Load the suite, then load this file.
@@ -48,25 +37,19 @@
 ;;; ==========================================================================
 ;;; SECTION 1  --  The defer channel  --  PROMOTED, NO LONGER HERE
 ;;; ==========================================================================
-;;; pfp:cmd-idle-p and pfp:defer PASSED (2026-07-27 field test, PALETTE-TESTING
-;;; 4.1-4.9) and now live in pfpalette.lsp SECTION 2, which loads as part of the
-;;; suite before this file.  Deliberately not duplicated here: two copies of the
-;;; gate would let the proof pass against a definition the palette does not use.
-;;; This file now EXERCISES the shipped channel rather than carrying its own.
+;;; pfp:cmd-idle-p and pfp:defer live in pfpalette.lsp SECTION 2, which loads
+;;; before this file.  Deliberately not duplicated: two copies of the gate would
+;;; let the proof pass against a definition the palette does not use.
 
 
 ;;; ==========================================================================
 ;;; SECTION 2  --  The palette side  --  RETIRED, NO LONGER HERE
 ;;; ==========================================================================
-;;; btnHelp#OnClicked lived here and fired tests [1] (a (command) call from a
-;;; modeless handler must draw nothing) and [2] (pfp:defer queues instead).
-;;; Both PASSED 2026-07-27, PALETTE-TESTING 4.1-4.9.  Deleted 2026-07-30 when
-;;; btnHelp became real Help: the suite may hold exactly one defun of that name
-;;; and pfpalette.lsp SECTION 10 is now it.
-;;;
+;;; btnHelp#OnClicked fired tests [1] and [2]; both passed, and the handler was
+;;; deleted when btnHelp became real Help.  The suite may hold exactly one defun
+;;; of that name, and pfpalette.lsp SECTION 10 is now it.
 ;;; Re-proving [1] and [2] needs a click, so it needs a spare wired control.
-;;; There isn't one, and inventing one costs a Studio round trip to re-answer a
-;;; settled question -- so this file no longer asks it.
+;;; There isn't one, and inventing one costs a Studio round trip.
 
 
 ;;; ==========================================================================
@@ -101,8 +84,7 @@
             "\n  [5] ----  getpoint cancelled (Esc) -- inconclusive, re-run."))
 
   ;; The "hand the palette back" step was a SetEnabled on btnHelp.  Gone with
-  ;; the handler -- this file must not touch a control it no longer owns, and
-  ;; re-enabling a button nothing here disabled would be theatre.
+  ;; the handler -- this file must not touch a control it no longer owns.
   (setq *pfpt-sent* nil)
   (prompt "\n=== end of proof ===")
   (princ))
@@ -112,9 +94,8 @@
 (defun c:PFPTEST ()
   (pf:run-command "PFPTEST" nil 'pfpt:body))
 
-;; Clear the proof's state after an error left it half-set.  It no longer
-;; re-enables btnHelp -- that button belongs to Help now and this file never
-;; disables it.
+;; Clear the proof's state after an error left it half-set.  It does not
+;; re-enable btnHelp: that button belongs to Help now.
 (defun c:PFPTESTRESET ()
   (setq *pfpt-sent* nil *pfpt-undo-open* nil)
   (prompt "\nPFPTESTRESET: proof state cleared.")
@@ -124,30 +105,19 @@
 ;;; ==========================================================================
 ;;; SECTION 4  --  Lifecycle  (Phase 5 brought forward; THESE TWO SURVIVE)
 ;;; ==========================================================================
-;;; Tick "DocActivated" and "EnteringNoDocState" on pfsPalette (form level,
-;;; not a control) while you are in Studio for btnHelp.
+;;; Tick "DocActivated" and "EnteringNoDocState" on pfsPalette (form level, not
+;;; a control) while you are in Studio.
 ;;;
-;;; STATUS 2026-07-27: STILL OPEN, AND THE FAILURE IS NOT THE ONE PREDICTED.
-;;;   The open question was whether a CLOSED form receives events.  The field
-;;;   test never got to ask it, because of something more basic:
+;;; STILL OPEN, and the blocker is NAMESPACE, not form state.  AutoLISP
+;;; namespaces are per-document, so these defuns exist only where
+;;; pftools-load.lsp ran -- the event DOES fire on the incoming document, and
+;;; the handler is not there to receive it.  Activating into an unloaded drawing
+;;; therefore throws a visible error rather than being silent.
 ;;;
-;;;   L2 (5.3) FAILED -- all drawings closed, the palette stayed on the start
-;;;     screen.  OnEnteringNoDocState did not fire; nothing printed.
-;;;   L3 (5.4) errored -- "no function definition:
-;;;     C:PFSUITE/PFSPALETTE#ONDOCACTIVATED".
-;;;
-;;;   Read together those say the event DID fire on the incoming document and
-;;;   the HANDLER was not there to receive it.  AutoLISP namespaces are
-;;;   per-document, so these defuns exist only where pftools-load.lsp ran.
-;;;   That also makes 5.2 worse than documented: activating into an unloaded
-;;;   drawing is not silent, it throws a visible error.
-;;;
-;;;   So the blocker is namespace, not form state -- and neither dcl-Form-Hide
-;;;   nor a vlr-docmanager-reactor fixes a handler that does not exist in the
-;;;   document being activated into.  The candidate fix is per-document
-;;;   autoload (acaddoc.lsp).  DEFERRED by decision 2026-07-27: Phase 2 (the
-;;;   ticket channel) goes first now that the gate has passed.  Until then
-;;;   these two handlers are exercise-only -- do not ship them as the fix.
+;;; Neither dcl-Form-Hide nor a vlr-docmanager-reactor fixes a handler that does
+;;; not exist in the document being activated into.  The candidate fix is
+;;; per-document autoload (acaddoc.lsp), deferred behind Phase 2.  Until then
+;;; these two handlers are EXERCISE-ONLY -- do not ship them as the fix.
 
 ;; DocActivated -> the drawing-switch refresh signal (root README 4a).
 ;;   pfp:refresh is already vl-catch-all-apply wrapped, so a hostile drawing

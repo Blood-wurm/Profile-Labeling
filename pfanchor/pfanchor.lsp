@@ -30,13 +30,16 @@
 ;;; --------------------------------------------------------------------------
 
 (defun pfa:xr-key   (e) (nth 0 e))
-(defun pfa:xr-tfile (e) (nth 1 e))
-(defun pfa:xr-tbase (e) (nth 2 e))
+;; xr-tfile / xr-tbase (nth 1 / nth 2) quarantined to _attic 2026-08-01:
+;; X_* stores the SOURCE file/base only; the target fields are dropped at merge.
 (defun pfa:xr-sfile (e) (nth 3 e))
 (defun pfa:xr-sbase (e) (nth 4 e))
 (defun pfa:xr-xy    (e) (nth 5 e))
 (defun pfa:xr-tsta  (e) (nth 6 e))
 (defun pfa:xr-ssta  (e) (nth 7 e))
+;; KEEP though the dead-code gate names them: the reader half of pipe
+;; clearance -- PFCHECK (Version 5.1.md §5) subtracts these two elevations,
+;; filed by pfa:xing-put-elevs.  The writer landed before its consumer.
 (defun pfa:xr-telev (e) (nth 8 e))
 (defun pfa:xr-selev (e) (nth 9 e))
 
@@ -51,15 +54,13 @@
 ;;; ==========================================================================
 
 ;; (pfa:send-to-back e) -> nil   (anchor draws BEHIND everything else)
-;;   The anchor is a backdrop marker: it must never sit on top of the grid,
-;;   the profile, or a label.  DRAWORDER is the only route to sort-ents from
-;;   plain LISP, so this shells out with echo suppressed.  Draw order is
-;;   cosmetic, never structural -- a failure here is swallowed, and the anchor
-;;   it was called on is still a valid, readable anchor.
+;;   The anchor is a backdrop marker and must never sit on top of the grid, the
+;;   profile, or a label.  DRAWORDER is the only route to sort-ents from plain
+;;   LISP, so this shells out with echo suppressed.  Draw order is cosmetic, so
+;;   a failure is swallowed and the anchor is still valid.
 ;;   command-s, NOT command: `command` is a special form, so vl-catch-all-apply
-;;   rejects it outright ("bad order function: COMMAND") and the error escapes
-;;   the very catch meant to contain it.  Same applicable form pf:zoom-onerror
-;;   already uses for its guarded ZOOM.
+;;   rejects it ("bad order function: COMMAND") and the error escapes the catch
+;;   meant to contain it.
 (defun pfa:send-to-back (e / echo)
   (if (and e (entget e))
     (progn
@@ -71,11 +72,10 @@
   (princ))
 
 ;; (pfa:icon-scale hplot) -> real   UNIFORM insert scale for the anchor icon
-;;   The block is a fixed-size icon snapped to the datum, drawn at the size it
-;;   should read on an H:*pfa-icon-ref-hplot* sheet.  Model size must track the
-;;   plot scale to hold a constant size on paper, so the factor is a plain
-;;   ratio and is applied to X, Y AND Z -- an icon must never distort, which is
-;;   also why the extents no longer ride on the scale factors (see pfa:extents).
+;;   A fixed-size icon snapped to the datum, drawn at the size it should read on
+;;   an H:*pfa-icon-ref-hplot* sheet.  Model size tracks plot scale to hold a
+;;   constant size on paper, so the ratio applies to X, Y AND Z -- an icon must
+;;   never distort, which is also why extents no longer ride on the scales.
 (defun pfa:icon-scale (hplot)
   (if (and hplot (> hplot 0.0))
     (/ hplot *pfa-icon-ref-hplot*)
@@ -95,16 +95,14 @@
 
 ;; (pfa:sync-attdefs) -> count added
 ;;   The anchor block is hand-authored, so its definition may not carry the
-;;   ATTDEFs the ledger depends on.  pfa:write-anchor entmakes the ATTRIBs onto
-;;   the insert regardless (the (66 . 1) route), so anchors read correctly
-;;   either way -- but a definition with no matching ATTDEFs is one ATTSYNC or
-;;   block-editor round-trip away from losing every one of them, and those
-;;   attributes ARE the anchor's geometric state.  ADDITIVE ONLY: adds just the
-;;   missing tags, invisible, and touches no existing geometry.  AddAttribute
-;;   does not back-propagate to placed inserts, and ours already carry their own
-;;   ATTRIBs, so nothing on screen changes.
-;;   Every ActiveX call is catch-wrapped -- a drawing that will not hand over
-;;   its block collection still gets a working anchor, just an un-synced block.
+;;   ATTDEFs the ledger depends on.  Anchors read correctly either way --
+;;   pfa:write-anchor entmakes the ATTRIBs onto the insert regardless -- but a
+;;   definition with no matching ATTDEFs is one ATTSYNC or block-editor
+;;   round-trip away from losing every one of them, and those attributes ARE
+;;   the anchor's geometric state.
+;;   ADDITIVE ONLY: adds the missing tags, invisible, touching no geometry.
+;;   Every ActiveX call is catch-wrapped, so a drawing that will not hand over
+;;   its block collection still gets a working (un-synced) anchor.
 (defun pfa:sync-attdefs ( / have blks blk n y mode)
   (setq n 0 mode 1)                     ; 1 = acAttributeModeInvisible
   (if (tblsearch "BLOCK" *pfa-block-name*)
@@ -137,13 +135,12 @@
   n)
 
 ;; (pfa:ensure-anchor-block) -> nil   (anchor block is usable after this)
-;;   The hand-authored PF-ANCHOR always wins: when the drawing already carries
-;;   a definition this only tops up its ATTDEFs and leaves the artwork alone.
-;;   What follows is the FALLBACK, entmade only in a drawing that has never
-;;   seen one -- a PLACEHOLDER datum pointer (apex on the insertion point,
-;;   roughly text-height at H:50), not a stand-in for the real icon.  It is
-;;   deliberately small: the block no longer spans the grid, so nothing here
-;;   is scaled to the extents.
+;;   The hand-authored PF-ANCHOR always wins: when the drawing already carries a
+;;   definition this only tops up its ATTDEFs and leaves the artwork alone.
+;;   What follows is the FALLBACK, entmade only in a drawing that has never seen
+;;   one -- a PLACEHOLDER datum pointer, not a stand-in for the real icon.
+;;   Deliberately small: the block no longer spans the grid, so nothing here is
+;;   scaled to the extents.
 (defun pfa:ensure-anchor-block ( / y)
   (cond
     ((tblsearch "BLOCK" *pfa-block-name*)
@@ -168,18 +165,15 @@
   (princ))
 
 ;; (pfa:extents anchor) -> (width height)   either element may be nil
-;;   Extents are stored RELATIVE to the insertion point (grid lower-left), so a
-;;   window-move of grid + anchor carries both -- that is the design, and it is
-;;   why pfa:corner-check cannot see such a move.
-;;   CURRENT anchors keep them in the WIDTH/HEIGHT attributes.  They used to be
-;;   the insert's X/Y scale factors, back when the block SPANNED the grid; the
-;;   block is a fixed-size icon now and its scales carry plot scale, so reading
-;;   extents off them would be nonsense (at H:200 the X-scale is 4.0).
-;;   The scale-factor read survives ONLY as the legacy path, and the ABSENCE of
-;;   the WIDTH/HEIGHT attributes is exactly what identifies a pre-icon anchor --
-;;   scale alone cannot tell the two apart.  The old xs > 2.0 sentinel (no real
-;;   grid is 2 ft wide) still guards the legacy width, which legacy anchors
-;;   only carried when the top-right had been picked.
+;;   Stored RELATIVE to the insertion point (grid lower-left), so a window-move
+;;   of grid + anchor carries both.  That is the design, and it is why
+;;   pfa:corner-check cannot see such a move.
+;;   Current anchors keep them in the WIDTH/HEIGHT attributes.  The scale-factor
+;;   read is the LEGACY path only -- the block is a fixed-size icon now and its
+;;   scales carry plot scale, so extents read off them would be nonsense (at
+;;   H:200 the X-scale is 4.0).  The ABSENCE of WIDTH/HEIGHT is what identifies
+;;   a pre-icon anchor; scale alone cannot tell the two apart.  The xs > 2.0
+;;   sentinel (no real grid is 2 ft wide) still guards the legacy width.
 (defun pfa:extents (anchor / at w h ed xs ys)
   (setq at (pfa:read-attribs anchor)
         w  (distof (pfa:att "WIDTH"  at) 2)
@@ -323,13 +317,13 @@
   anchor)
 
 ;; (pfa:reanchor anchor xform) -> anchor   (update in place; ledger survives)
-;;   Extents go back to whichever storage THIS anchor already uses.  An anchor
-;;   carrying a WIDTH attribute is a current one: extents to the attributes,
-;;   scale factors to the icon scale.  One without is pre-icon, and its extents
-;;   ARE its scale factors -- writing the icon scale over them would silently
-;;   shrink its grid to a few feet, so that anchor keeps the old storage and
-;;   the old block.  Attributes are only ever UPDATED here, never added: the
-;;   ledger hangs off this insert, so it must survive in place.
+;;   Extents go back to whichever storage THIS anchor already uses.  One
+;;   carrying a WIDTH attribute is current: extents to the attributes, scale
+;;   factors to the icon scale.  One without is pre-icon and its extents ARE its
+;;   scale factors -- writing the icon scale over them would silently shrink its
+;;   grid to a few feet -- so it keeps the old storage and the old block.
+;;   Attributes are only UPDATED here, never added: the ledger hangs off this
+;;   insert and must survive in place.
 (defun pfa:reanchor (anchor xform / ed at legacy ins wid hgt isc vals e sed
                      tag i y)
   (setq at     (pfa:read-attribs anchor)
@@ -379,8 +373,8 @@
 
 ;; (pfa:probe-corner pt) -> T | nil
 ;;   T when a grid LINE passes within tol of pt, or when the drawing has no
-;;   grid-layer LINEs at all (nothing to assert against).  The PF-GRID-*
-;;   layers are Carlson's own grid layers (confirmed 2026-07-17).
+;;   grid-layer LINEs at all (nothing to assert against).  The PF-GRID-* layers
+;;   are Carlson's own.
 (defun pfa:probe-corner (pt / ss i ed ok)
   (setq ss (ssget "_X" (list '(0 . "LINE") (cons 8 *pfa-grid-layers*)
                              '(410 . "Model"))))    ; model space only
@@ -450,17 +444,13 @@
 
 ;; (pfa:ledger-dict ent create) -> PFLEDGER dictionary ename | nil
 ;;   HARD-OWNED (280 . 1): erasing the entity erases its ledger.
-;;   OWNER-AGNOSTIC, and always was -- nothing below ever looked at the anchor.
-;;   An ANCHOR's ledger holds META / FILES / STATUS_* / SCOPE / PASS_* / X_*;
-;;   a STRUCTURE's holds MEMB.  The parameter was renamed from `anchor` to
-;;   `ent` 2026-07-27 to stop the name implying a constraint the code does not
-;;   have.
-;;
-;;   LEGACY READ + HEAL: drawings registered before the rename carry the ledger
-;;   under *pfa-dict-legacy*.  Read it as-is, and RENAME it on the first write
-;;   so the fallback drains instead of being carried forever.  A read must NOT
-;;   rename -- the palette reads with create nil and may never touch the
-;;   database (the write-free contract), so the rename is gated on `create`.
+;;   OWNER-AGNOSTIC -- an ANCHOR's ledger holds META / FILES / STATUS_* / SCOPE /
+;;   PASS_* / X_*; a STRUCTURE's holds MEMB.  Hence `ent`, not `anchor`.
+;;   LEGACY READ + HEAL: older drawings carry the ledger under
+;;   *pfa-dict-legacy*.  Read it as-is and RENAME on the first write, so the
+;;   fallback drains rather than being carried forever.  A READ must not rename
+;;   -- the palette reads with create nil and may never touch the database --
+;;   so the rename is gated on `create`.
 (defun pfa:ledger-dict (ent create / xde sub)
   (setq xde (pfa:extdict-of ent))
   (if (and (null xde) create)
@@ -611,11 +601,11 @@
 ;;;   (1 .cl path)(2 type)(3 name)(4 INV .pro | "")(5 TOP .pro | "")
 
 ;; (pfa:nod-dict create) -> PFTOOLS drawing dictionary ename | nil
-;;   Same contract as pfa:ledger-dict: create nil NEVER writes -- a read on a
-;;   drawing that has no PFTOOLS dictionary returns nil instead of creating
-;;   one.  This is the palette-safety seam: pfa:registry runs from a MODELESS
-;;   handler, and merely opening the palette must not dirty a clean drawing
-;;   (or write to the DB mid-command).  Only genuine writers pass T.
+;;   Same contract as pfa:ledger-dict: create nil NEVER writes, so a read on a
+;;   drawing with no PFTOOLS dictionary returns nil instead of creating one.
+;;   This is the palette-safety seam -- pfa:registry runs from a modeless
+;;   handler, and opening the palette must not dirty a clean drawing.
+;;   Only genuine writers pass T.
 (defun pfa:nod-dict (create / nod sub)
   (setq nod (namedobjdict))
   (cond
@@ -755,10 +745,8 @@
                       out))))
   ;; EMPTY REGISTRY IS LEGAL and must stay silent.  acad_strlsort rejects nil
   ;; with a "Usage: (acad_strlsort <list of strings>)" banner on the command
-  ;; line, so a clean drawing -- no anchors, no stubs -- printed a spurious
-  ;; error every time the palette opened (found by PALETTE-TESTING 3, which is
-  ;; the first test ever run against a drawing that had never seen PFTOOLS).
-  ;; Guarded, not reordered: behaviour for a non-empty registry is unchanged.
+  ;; line, so a clean drawing printed a spurious error on every palette open.
+  ;; Guarded, not reordered: non-empty behaviour is unchanged.
   (setq keys (if out
                (acad_strlsort
                  (mapcar '(lambda (r) (strcat (car r) " " (cadr r))) out))
@@ -772,10 +760,9 @@
     keys))
 
 ;; (pfa:entry-cl r) -> .cl path | nil    r = a pfa:registry row
-;;   THE registry row -> .cl resolution, one home: anchors read META, stubs
-;;   read the stub record; "" reads as nil.  Moved here from pfxlabel (it is
-;;   pure registry knowledge) so pflabel can call it without violating the
-;;   depend-only-upward guardrail.  Pure read.
+;;   THE registry row -> .cl resolution, one home: anchors read META, stubs read
+;;   the stub record; "" reads as nil.  Lives here rather than in pfxlabel so
+;;   pflabel can call it without violating the depend-only-upward guardrail.
 (defun pfa:entry-cl (r / cl)
   (setq cl (if (eq (caddr r) 'ANCHORED)
              (cdr (assoc 1 (pfa:meta-get (nth 3 r))))
@@ -785,14 +772,13 @@
 ;;; ---- TWIN: drawn plan-centerline binding per .cl (handle only) ------------
 ;;; The membership PRE-FILTER reads the .cl's DRAWN centerline (exact PIs, no
 ;;; sampled corner-cut).  Matched ONCE at registration by endpoint pair and
-;;; filed here as a bare HANDLE; label runs entget it LIVE, so a moved/redrawn
-;;; twin reads as-drawn, never cached stale.  Nothing to invalidate -- a
-;;; purged/erased twin resolves to nil and the reader re-matches or drops the
-;;; pre-filter (the authored cl_location_at_pt test still governs membership).
+;;; filed as a bare HANDLE; label runs entget it LIVE, so a moved or redrawn
+;;; twin reads as-drawn and never cached stale.  Nothing to invalidate -- a
+;;; purged twin resolves to nil and the reader re-matches or drops the
+;;; pre-filter (cl_location_at_pt still governs membership).
 ;;;   key "TWIN_<cl-id>":  (1 . handle)(300 . cl-checksum-at-match)
-;;; Keyed by CANONICAL .cl identity (pf:cl-id), not basename.  The .cl checksum
-;;; at match time is stored so the witness step can tell whether the recorded
-;;; twin still corresponds to the current .cl.
+;;; Keyed by CANONICAL .cl identity (pf:cl-id), not basename.  The checksum lets
+;;; the witness step tell whether the twin still matches the current .cl.
 
 (defun pfa:twin-key (clfile)
   (strcat "TWIN_" (pfa:sanitize (pf:cl-id clfile))))
@@ -805,13 +791,8 @@
       (setq h (cdr (assoc 1 d)))
       (if (and h (/= h "")) h))))
 
-;; (pfa:twin-cksum clfile) -> .cl checksum stored at match time | nil
-;;   Lets the witness step detect a twin recorded against an older .cl.
-;;   Pure read.
-(defun pfa:twin-cksum (clfile / dict d)
-  (if (and (setq dict (pfa:nod-dict nil))
-           (setq d (pfa:xrec-data dict (pfa:twin-key clfile))))
-    (cdr (assoc 300 d))))
+;; pfa:twin-cksum quarantined to _attic 2026-08-01: the "witness step" it was
+;; written for was never built, so the TWIN_* group-300 checksum has no reader.
 
 ;; (pfa:twin-put clfile handle) -> xrecord ename | nil   (WRITE)
 ;;   Stores the drawn-twin handle plus the .cl checksum at match time.
@@ -829,30 +810,28 @@
 ;;; state: 0 unchecked / 1 passing / 2 failing / 3 stale.
 ;;; UNCHECKED NEVER RENDERS GREEN.
 ;;;
-;;; ONE RECORD PER TOOL, split 2026-07-27.  There used to be a single "STATUS",
-;;; written by PFSETUP, PFLABEL and PFINVERT about THREE DIFFERENT FILES -- so
-;;; whichever ran last erased the others' verdict, and running PFLABEL then
-;;; PFINVERT silently discarded everything known about the .cl.  Keyed
-;;; STATUS_<PASS> to match the PASS_<name> grammar beside it, so each command
-;;; writes only its own and pfa:dict-keys enumerates the set.
+;;; ONE RECORD PER TOOL.  A single shared "STATUS" would be written by PFSETUP,
+;;; PFLABEL and PFINVERT about THREE DIFFERENT FILES, so whichever ran last
+;;; erased the others' verdict.  Keyed STATUS_<PASS> to match the PASS_<name>
+;;; grammar beside it, so each command writes only its own and pfa:dict-keys
+;;; enumerates the set.
 ;;;   LABEL  -> the .cl        INVERT -> the _INV .pro
 ;;;   XING   -> target + source .cl, whose checksums SCOPE already holds; that
 ;;;             record stays the source of truth and is not copied here.
 ;;;
-;;; WHAT IS AND IS NOT STORED.  Stored: the input's checksum AT PASS TIME (301).
-;;; You cannot work out later what a file WAS when it was labeled, so this is
-;;; real state and it is the whole basis of "stale".  NOT stored: how many
-;;; structures are done out of how many.  A saved count reads 12-of-12 forever
-;;; after someone erases a label; the live gather owns that number (see the
-;;; drift-echo note in pfa:gather-compute, which makes the same argument).
+;;; STORED: the input's checksum AT PASS TIME (301).  You cannot work out later
+;;; what a file WAS when it was labeled, so this is real state and it is the
+;;; whole basis of "stale".
+;;; NOT STORED: how many structures are done out of how many.  A saved count
+;;; reads 12-of-12 forever after someone erases a label; the live gather owns
+;;; that number.
 
 (defun pfa:status-key (pass) (strcat "STATUS_" (strcase pass)))
 
 ;; (pfa:status-get anchor pass) -> data | nil
-;;   Falls back to the pre-split "STATUS" record so an anchor written before
-;;   2026-07-27 still reports something instead of reading UNCHECKED.  That old
-;;   record has no pass identity, so it answers for every pass -- which is
-;;   exactly as much as it ever knew.
+;;   Falls back to the pre-split "STATUS" record so an older anchor reports
+;;   something instead of reading UNCHECKED.  That record has no pass identity,
+;;   so it answers for every pass -- as much as it ever knew.
 (defun pfa:status-get (anchor pass / d)
   (if (setq d (pfa:rec-get anchor (pfa:status-key pass)))
     d
@@ -870,9 +849,7 @@
 ;; (pfa:status-reset anchor passes findings) -> nil
 ;;   Back to UNCHECKED for the named passes only.  PER FILE, NOT BLANKET:
 ;;   re-binding the _INV .pro invalidates what PFINVERT knew and says nothing
-;;   about the .cl, so it must not clear PFLABEL's verdict.  The old single
-;;   record could only be reset wholesale, which is why an edit used to throw
-;;   away checks it had not invalidated.
+;;   about the .cl, so it must not clear PFLABEL's verdict.
 (defun pfa:status-reset (anchor passes findings / p)
   (foreach p passes (pfa:status-put anchor p 0 "" findings))
   (princ))
@@ -884,10 +861,10 @@
         (T "UNCHECKED")))
 
 ;; (pfa:status-check anchor pass file stored) -> (state . findings)
-;;   THE ONE COMPARISON, shared by every writer: what the input file's checksum
-;;   was when the pass ran, against what it is now.  State 3 finally has a
-;;   writer -- "the file changed under you" is a different fact from state 2,
-;;   "the file cannot be read at all", and collapsing them lost the difference.
+;;   THE ONE COMPARISON, shared by every writer: the input file's checksum when
+;;   the pass ran, against what it is now.  State 3 ("the file changed under
+;;   you") is a different fact from state 2 ("the file cannot be read at all");
+;;   collapsing them loses the difference.
 (defun pfa:status-check (anchor pass file stored / cur)
   (setq cur (pf:checksum-file file))
   (cond
@@ -905,24 +882,38 @@
 
 ;; (pfa:status-roll anchor) -> (state done total stale-inputs)
 ;;   THE OVERALL VALUE, worked out on the fly and never stored -- nothing would
-;;   ever update a saved roll-up when one of the three beneath it moved.  Worst
-;;   state wins, so a single failing input cannot read green.  done/total are
-;;   the caller's to supply from a live gather; this reports only what the
-;;   stored records know.
+;;   update a saved roll-up when a record beneath it moved.  Worst state wins,
+;;   so a single failing input cannot read green.
+;;   TWO passes, not three: STATUS_XING stored the same .cl-vs-META verdict as
+;;   STATUS_LABEL through the same code, so counting it made one question count
+;;   twice.  Old XING records are no longer read.
 (defun pfa:status-roll (anchor / worst n d p st s)
   (setq worst 1 n 0 s '())
-  (foreach p '("LABEL" "INVERT" "XING")
+  (foreach p '("LABEL" "INVERT")
     (setq d  (pfa:status-get anchor p)
           st (if (and d (assoc 70 d)) (cdr (assoc 70 d)) 0))
     (if (= st 0) (setq n (1+ n)))
     (if (member st '(2 3)) (setq s (cons p s)))
     ;; 2 failing beats 3 stale beats 0 unchecked beats 1 passing
     (if (> (pfa:status-rank st) (pfa:status-rank worst)) (setq worst st)))
-  (list worst (- 3 n) 3 (reverse s)))
+  (list worst (- 2 n) 2 (reverse s)))
 
 ;; (pfa:status-rank state) -> sort weight; higher is worse.
 (defun pfa:status-rank (state)
   (cond ((= state 2) 3) ((= state 3) 2) ((= state 0) 1) (T 0)))
+
+;; (pfa:status-why anchor pass) -> findings strings when STALE/FAILING, else nil
+;;   The read-back half of pfa:status-put's group-300 findings: the sentence
+;;   explaining a bad Checks cell.  States 0/1 need no explanation, so only 2
+;;   (failing) and 3 (stale) answer.  Pure ledger read, so it is legal from a
+;;   modeless palette handler.
+(defun pfa:status-why (anchor pass / d out c)
+  (setq d (pfa:status-get anchor pass))
+  (if (and d (member (cdr (assoc 70 d)) '(2 3)))
+    (progn
+      (setq out '())
+      (foreach c d (if (= (car c) 300) (setq out (cons (cdr c) out))))
+      (reverse out))))
 
 ;;; ---- SCOPE: PFXFIND discovery scope --------------------------------------
 
@@ -938,11 +929,9 @@
 
 ;; (pfa:scope-read anchor) -> list of (sbase target-cksum source-cksum)
 ;;   THE last discovery scan's checksum record, one entry per source line.
-;;   Moved down from pfxlabel 2026-07-30 with pfxl:split, for the reason
-;;   pfa:entry-cl was moved: it is pure record knowledge, and pfa:xing-scan --
-;;   which pfanchor owns and pfxlabel calls -- needs it. A file may only depend
-;;   on files above it, so a reader at load position 4 cannot reach position 9.
-;;   Pure read.
+;;   Lives here, not in pfxlabel, because pfa:xing-scan needs it and a file may
+;;   only depend on files above it -- a reader at load position 4 cannot reach
+;;   position 9.  Pure read.
 (defun pfa:scope-read (anchor / d out s parts)
   (setq out '())
   (if (setq d (pfa:scope-get anchor))
@@ -1007,46 +996,44 @@
 ;;; ==========================================================================
 ;;; SECTION 4b  --  The membership index  (structure -> lines, saved)
 ;;; ==========================================================================
-;;; THE PROBLEM: PFLABEL re-derives, from scratch, which structures sit on
-;;; which lines -- including the work it did five seconds earlier on an
-;;; unchanged drawing.  PFINVERT does it again.  PFREPORT does it again.  The
-;;; facts are stable; nothing persisted them.
+;;; THE PROBLEM: PFLABEL, PFINVERT and PFREPORT each re-derive which structures
+;;; sit on which lines, from scratch, on an unchanged drawing.  The facts are
+;;; stable; nothing persisted them.
 ;;;
 ;;; THE RECORD IS THE RETURN SHAPE.  pf:lines-at-point takes a point and gives
-;;; back the set of lines it falls on; that IS what gets stored, in the order it
+;;; back the set of lines it falls on; that IS what is stored, in the order it
 ;;; came back (offset-ascending -- re-sorting on write would make the reader
-;;; non-identical to the function it stands in for).  A structure whose set has
-;;; more than one entry is a junction, with no cross-line read.
+;;; non-identical to the function it stands in for).  A set with more than one
+;;; entry is a junction, with no cross-line read.
 ;;;
-;;; WHAT IT HOLDS AND WHAT IT DOES NOT.  In: structure, line, station, and the
-;;; stamps that say when to stop believing it.  Out: everything that needs a
-;;; .pro -- inverts, cover, clearance, wall thickness.  Membership is stable and
-;;; .pro churns through design, so caching the second would produce a record
-;;; that is wrong most of the time.  Crossings are out too: X_* above already
-;;; persists them, with additive merge and key-drift renaming.
+;;; IN: structure, line, station, and the stamps that say when to stop believing
+;;; it.  OUT: anything needing a .pro -- inverts, cover, clearance, wall
+;;; thickness.  Membership is stable and .pro churns through design, so caching
+;;; the second would produce a record that is wrong most of the time.  Crossings
+;;; are out too: X_* already persists them with additive merge.
 ;;;
 ;;; STAMPS.  A LINE stamp folds everything that can change one line's answer
 ;;; into one token: the .cl's CONTENT (pf:cl-id is a canonical PATH and cannot
 ;;; see an edit), the station range that gates a hit, the corridor width, and a
-;;; real hash of the pre-filter shape.  A ROSTER stamp folds every registered
-;;; line's stamp into one.
+;;; hash of the pre-filter shape.  A ROSTER stamp folds every line's stamp into
+;;; one.
 ;;;
-;;; WHY THE ROSTER STAMP AND NOT PER-LINE STAMPS.  A record lists HITS.  Nothing
-;;; in it says which lines were tested and missed.  So per-line stamps cannot
-;;; answer the question that actually matters -- "was this worked out when the
-;;; world looked like it does now" -- and a structure that was off BA and is now
-;;; on it would read clean forever, because its record never mentions BA.  One
-;;; stamp covering the whole roster does answer it: match means the hits are
-;;; complete AND the misses are still misses.  The cost is coarser: any .cl edit
-;;; stales every record.  Geometry does not churn, and a rebuild is one command.
+;;; WHY A ROSTER STAMP, NOT PER-LINE STAMPS.  A record lists HITS and never says
+;;; which lines were tested and missed, so per-line stamps cannot answer "was
+;;; this worked out when the world looked like it does now" -- a structure that
+;;; was off BA and is now on it would read clean forever, because its record
+;;; never mentions BA.  One stamp over the whole roster does answer it: a match
+;;; means the hits are complete AND the misses are still misses.  The cost is
+;;; that any .cl edit stales every record; geometry does not churn, and a
+;;; rebuild is one command.
 ;;;
-;;; Documented in pfanchor/INDEX-PLAN.md; INDEX-DESIGN.md / INDEX-VALUES.md hold
-;;; the reasoning that got here.
+;;; Documented in pfanchor/INDEX-PLAN.md; INDEX-DESIGN.md and INDEX-VALUES.md
+;;; hold the reasoning that got here.
 
-;;; ---- Registry + selection helpers (moved from pflabel 2026-07-27) ---------
-;;; Both were always registry/selection knowledge rather than label knowledge,
-;;; and the index writer -- position 4 -- cannot reach up to pflabel at 7.  No
-;;; alias left behind; same precedent as pfa:entry-cl.
+;;; ---- Registry + selection helpers ----------------------------------------
+;;; Registry/selection knowledge rather than label knowledge, and the index
+;;; writer at position 4 cannot reach up to pflabel at 7.  No alias left behind;
+;;; same precedent as pfa:entry-cl.
 
 ;; (pfa:build-lines pairs) -> line table: (clfile name lo hi verts tol bbox)*
 ;;   GATHER-PATH PURITY: this runs from the run dialogs and setup, BEFORE any
@@ -1076,13 +1063,11 @@
             (setq h (pf:cl-twin-handle file *pf-corridor*))
             (if h (setq vts (pf:twin-verts h)))))
         ;; STILL nothing drawn to match -- registered-only lines never have a
-        ;; twin, and they are exactly what pfa:registry-pairs adds.  Fall
-        ;; back to the .cl's own SAMPLED shape, which pf:cl-geom already
-        ;; returned in (cdr geom): a coarse corridor, but a corridor.  Shipping
-        ;; nil here turned the pre-filter OFF for those lines, and every
-        ;; structure in the drawing then reached cl_location_at_pt -- the
-        ;; "unable to locate point along centerline" parade (see
-        ;; pf:lines-at-point).
+        ;; twin, and they are exactly what pfa:registry-pairs adds.  Fall back
+        ;; to the .cl's own SAMPLED shape from (cdr geom): a coarse corridor,
+        ;; but a corridor.  Shipping nil turns the pre-filter OFF for those
+        ;; lines, and every structure then reaches cl_location_at_pt -- the
+        ;; "unable to locate point along centerline" parade.
         (if (and (null vts) (cdr geom))
           (setq vts (cdr geom)
                 tol *pf-corridor-sampled*))    ; corner-cut allowance
@@ -1091,8 +1076,8 @@
                           (pf:verts-bbox vts))
               tbl   (cons entry tbl))
         ;; PROGRESS: one line per line in the gather set.  Suppressed under
-        ;; *pf-quiet* -- a palette click runs this same path and does not want
-        ;; a six-line preamble.  The error below is a FINDING and still prints.
+        ;; *pf-quiet* -- a palette click runs this same path.  The error below
+        ;; is a FINDING and still prints.
         (pf:progress (strcat "\nLoaded line '" nm "' (Sta " (pf:fmt-station (car rng))
                         " to " (pf:fmt-station (cadr rng)) ")"
                         (cond
@@ -1233,40 +1218,31 @@
 ;;; ==========================================================================
 ;;; SECTION 4c  --  The gather  (membership -> pending -> status)
 ;;; ==========================================================================
-;;; MOVED DOWN FROM pflabel 2026-07-29, completing the migration begun on
-;;; 2026-07-27 with pfa:build-lines / pfa:gather-inlets.  Every function here
-;;; is membership-and-ledger knowledge rather than label knowledge: not one of
-;;; them called anything in pflabel, and each reaches only pfanchor (position 4)
-;;; or pftools-lib (position 2).
-;;;
-;;; The forcing reason is the palette.  pfpalette sits at position 11 and needs
-;;; per-target counts; with the gather at 7 it would have had to reach sideways
-;;; into pflabel, and pfanchor -- which every module already depends on --
-;;; could never have served them, because 4 cannot reach up to 7.  Now the
-;;; three label commands, pfreport and the palette all resolve membership
-;;; through ONE path.  Same precedent as pfa:entry-cl (out of pfxlabel,
-;;; 2026-07-26) and the build-lines/gather-inlets move.
-;;;
-;;; ALL PURE READS -- the palette contract holds throughout, so a modeless
-;;; handler may call any of it.
+;;; Membership-and-ledger knowledge, not label knowledge: nothing here calls
+;;; into pflabel, and each function reaches only pfanchor (position 4) or
+;;; pftools-lib (position 2).
+;;; It lives at 4 because the palette at 11 needs per-target counts: with the
+;;; gather at 7 the palette would have to reach sideways into pflabel, and
+;;; pfanchor -- which every module already depends on -- could not serve it,
+;;; since 4 cannot reach up to 7.  The three label commands, pfreport and the
+;;; palette now resolve membership through ONE path.
+;;; ALL PURE READS -- the palette contract holds throughout.
 
 (defun pfa:line-loaded-p (name lines)
   (car (vl-member-if '(lambda (e) (= (cadr e) name)) lines)))
 
-;; (pfa:registry-pairs primary-cl) -> list of (path . name): every
-;;   OTHER registry entry's .cl -- anchors AND stubs.  The self-maintaining
-;;   secondary set.  Stubs count because membership is plan-view station
-;;   math: IDENTITY IS ENOUGH -- a registered line still contributes to a
-;;   junction's combined ID.  (This closes the old silently-shorter-ID gap.)
-;;   Secondaries are SAME-UTILITY-TYPE only: a STORM profile's junctions are
-;;   other STORM lines.  A different type sharing a station is a CROSSING, not
-;;   a junction -- that's PFXLABEL's job, not a combined-ID contributor here.
-;;
-;;   ONE BUILDER (audit #12): a thin filter over pfa:registry -- the one
-;;   merged, COPY-EXCLUDING, sorted walk -- resolved via pfa:entry-cl, self
-;;   dropped by canonical identity (pf:cl-id).  Consumers: both setups, both
-;;   run dialogs, pfreport, and pfa:target-counts.  PFLABEL and PFINVERT can
-;;   no longer disagree about a junction's line set by construction.
+;; (pfa:registry-pairs primary-cl) -> list of (path . name)
+;;   Every OTHER registry entry's .cl -- anchors AND stubs.  The self-maintaining
+;;   secondary set.  Stubs count because membership is plan-view station math and
+;;   IDENTITY IS ENOUGH: a registered line still contributes to a junction's
+;;   combined ID.
+;;   SAME-UTILITY-TYPE only: a STORM profile's junctions are other STORM lines.
+;;   A different type sharing a station is a CROSSING, which is PFXLABEL's job.
+;;   ONE BUILDER: a thin filter over pfa:registry -- the merged, COPY-EXCLUDING,
+;;   sorted walk -- resolved via pfa:entry-cl, self dropped by canonical identity
+;;   (pf:cl-id).  Consumers: both setups, both run dialogs, pfreport, and
+;;   pfa:target-counts.  PFLABEL and PFINVERT cannot disagree about a junction's
+;;   line set by construction.
 (defun pfa:registry-pairs (primary-cl / out r clf ptype pid)
   (setq out '() ptype (pf:type-of primary-cl) pid (pf:cl-id primary-cl))
   (foreach r (pfa:registry)
@@ -1317,17 +1293,14 @@
   (reverse out))
 
 ;; (pfa:orphan-xs pend xs eps xf) -> pass X ordinates with no structure
-;;   THE DRIFT DETECTOR, and the reverse of the [LABELED] test.  labeled-x-p
-;;   asks "does a label sit at this structure?"; this asks "does a structure
-;;   sit under this label?"  A no means the structure MOVED or was ERASED
-;;   after it was labeled, and the label is now at a stale station.
-;;
-;;   No stored position is needed for this: the DRAWN LABELS ARE THE RECORD of
-;;   where the structures were.  The sheet is the baseline, which is also the
-;;   thing that is actually wrong when they disagree.
-;;
-;;   Degrades honestly -- a moved structure reads Outstanding at its new
-;;   station AND leaves an orphan at its old one.  Two signals, one event.
+;;   THE DRIFT DETECTOR, the reverse of the [LABELED] test: labeled-x-p asks
+;;   "does a label sit at this structure?", this asks "does a structure sit under
+;;   this label?"  A no means the structure MOVED or was ERASED after labeling,
+;;   and the label is now at a stale station.
+;;   No stored position is needed -- THE DRAWN LABELS ARE THE RECORD of where the
+;;   structures were, and the sheet is also the thing that is wrong.
+;;   Degrades honestly: a moved structure reads Outstanding at its new station
+;;   AND leaves an orphan at its old one.  Two signals, one event.
 (defun pfa:orphan-xs (pend xs eps xf / sxs out v)
   (setq sxs (mapcar '(lambda (p) (pf:station->profile-x (car p) xf)) pend)
         out '())
@@ -1336,35 +1309,31 @@
   (reverse out))
 
 ;;; ---- The gather memo  (SESSION-scoped; not a drawing write) --------------
-;;; The membership product is inlets x lines and it was recomputed from
-;;; scratch on every run, every target switch, and every cancelled dialog.
-;;; This memoises ONLY that product.  build-lines still runs fresh each time,
-;;; because it is O(lines) rather than O(lines x structures) and running it
-;;; keeps the twin verts LIVE -- so a moved plan centerline can never be
-;;; served stale out of here.
+;;; The membership product is inlets x lines, and it was recomputed from scratch
+;;; on every run, target switch and cancelled dialog.  This memoises ONLY that
+;;; product.  build-lines still runs fresh each time -- it is O(lines) rather
+;;; than O(lines x structures), and running it keeps the twin verts LIVE, so a
+;;; moved plan centerline can never be served stale out of here.
 ;;;
-;;; AutoLISP globals are per-document, so this is naturally per-drawing.
-;;; Nothing here touches the database: it is a LISP variable, legal from a
-;;; modeless handler, and it survives a cancelled dialog (which is precisely
-;;; the case that used to throw a full gather away).
+;;; AutoLISP globals are per-document, so this is naturally per-drawing.  It
+;;; touches no database: a LISP variable, legal from a modeless handler, and it
+;;; survives a cancelled dialog -- the case that used to throw a gather away.
 ;;;
-;;; THE KEY IS THE WHOLE INPUT SET of the thing memoised, and every part of it
-;;; is cheap.  Since the 2026-07-29 split this memo holds PEND ONLY, so the key
-;;; is exactly what pfa:pending reads:
+;;; THE KEY IS THE WHOLE INPUT SET, and every part of it is cheap.  This memo
+;;; holds PEND ONLY, so the key is exactly what pfa:pending reads:
 ;;;   primary                   which line is being asked about
-;;;   inlet signature           (handle x y) per structure -- catches ADD,
-;;;                             ERASE and MOVE, which is the full set of
-;;;                             things that can change membership
+;;;   inlet signature           (handle x y) per structure -- catches ADD, ERASE
+;;;                             and MOVE, the full set of things that can change
+;;;                             membership
 ;;;   line signature            per line: name, range, corridor tol, bbox and
-;;;                             vertex count -- catches a re-bound .cl, a
-;;;                             moved twin, a registry add/remove
-;;; A stale entry cannot be served: anything that would change the answer is
-;;; in the key.  Nothing is derived-and-trusted.
+;;;                             vertex count -- catches a re-bound .cl, a moved
+;;;                             twin, a registry add/remove
+;;; A stale entry cannot be served: anything that would change the answer is in
+;;; the key.  Nothing is derived-and-trusted.
 ;;;
 ;;; NOT IN THE KEY -- anchor, pass name, pass X ordinates.  None are inputs to
-;;; pending.  The ordinates were there only because the entry used to carry
-;;; status and orphans too; status now recomputes every call (pfa:status-for),
-;;; so drawing a label no longer throws away a walk it never invalidated.
+;;; pending.  Status now recomputes every call (pfa:status-for), so drawing a
+;;; label no longer throws away a walk it never invalidated.
 
 (if (not (boundp '*pfa-gather-memo*)) (setq *pfa-gather-memo* '()))
 (setq *pfa-memo-max* 8)        ; a few targets stay warm; no unbounded growth
@@ -1402,11 +1371,10 @@
   (reverse out))
 
 ;; (pfa:pend-for primary lines inlets) -> ((sta ename blkname) ...)
-;;   THE EXPENSIVE HALF, split out of gather-compute 2026-07-29 so ONE walk can
-;;   serve MANY passes -- the Commands tab shows Structure and Invert counts
-;;   side by side, and asking gather-compute twice used to mean two identical
-;;   inlets x lines walks.
-;;   Assumes primary is loaded in lines -- gather-compute holds that guard.
+;;   THE EXPENSIVE HALF, split out of gather-compute so ONE walk serves MANY
+;;   passes -- the Commands tab shows Structure and Invert counts side by side,
+;;   and asking gather-compute twice meant two identical inlets x lines walks.
+;;   Assumes primary is loaded in lines; gather-compute holds that guard.
 (defun pfa:pend-for (primary lines inlets / key hit pend)
   (setq key (list primary
                   (pfa:inlet-sig inlets)
@@ -1439,16 +1407,14 @@
 ;; (pfa:gather-compute anchor passname primary lines inlets)
 ;;   -> (pend status orphans) | nil        nil = the primary line never loaded
 ;;
-;;   THE ONE GATHER-COMPUTE, shared by PFLABEL and PFINVERT.  Both commands ask
-;;   the identical question -- which structures are on this line, and which
-;;   already carry a label from THIS pass -- and the only thing that varied
-;;   between the two copies was the pass name, which was already a parameter.
-;;   `.pro` never entered here: PFINVERT's profile work is downstream, in the
-;;   engine (pfi:invert-bracket / pf:pro-verts), not in the gather.
-;;
+;;   THE ONE GATHER-COMPUTE, shared by PFLABEL and PFINVERT: both ask the
+;;   identical question -- which structures are on this line, and which already
+;;   carry a label from THIS pass -- and only the pass name varies, which was
+;;   already a parameter.  `.pro` never enters here; PFINVERT's profile work is
+;;   downstream in the engine.
 ;;   The dialog FILLS stay local to each command, because tile names belong to
-;;   their own DCL dialog.  Only the dialog-blind part is shared -- so this is
-;;   callable from a modeless palette handler too (pure reads throughout).
+;;   their own DCL.  Only the dialog-blind part is shared, which is what makes
+;;   this callable from a modeless palette handler.
 (defun pfa:gather-compute (anchor passname primary lines inlets
                             / pend xf so orphans stas res)
   (if (not (pfa:line-loaded-p primary lines))
@@ -1461,10 +1427,8 @@
       ;; DRIFT ECHO -- printed, never persisted, and printed on a memo HIT too:
       ;; it describes the DRAWING, not the freshness of this computation.
       ;; STATUS means "correct as of the last pass" and drift accumulates
-      ;; BETWEEN passes, so a stored flag would always read clean one command
-      ;; after it stopped being true.  The live view owns "correct right now";
-      ;; this is its command-line half, and it sits with the other
-      ;; warn-loudly-let-the-user-decide findings.
+      ;; BETWEEN passes, so a stored flag would read clean one command after it
+      ;; stopped being true.  This is the command-line half of the live view.
       (if (setq orphans (caddr res))
         (progn
           (setq stas (mapcar '(lambda (v)
@@ -1472,7 +1436,6 @@
                              orphans))
           ;; Advisory, and the palette renders the same fact in detailsList's
           ;; Drift row -- so under *pf-quiet* it is a DUPLICATE, not a loss.
-          ;; On the command line (flag nil) it prints exactly as before.
           (pf:progress (strcat "\n  DRIFT: " (itoa (length orphans))
                           " label(s) with no structure -- something moved since"
                           " the last pass."
@@ -1496,13 +1459,11 @@
       (list primary (pfa:build-lines pairs)))))
 
 ;; (pfa:target-counts anchor) -> alist | nil       nil = not an anchored target
-;;   THE per-target roll-up the palette's Commands tab reads.  Worked out on
-;;   read and never stored, for the same reason pfa:status-roll is: nothing
-;;   would update a saved summary when one of the records beneath it moved.
-;;
-;;   ONE pend walk serves BOTH label passes -- that is what pfa:pend-for exists
-;;   for.  Crossings come off the ledger, which is why they are nearly free.
-;;
+;;   THE per-target roll-up the palette's Commands tab reads.  Worked out on read
+;;   and never stored, like pfa:status-roll: nothing would update a saved summary
+;;   when a record beneath it moved.
+;;   ONE pend walk serves BOTH label passes -- that is what pfa:pend-for is for.
+;;   Crossings come off the ledger, so they are nearly free.
 ;;   Keys: primary lines structures label-done label-out invert-done invert-out
 ;;         crossings xing-done xing-out drift
 ;;   Pure reads throughout -- legal from a modeless handler.
@@ -1582,9 +1543,9 @@
   (cond
     ((null xf) nil)
     ((= pass "XING")
-     ;; LIVE, not ledger-only (2026-07-30).  pfa:xing-find merges what is on
-     ;; record with what pfa:xing-scan finds on the ground, so a line that has
-     ;; never had PFXLABEL run still lists its crossings -- marked 'NEW.
+     ;; LIVE, not ledger-only: pfa:xing-find merges what is on record with what
+     ;; pfa:xing-scan finds on the ground, so a line that has never had PFXLABEL
+     ;; run still lists its crossings -- marked 'NEW.
      (if (setq res (pfa:xing-find anchor))
        (progn
          (setq out '())
@@ -1650,20 +1611,16 @@
 
 ;; (pfa:xing-classify dict e) -> (status existing-key | nil)
 ;;   status = 'NEW | 'UPDATED | 'MOVED
-;;
-;;   SPLIT OUT OF pfa:xing-merge 2026-07-30 so the READ-ONLY scan can classify
-;;   a found crossing without filing one.  It is the whole of merge's decision
-;;   and none of its writing: exact content key present -> UPDATED; else a
-;;   same-source crossing within *pfa-key-tol* of this station -> MOVED (the
-;;   station drifted, so the content key drifted with it); else NEW.
-;;
-;;   PURE READ, and it takes the DICT rather than the anchor precisely so the
-;;   caller decides whether that dict was opened with create T.  A nil dict is
-;;   legal and answers 'NEW -- no ledger yet means nothing is on record.
-;;
-;;   Re-deriving this in the preview instead would have been the real defect:
-;;   two copies drift, and then the palette promises one thing while PFXLABEL
-;;   does another.
+;;   The whole of pfa:xing-merge's decision and none of its writing, so the
+;;   READ-ONLY scan can classify a found crossing without filing one:
+;;   exact content key present -> UPDATED; else a same-source crossing within
+;;   *pfa-key-tol* of this station -> MOVED (the station drifted, so the content
+;;   key drifted with it); else NEW.
+;;   PURE READ, and it takes the DICT rather than the anchor so the CALLER
+;;   decides whether that dict was opened with create T.  A nil dict is legal
+;;   and answers 'NEW -- no ledger yet means nothing is on record.
+;;   Re-deriving this in the preview would be the real defect: two copies drift,
+;;   and then the palette promises one thing while PFXLABEL does another.
 (defun pfa:xing-classify (dict e / key d kdrift k)
   (setq key (pfa:xing-key (pfa:xr-sbase e) (pfa:xr-tsta e)))
   (cond
@@ -1729,26 +1686,21 @@
       T)))
 
 ;;; ---- Crossing DISCOVERY: the shared scan ---------------------------------
-;;; THE FIND AND THE FILE ARE DIFFERENT JOBS, split 2026-07-30.
-;;;
-;;; This lived inside pfxl:discover, which found crossings AND merged them, so
-;;; the palette could only ever show what a previous PFXLABEL had already
-;;; written -- "0 crossings" on a line that has plenty, which is what prompted
-;;; the split.  Nothing about FINDING a crossing needs a write: it is
-;;; .cl geometry through pf:poly-x, and pf:cl-geom's `write-p` is documented as
-;;; exactly this read/write seam (pftools-lib SECTION 11 -- "one day a modeless
-;;; palette handler ... MUST pass nil").  The writers were only ever
-;;; pfa:xing-merge, pfa:scope-put, and pf:cl-geom filing its cache.
+;;; THE FIND AND THE FILE ARE DIFFERENT JOBS.  While finding lived inside
+;;; pfxl:discover, which found AND merged, the palette could only show what a
+;;; previous PFXLABEL had written -- "0 crossings" on a line that has plenty.
+;;; Nothing about FINDING a crossing needs a write: it is .cl geometry through
+;;; pf:poly-x, and pf:cl-geom's `write-p` is exactly this read/write seam.  The
+;;; writers were only ever pfa:xing-merge, pfa:scope-put, and pf:cl-geom's cache.
 ;;;
 ;;; IT LIVES IN PFANCHOR, not pfxlabel, for two reasons.  Load order: pfanchor
-;;; is position 4 and pfxlabel 9, so pfa:target-items could never call upward
-;;; into pfxl:.  And ownership: pfanchor already holds the whole crossing
-;;; record layer -- xing-key, xing-classify, xing-merge, xing-list, SCOPE --
-;;; while every geometry helper is down in pftools-lib.  pfxl:discover is now
-;;; the filing half and nothing else.
+;;; is 4 and pfxlabel 9, so pfa:target-items could never call upward into pfxl:.
+;;; Ownership: pfanchor already holds the whole crossing record layer --
+;;; xing-key, xing-classify, xing-merge, xing-list, SCOPE.  pfxl:discover is the
+;;; filing half and nothing else.
 ;;;
 ;;; ONE SCAN, TWO CALLERS, so a preview cannot disagree with what the command
-;;; then does.  That is the point of the split, not a side effect of it.
+;;; then does.  That is the point of the split, not a side effect.
 
 (if (not (boundp '*pfa-xscan-memo*)) (setq *pfa-xscan-memo* '()))
 
@@ -1760,36 +1712,27 @@
 ;;              structures (pf:shared-structure-p), reported not discarded
 ;;   nil = no xform, no .cl on record, or the .cl cannot be checksummed.
 ;;
-;;   SHARED STRUCTURES ARE FILTERED HERE, not in the caller, because the split
-;;   exists so a preview cannot disagree with the command -- a filter in
-;;   pfxl:discover alone would have the palette showing tie-ins that running
-;;   Crossings then refuses to file.  See pf:shared-structure-p for why the
-;;   test is what it is.
+;;   SHARED STRUCTURES ARE FILTERED HERE, not in the caller: the split exists so
+;;   a preview cannot disagree with the command, and filtering in pfxl:discover
+;;   alone would have the palette showing tie-ins that Crossings then refuses.
 ;;
 ;;   WRITE-P THREADS STRAIGHT THROUGH to pf:cl-geom and decides nothing else.
-;;   Passed nil this is a pure read and legal from a modeless handler; passed T
-;;   it is discovery's scan and files the GEOM cache as it goes.  NOTHING here
-;;   writes the ledger either way -- classification is a read, and merging is
-;;   the caller's job.
+;;   nil is a pure read, legal from a modeless handler; T is discovery's scan and
+;;   files the GEOM cache as it goes.  NOTHING here writes the ledger either way.
 ;;
 ;;   THE CHECKSUM SHORT-CIRCUIT IS WHAT MAKES THE PREVIEW AFFORDABLE.  A pair
-;;   whose two .cl checksums match what SCOPE recorded was already intersected
-;;   by the last discovery, so its answer is in the ledger and re-intersecting
-;;   it would be wasted work -- pf:poly-x is O(n x m) segment tests per pair and
-;;   its own header records it being minutes per pair before the cdr-walk fix.
-;;   Steady state therefore costs almost nothing; only genuinely new or changed
-;;   lines are re-cut, which is exactly the set the operator wants to see.
+;;   whose two .cl checksums match SCOPE was already intersected by the last
+;;   discovery, and pf:poly-x is O(n x m) segment tests per pair.  Steady state
+;;   therefore costs almost nothing; only new or changed lines are re-cut.
 ;;
-;;   THE MEMO COVERS THE OTHER CASE.  A target that has never been discovered
-;;   has no SCOPE, so nothing short-circuits and every pair is cut -- on every
-;;   tree click and every radio click.  The memo keys on the anchor plus every
-;;   checksum plus the SCOPE record, which together fully determine the answer,
-;;   so a repeat click is free.  Same pattern and same reasoning as
-;;   pfa:pend-for's; it shares pfa:memo-get / pfa:memo-put.
+;;   THE MEMO COVERS THE OTHER CASE: a target never discovered has no SCOPE, so
+;;   nothing short-circuits and every pair is cut, on every tree and radio click.
+;;   The memo keys on the anchor plus every checksum plus SCOPE, which together
+;;   fully determine the answer.  Shares pfa:memo-get / pfa:memo-put.
 ;;
-;;   READ-ONLY SCANS ONLY.  Discovery (write-p T) deliberately bypasses the
-;;   memo: a hit would skip the pf:cl-geom filing that passing T is FOR, and a
-;;   command that quietly declines to do its work is worse than a slow one.
+;;   READ-ONLY SCANS ONLY.  Discovery (write-p T) bypasses the memo: a hit would
+;;   skip the pf:cl-geom filing that passing T is FOR, and a command that quietly
+;;   declines to do its work is worse than a slow one.
 (defun pfa:xing-scan (anchor write-p / xf ty nm tcl tck tgeom trng tverts
                                        reg dict e
                                        sources r scl sbase sck newscope s
@@ -1825,19 +1768,17 @@
            last     (pfa:scope-read anchor)
            ;; 'X2 is a VALUE-SHAPE tag, not decoration: the memo value gained a
            ;; skips half, and *pfa-xscan-memo* survives a hot .lsp reload by
-           ;; design (the boundp guard).  Without the tag the first preview
-           ;; after a reload would read an old-shape entry and mistake the
-           ;; first found row for the whole list.  A new tag simply never
-           ;; matches the old entries, so they age out untouched.
+           ;; design.  Without the tag the first preview after a reload would
+           ;; read an old-shape entry and mistake the first row for the list.
+           ;; A new tag never matches old entries, so they age out untouched.
            mkey     (list 'X2 (cdr (assoc 5 (entget anchor))) newscope last)
            hit      (if write-p nil (pfa:memo-get mkey *pfa-xscan-memo*)))
      (cond
        (hit (list (car (cdr hit)) newscope (cadr (cdr hit))))
        (T
         ;; pf:cl-geom returns (range . verts) and the scan wants BOTH halves:
-        ;; the range is what tells a shared structure from a crossing, and it
-        ;; costs nothing -- it is already in hand, and was simply discarded
-        ;; here before.
+        ;; the range is what tells a shared structure from a crossing, and it is
+        ;; already in hand.
         (setq tgeom  (pf:cl-geom tcl write-p)
               trng   (car tgeom)
               tverts (cdr tgeom)
@@ -1892,23 +1833,18 @@
 
 ;; (pfa:xing-find anchor) -> (T . ((entry state) ...)) | nil    PURE READ
 ;;   state = 'LABELED | 'OUTSTANDING | 'NEW | 'MOVED
-;;
-;;   WHAT IS ON THIS LINE, whether or not PFXLABEL has ever run.  The ledger
-;;   supplies what is on record and pfa:xing-scan supplies what is on the
-;;   ground; the two are merged so the palette can show a crossing BEFORE it
-;;   has been discovered -- the thing "0 crossings on record" could not say.
-;;
+;;   WHAT IS ON THIS LINE, whether or not PFXLABEL has ever run: the ledger
+;;   supplies what is on record, pfa:xing-scan what is on the ground, and the two
+;;   are merged so the palette can show a crossing BEFORE it is discovered.
 ;;   'NEW    -- found by the live scan, not in the ledger.  Running Crossings
 ;;              is what puts it there.
 ;;   'MOVED  -- on record, but the scan puts it at a different station.  The
-;;              stale ledger row is dropped from the list rather than shown
-;;              twice; pfa:xing-merge will rename it on the next run.
-;;   'UPDATED is NOT added as a separate row: it is the same crossing at the
-;;              same key, and the ledger row is the better one to show because
-;;              it carries the surveyed elevations the scan cannot know.
-;;
-;;   (T . rows), not bare rows -- nil and '() are the same object, so an empty
-;;   list has to be distinguishable from an unreadable target.  Same idiom as
+;;              stale ledger row is dropped rather than shown twice;
+;;              pfa:xing-merge renames it on the next run.
+;;   'UPDATED is NOT a separate row -- same crossing, same key, and the ledger
+;;              row is the better one because it carries surveyed elevations.
+;;   (T . rows), not bare rows: nil and '() are the same object, so an empty list
+;;   must stay distinguishable from an unreadable target.  Same idiom as
 ;;   pfa:memb-get and pfa:target-items.
 (defun pfa:xing-find (anchor / xf merged scan found drop out f e recon)
   (setq xf (pfa:anchor->xform anchor))
@@ -2037,21 +1973,18 @@
      (if pick (nth pick anchors)))))
 
 ;;; --------------------------------------------------------------------------
-;;; The shared command wrapper  (pf:run-command -- audit #9)
+;;; The shared command wrapper  (pf:run-command)
 ;;; --------------------------------------------------------------------------
-;;; ONE copy of the prologue/epilogue every PF command used to carry four
-;;; times over: *error* save/install, echo-off/on, the undo-group flag
-;;; pattern, and the error-path teardown.  Replaces pfa:undo-cleanup's
-;;; transitional role.  Lives here because every command already depends on
-;;; pfanchor; it is also the future home caller for the deferred C:PF*RUN
-;;; commands (Tab 2).
+;;; ONE copy of the prologue/epilogue every PF command used to carry: *error*
+;;; save/install, echo off/on, the undo-group flag pattern, and the error-path
+;;; teardown.  Lives here because every command already depends on pfanchor.
 ;;;
 ;;; The FLUSH hook is per-command (pflabel:flush-pass, pfi:flush-pass,
-;;; pfxl:flush-pass): on an Esc mid-run it writes the pass ledger for
-;;; whatever was drawn before the interrupt, INSIDE the still-open undo group
+;;; pfxl:flush-pass): on an Esc mid-run it writes the pass ledger for whatever
+;;; was drawn before the interrupt, INSIDE the still-open undo group
 ;;; (entmakex/dictadd are *error*-legal).  Partial output is therefore ON the
 ;;; ledger -- pfa:erase-pass, PFREMOVE and recon account for it -- and one U
-;;; still peels the whole run (the flush's record writes die with the group).
+;;; still peels the whole run.
 
 ;; Per-command undo-group flags.  Each command file also boundp-inits its
 ;; own; these guards make the wrapper safe to call in any load order.
@@ -2110,11 +2043,10 @@
         *pfrem-undo-open*    nil)
   (pf:echo-on)                       ; error path always restores CMDECHO
   ;; 2b. and always restores the console VOLUME.  The palette binds *pf-quiet*
-  ;; around gather paths that run inside a wrapped command (pfp:run-labels), so
-  ;; an error thrown mid-gather jumps here and skips that caller's reset --
-  ;; leaving the whole suite mute for the rest of the session, silently.  Same
-  ;; class as pf:echo-on: whatever the console state was borrowed for, the
-  ;; error path hands it back.
+  ;; around gather paths inside a wrapped command, so an error thrown mid-gather
+  ;; jumps here and skips that caller's reset -- leaving the suite mute for the
+  ;; session, silently.  Same class as pf:echo-on: the error path hands back
+  ;; whatever console state was borrowed.
   (setq *pf-quiet* nil)
   ;; 3. Esc mid-parade: restore the pre-run view (no-op when the parade is off)
   (pf:zoom-onerror)
@@ -2128,27 +2060,22 @@
 ;;   name  = command name for error reports ("PFLABEL")
 ;;   flush = the command's Esc ledger-flush hook (QUOTED symbol) | nil
 ;;   work  = the command body (QUOTED symbol, no args) -- gather + engine
-;;   The body still opens/closes its own undo group (via pf:undo-begin/end)
-;;   at the point its writes start -- gather stays OUTSIDE the group.
+;;   The body still opens/closes its own undo group (via pf:undo-begin/end) at
+;;   the point its writes start -- gather stays OUTSIDE the group.
 ;;
-;;   API LOADING IS PART OF THE PROLOGUE, 2026-07-29.  It used to be the first
-;;   line of each command BODY, and six of the nine entry points remembered it.
-;;   C:PFPVERB did not: the palette's anchor verb calls pfs:place-one directly
-;;   rather than pfs:cmd, so in a session where no other PFTools command had run
-;;   yet, btnAnchor prompted for scales and datum and then died on the first
-;;   centerline read -- "bad function: CF:ROAD_API".  It read as working because
-;;   testing a palette button almost always follows a command-line run that has
-;;   already scloaded eworks.  Same class as audit #9: what EVERY entry point
-;;   needs belongs to the ONE wrapper, not to the discipline of whoever writes
-;;   the next command.  scload is idempotent and catch-wrapped, so repeat calls
-;;   cost nothing, and it sits AFTER echo-off so the load chatter is suppressed.
-;;   THE CONSOLE STARTS AUDIBLE, 2026-07-30.  *pf-quiet* is bound by palette
-;;   read paths and by the palette's own run gather, and every one of those
-;;   resets it -- but a reset can be skipped by a throw, and the failure is
-;;   both session-long and silent (every command mute, no error to explain it).
-;;   Clearing it here and in pf:run-error means no command can ever INHERIT a
-;;   mute from whatever ran before it, which makes the flag safe to bind from
-;;   anywhere without each caller having to be perfect.
+;;   API LOADING IS PART OF THE PROLOGUE.  As the first line of each command
+;;   BODY it was forgettable, and C:PFPVERB forgot: the palette's anchor verb
+;;   calls pfs:place-one directly, so in a session where no other PFTools
+;;   command had run, btnAnchor prompted for scales and then died on the first
+;;   centerline read with "bad function: CF:ROAD_API".  What EVERY entry point
+;;   needs belongs to the ONE wrapper.  scload is idempotent and catch-wrapped,
+;;   so repeats cost nothing, and it sits AFTER echo-off to suppress the chatter.
+;;
+;;   THE CONSOLE STARTS AUDIBLE.  *pf-quiet* is bound by palette read paths and
+;;   every one resets it -- but a reset can be skipped by a throw, and the
+;;   failure is session-long and silent.  Clearing it here and in pf:run-error
+;;   means no command can INHERIT a mute, which makes the flag safe to bind from
+;;   anywhere without every caller having to be perfect.
 (defun pf:run-command (name flush work)
   (setq *pf-run-prev-error* *error*
         *pf-run-name*       name
@@ -2195,13 +2122,12 @@
 (if (not (boundp '*pfrem-undo-open*)) (setq *pfrem-undo-open* nil))
 
 ;; (pfrem:remove-anchor anchor) -> nil   Confirm + tear down ONE anchor.
-;;   Split out of pfrem:cmd 2026-07-30 so the palette's btnRemove can hand in
-;;   the anchor the user already selected instead of re-asking for it.  This is
-;;   a SPLIT, NOT A GRAFT (PALETTE-LAYOUT 10): no palette-only global reaches
-;;   into a path the command line runs, so C:PFREMOVE is unchanged in every
-;;   respect -- same pick, same confirm, same undo group, same messages.
-;;   Caller runs under pf:run-command; the undo group is opened HERE, which is
-;;   why the *pfrem-undo-open* reset lives here and not in the pick phase.
+;;   Split out of pfrem:cmd so the palette's btnRemove can hand in the anchor
+;;   the user already selected instead of re-asking.  A SPLIT, NOT A GRAFT: no
+;;   palette-only global reaches into a path the command line runs, so
+;;   C:PFREMOVE is unchanged -- same pick, confirm, undo group and messages.
+;;   Caller runs under pf:run-command; the undo group opens HERE, which is why
+;;   the *pfrem-undo-open* reset lives here and not in the pick phase.
 (defun pfrem:remove-anchor (anchor / counts n)
   (setq *pfrem-undo-open* nil)
   (cond
@@ -2263,15 +2189,15 @@
 ;;; SECTION 8  --  C:PFINDEX  (build / verify / report the membership index)
 ;;; ==========================================================================
 ;;; Nothing in normal use walks every structure -- the engine top-up only
-;;; refreshes what it labeled -- so a drawing that has never been indexed, or
-;;; one where a line was just added, needs this.  The cold build is ALLOWED to
-;;; be slow: run one pays, run two onward is nearly free.
+;;; refreshes what it labeled -- so a drawing never indexed, or one where a line
+;;; was just added, needs this.  The cold build is ALLOWED to be slow: run one
+;;; pays, run two onward is nearly free.
 ;;;
-;;; VERIFY is the point of the whole command.  Every acceptance test for this
-;;; feature is "same labels, faster", and nothing else compares the two answers.
-;;; This does: read the saved record AND do the arithmetic the old way, then
-;;; name the disagreements.  It is the only thing that turns a quiet wrong
-;;; answer into a visible one.
+;;; VERIFY is the point of the command.  Every acceptance test here is "same
+;;; labels, faster", and nothing else compares the two answers.  This reads the
+;;; saved record AND does the arithmetic the old way, then names the
+;;; disagreements -- the only thing that turns a quiet wrong answer into a
+;;; visible one.
 
 ;; (pfa:index-lines) -> the full same-type line table for every registered line
 ;;   The index is drawing-wide, so the table is every registry entry that
@@ -2335,6 +2261,33 @@
                                   "]  live [" (pf:join lv ",") "]")
                           out))))))
   (reverse out))
+
+;; (pfa:index-repair) -> (written skipped current stale) | nil
+;;   PFSETUP's registration tail: write a MEMB record only where NO record
+;;   exists; a STALE one is left for the engine top-up or an explicit PFINDEX
+;;   Build.  That keeps registering n lines roughly linear, where a rebuild per
+;;   registration would be O(n^2).  Caller holds an open undo group.
+;;   nil when the index is off.
+(defun pfa:index-repair ( / lines inlets roster nw ns nc nst e pt dict r)
+  (if *pf-index-on*
+    (progn
+      (setq lines  (pfa:index-lines)
+            inlets (pfa:gather-inlets)
+            roster (pfa:roster-stamp lines T)
+            nw 0 ns 0 nc 0 nst 0)
+      (foreach e inlets
+        (cond
+          ((pfa:memb-get e roster) (setq nc (1+ nc)))
+          ((and (setq dict (pfa:ledger-dict e nil))
+                (pfa:xrec-data dict *pfa-memb-key*))
+           (setq nst (1+ nst)))                 ; stale: not this repair's to touch
+          (T
+           (setq pt (cdr (assoc 10 (entget e)))
+                 r  (vl-catch-all-apply
+                      'pfa:memb-put
+                      (list e pt (pf:lines-at-point pt lines) roster)))
+           (if (vl-catch-all-error-p r) (setq ns (1+ ns)) (setq nw (1+ nw))))))
+      (list nw ns nc nst))))
 
 ;; (pfindex:cmd) -> nil   The command body, run under pf:run-command.
 ;;   BORROWS *pfs-undo-open* deliberately.  pf:group-open-p checks a FIXED list

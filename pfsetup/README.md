@@ -68,6 +68,12 @@ internal to this command's flow. Writers (`pfs:auto`, `pfs:place-one`,
 
 ## Invariants
 
+- **Registration repairs the membership index (2026-08-01, DATA-FLOW §6).**
+  `pfs:place-one` and `pfs:edit-one` call `pfa:index-repair` inside their
+  undo group, after the records land: absent `MEMB` records are written
+  against the new roster, stale ones are reported and left for the engine
+  top-up or an explicit `PFINDEX Build`. A brand-new anchor resets only
+  `LABEL`/`INVERT` — `STATUS_XING` was retired the same day (§4.1).
 - Name is the identity key — picked files VALIDATE against it, they never
   resolve it. The slots guarantee roles; pairs bind both-or-neither.
 - AUTO never guesses: skip cases report loudly in both directions.
@@ -106,4 +112,4 @@ internal to this command's flow. Writers (`pfs:auto`, `pfs:place-one`,
   `pf:parse-sheet-name`) — [../OPEN-ISSUES.md](../OPEN-ISSUES.md)
   "Shared / cross-cutting".
 - Session last-browsed dirs overwritten by company-folder routing —
-  [../Low_Priority_issues.md](../Low_Priority_issues.md) #7.
+  [../pfsuite-md/OPEN-ISSUES.md](../pfsuite-md/OPEN-ISSUES.md) LOW-3.

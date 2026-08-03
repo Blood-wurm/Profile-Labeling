@@ -191,8 +191,16 @@ the narration, never the news.
 ## Open issues local to this file
 
 - `pf:fmt-station` misformats negative stations and rounds oddly at the
-  +99.999 boundary — [../Low_Priority_issues.md](../Low_Priority_issues.md) #9.
-- Dead API surface (`pf:tin-*`, `pf:bbox`, `pf:get-verts`, …) —
-  [../Low_Priority_issues.md](../Low_Priority_issues.md) #10.
-- Echo non-re-entrancy (#6 on that list) was fixed 2026-07-26 with the
-  `pf:run-command` wrapper (save-once semantics) — pending CAD.
+  +99.999 boundary — [../pfsuite-md/OPEN-ISSUES.md](../pfsuite-md/OPEN-ISSUES.md) LOW-5.
+- Dead API surface adjudicated 2026-08-01 (DATA-FLOW §5): twelve no-caller
+  utilities quarantined to `_attic` (bbox, get-verts and its private
+  sample-cl / attach-corridor / find-cl-polyline chain, text-pos, ss->list,
+  filter-layer + on-layer-p, remove-nth, name-prefix, fmt-elev,
+  parse-line-name, pro-range). KEPT with in-file notes: `pf:tin-*`
+  (minimum-coverage checks,
+  [../pfsuite-md/Version 5.1.md](../pfsuite-md/Version%205.1.md) §4, LOW-6)
+  and `pf:text-layer` / `pf:align-layer` (documented revert path to
+  per-type layers).
+- Echo non-re-entrancy was fixed 2026-07-26 with the `pf:run-command` wrapper
+  (save-once semantics) — pending CAD;
+  [../pfsuite-md/CLOSED_ISSUES.md](../pfsuite-md/CLOSED_ISSUES.md).

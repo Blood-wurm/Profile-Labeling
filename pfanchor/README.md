@@ -235,18 +235,23 @@ and the palette all resolve membership through one path.
 
 **Record reads:** `pfa:meta-get`, `pfa:files-get`, `pfa:status-get pass`,
 `pfa:status-label`, `pfa:status-check`, `pfa:status-roll`,
-`pfa:status-rank`, `pfa:status-key`, `pfa:scope-get`, `pfa:stub-get`,
-`pfa:stub-list`, `pfa:twin-get`, `pfa:twin-cksum`, `pfa:geom-get`,
-`pfa:nod-dict create`.
+`pfa:status-rank`, `pfa:status-why anchor pass` (findings strings when
+STALE/FAILING — the palette's "why" rows), `pfa:status-key`,
+`pfa:scope-get`, `pfa:stub-get`, `pfa:stub-list`, `pfa:twin-get`,
+`pfa:geom-get`, `pfa:nod-dict create`. (The twin-cksum reader was
+quarantined to `_attic` 2026-08-01 — its witness step was never built.)
 
-**STATUS is four records, not one.** `STATUS_LABEL` covers the `.cl`,
-`STATUS_INVERT` the `_INV .pro`, `STATUS_XING` the target `.cl` (per-source
-checksums stay in `SCOPE`, which is not copied). The fourth — the overall
-roll-up — is `pfa:status-roll`, **worked out on read and never stored**,
-because nothing would update a saved summary when one of the three beneath
-it moved. Worst state wins, so one failing input cannot read green.
-`pfa:status-get` falls back to the pre-split `STATUS` record so an anchor
-written before 2026-07-27 still reports something.
+**STATUS is two records plus a live roll-up.** `STATUS_LABEL` covers the
+`.cl`, `STATUS_INVERT` the `_INV .pro`. `STATUS_XING` was retired
+2026-08-01 (DATA-FLOW §4.1): it stored the same target-`.cl`-vs-META
+verdict as `STATUS_LABEL` through the same code, so it could never
+disagree and the roll-up counted one question twice; per-source checksums
+stay in `SCOPE`, which is not copied. Old XING records are simply no
+longer read. The roll-up is `pfa:status-roll`, **worked out on read and
+never stored**, because nothing would update a saved summary when a
+record beneath it moved. Worst state wins, so one failing input cannot
+read green. `pfa:status-get` falls back to the pre-split `STATUS` record
+so an anchor written before 2026-07-27 still reports something.
 **What is stored is the input's checksum at pass time**; done-out-of-total
 counts are NOT — a saved count reads 12-of-12 forever after someone erases
 a label, so the live gather owns that number.
@@ -259,6 +264,15 @@ model-space INSERTs (also moved), `pfa:line-stamp` / `pfa:roster-stamp` /
 catch-wrapped), `pfa:lines-at ent pt lines` — **THE READ SEAM**, and
 `pfa:index-lines` / `pfa:index-build` **W** / `pfa:index-scan` /
 `pfa:index-verify` behind `C:PFINDEX`.
+
+**`pfa:index-repair` W (2026-08-01, DATA-FLOW §6):** PFSETUP's registration
+tail. Writes a `MEMB` record only where **no record exists at all** and
+counts the rest — `(written skipped current stale)`, nil when the index is
+off. STALE records are deliberately left for the engine top-up or an
+explicit `PFINDEX Build`: repairing absent-only keeps registering n lines
+roughly linear, where a rebuild per registration would be O(n²) (the roster
+stamp folds the whole line table, so every registration invalidates every
+record). Caller holds an open undo group.
 
 `pfa:memb-get` returns a **cons**, not a bare list: a structure genuinely on
 no line has an empty hit list, and nil and `'()` are the same object in
@@ -358,5 +372,6 @@ and command-line behaviour is byte-identical (PALETTE-LAYOUT §10).
   [../OPEN-ISSUES.md](../OPEN-ISSUES.md) "Shared / cross-cutting".
 - Anchor block style wants a formatting pass —
   [../OPEN-ISSUES.md](../OPEN-ISSUES.md).
-- Unused exports (`pfa:status-get`, `pfa:twin-cksum`, four `pfa:xr-*`
-  accessors) — [../Low_Priority_issues.md](../Low_Priority_issues.md) #10.
+- Unused exports adjudicated 2026-08-01 (DATA-FLOW §5): `pfa:twin-cksum`,
+  `pfa:xr-tfile`, `pfa:xr-tbase` quarantined to `_attic`; `pfa:xr-telev` /
+  `pfa:xr-selev` KEPT for PFCHECK (pipe clearance, Version 5.1 §5).
