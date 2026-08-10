@@ -137,11 +137,16 @@
 ;;; SECTION 3  --  Cell formatting
 ;;; ==========================================================================
 
-;; (pfp:file-cell p) -> "name.ext" | "(not set)"   (unbound reads explicit)
+;; (pfp:file-cell p) -> "name.ext" | "NOT FOUND" | "(not set)"
+;;   Three states, not two: an empty slot was never bound, a bound slot whose
+;;   file is gone is a different problem with a different fix.  vl-file-systime,
+;;   NOT findfile -- findfile falls back to the support paths, so a name that is
+;;   not absolute could match an unrelated file and read as present.
 (defun pfp:file-cell (p)
-  (if (and p (/= p ""))
-    (strcat (vl-filename-base p) (vl-filename-extension p))
-    "(not set)"))
+  (cond
+    ((or (null p) (= p "")) "(not set)")
+    ((null (vl-file-systime p)) "NOT FOUND")
+    (T (strcat (vl-filename-base p) (vl-filename-extension p)))))
 
 ;; (pfp:dash s) -> s | "-"   (a blank scalar reads as a dash, never "")
 (defun pfp:dash (s) (if (and s (/= s "")) s "-"))
@@ -265,8 +270,10 @@
   (reverse out))
 
 ;; (pfp:meta-rows row) -> list of (prop -1 value -1) rows for metaList
-(defun pfp:meta-rows (row / type name ename at cl mat)
-  (setq type (car row) name (cadr row))
+;;   ty, NOT type: `type' is a subr, and this runs from a modeless handler with
+;;   pfa: reads underneath it (2026-08-06).
+(defun pfp:meta-rows (row / ty name ename at cl mat)
+  (setq ty (car row) name (cadr row))
   (cond
     ((eq (caddr row) 'ANCHORED)
      (setq ename (nth 3 row)
@@ -274,7 +281,7 @@
            cl    (cdr (assoc 1 (pfa:meta-get ename)))
            mat   (cdr (assoc 5 (pfa:files-get ename))))
      (append
-       (list (list "Type"       -1 type                          -1)
+       (list (list "Type"       -1 ty                            -1)
              (list "Line"       -1 name                          -1)
              (list "State"      -1 "Anchored"                    -1)
              (list "Checks"     -1 (pfp:status-cell ename)       -1))
@@ -286,7 +293,7 @@
              (list "Centerline" -1 (pfp:file-cell cl)            -1)
              (list "Material"   -1 (pfp:dash mat)                -1))))
     (T                                            ; STUB = (type name cl inv top)
-     (list (list "Type"       -1 type                          -1)
+     (list (list "Type"       -1 ty                            -1)
            (list "Line"       -1 name                          -1)
            (list "State"      -1 "Registered"                  -1)
            (list "Centerline" -1 (pfp:file-cell (nth 2 (nth 4 row))) -1)))))

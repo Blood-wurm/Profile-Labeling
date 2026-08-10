@@ -411,21 +411,54 @@ pfsew_run : dialog {
   label = "PF2SEW - Carlson Hydrology Export";
   : text { key = "sw_title"; label = ""; width = 62; }
   spacer;
-  : text { key = "sw_head"; label = "  Type       Line          Crown    Material"; width = 62; }
+  : text { key = "sw_head"; label = "  Type       System                          Profiles"; width = 62; }
   : list_box {
     key             = "sw_list";
     width           = 62;
     height          = 12;
-    multiple_select = true;
+    multiple_select = false;
   }
   : text { key = "sw_count"; label = ""; width = 62; }
-  : text { label = "Crown = a _TOP .pro is bound; without one, pipe sizes export as 0."; }
+  : text { label = "Systems are grouped by shared structures - one .sew per export."; }
   : text { label = "Drainage areas export as 0 - PFTools does not hold them."; }
   errtile;
   : row {
     fixed_width = true;
-    : button { key = "sw_sel"; label = "Export Selected"; mnemonic = "E"; width = 18; is_default = true; }
-    : button { key = "sw_all"; label = "Export All";      mnemonic = "A"; width = 18; }
+    : button { key = "sw_sel"; label = "Export System"; mnemonic = "E"; width = 18; is_default = true; }
+  }
+  : row {
+    fixed_width = true;
+    alignment   = "centered";
+    : button { key = "cancel"; label = "Cancel"; is_cancel = true; width = 11; }
+    : button { key = "help";   label = "Help";   width = 11; }
+  }
+}
+
+
+// ---- PFQTY: material quantities report ------------------------------------
+// Modelled on pfrpt_run, but fed by pfq:candidates, which is LOOSER: a takeoff
+// needs no rim elevations, so stubs are offered too and the Grid column says
+// which is which.  Separate tile keys (qt_*) so it can coexist with the two
+// export dialogs in one session.
+pfqty_run : dialog {
+  label = "PFQTY - Quantities Report";
+  : text { key = "qt_title"; label = ""; width = 62; }
+  spacer;
+  : text { key = "qt_head"; label = "  Type      Line        Grid    Crown   Material"; width = 62; }
+  : list_box {
+    key             = "qt_list";
+    width           = 62;
+    height          = 12;
+    multiple_select = true;
+  }
+  : text { key = "qt_count"; label = ""; width = 62; }
+  : text { label = "Crown = a _TOP .pro is bound; without one, pipe sizes read UNKNOWN."; }
+  : text { label = "Lines need not connect - a takeoff builds no network."; }
+  errtile;
+  : row {
+    fixed_width = true;
+    : button { key = "qt_sel"; label = "Report Selected"; mnemonic = "R"; width = 18; is_default = true; }
+    : button { key = "qt_all"; label = "Report All";      mnemonic = "A"; width = 18; }
   }
   : row {
     fixed_width = true;

@@ -119,7 +119,7 @@ scope, but it is the next thing to measure once membership stops dominating.
 |---|---|---|---|
 | invert elevations | `pf:pro-verts` → `pfi:invert-bracket` | ENGINE | `_INV.pro` |
 | pipe size at a station | `pf:pipe-at` | ENGINE | `_INV` + `_TOP.pro` |
-| lateral invert | `pfi:lateral-info` → `pfxl:src-files` | ENGINE | the lateral's own `.pro` |
+| lateral invert | `pfi:lateral-info` → `pfa:src-files` | ENGINE | the lateral's own `.pro` |
 | rim / ground elevation | `pfr:elev-texts` → `pfr:rim-at` | EXPORT | **the drafter's typed TEXT on the sheet** |
 | crossing elevations | `pfa:xing-put-elevs` | ENGINE | already persisted in `X_*` |
 

@@ -101,21 +101,26 @@
 ;;; --------------------------------------------------------------------------
 ;;; SECTION 2  --  Which grid does that polyline belong to?
 ;;; --------------------------------------------------------------------------
-;;; ONE PICK, so the anchor resolves from the pick itself: the nearest anchor to
-;;; the polyline's LEFTMOST ENDPOINT.  No bounding box and no containment test,
-;;; which also means pfa:extents is never consulted -- a legacy anchor with no
-;;; WIDTH recorded resolves exactly like any other.
-;;; Two guards ride along, neither costing a prompt:
-;;;   1. The anchor's insert must be at or below-left of that endpoint.  The
-;;;      insert IS the grid's lower-left (leftx, basey) and a profile always
-;;;      draws up and to the right of it.  Without this, stacked grids -- the
-;;;      normal sheet layout -- steal each other's polylines: a pipe drawn high
-;;;      in its own grid is nearer the insert of the grid ABOVE it.  Delete the
-;;;      two <= tests for pure nearest-insert.
-;;;   2. COPIES are excluded, as pfa:find-anchor excludes them and
-;;;      pfa:all-anchors does not.  A copy would win outright for a polyline
-;;;      drawn inside it, and pfa:files-put would bind into a cloned ledger
-;;;      nothing else resolves.
+;;; ONE PICK, so the anchor resolves from the pick itself: the grid whose BOX is
+;;; nearest the polyline's LEFTMOST ENDPOINT.  Distance to the box, not to the
+;;; insert -- zero when the endpoint is inside the grid, growing with how far
+;;; outside it is.  There is no directional rule and nothing to fail.
+;;;
+;;; Distance to the INSERT looks equivalent and is not.  The insert is a CORNER,
+;;; so on the normal stacked sheet -- grids at (0,0) and (0,300) -- a polyline
+;;; drawn high in the lower grid with its left end at (20,240) is 240.8 from its
+;;; own insert and 63.2 from the grid above, and the wrong grid wins outright.
+;;; That is what the old at-or-below-left guard was compensating for; the box
+;;; makes the guard unnecessary instead of necessary.
+;;;
+;;; Extents come from pfa:extents (WIDTH/HEIGHT attributes).  A missing extent
+;;; leaves that side of the box UNBOUNDED rather than refusing, so a pre-icon
+;;; anchor with no WIDTH still resolves -- on the side it does know.
+;;;
+;;; COPIES are candidates, then refused if one WINS.  pfa:all-anchors does not
+;;; filter them and pfa:find-anchor does, so skipping them here would hand a
+;;; polyline drawn inside a copy to whatever real grid is next-nearest, and
+;;; pfa:files-put would bind a .pro to a grid it was never cut from.
 
 ;; (pfpro:left-end pts) -> (x y)   the ENDPOINT with the lower X.
 ;;   Endpoints, not the whole vertex list: the polyline may be drawn in either
@@ -125,43 +130,55 @@
   (setq a (car pts) b (last pts))
   (if (<= (car a) (car b)) a b))
 
+;; (pfpro:box-dist p ins ext) -> real >= 0   distance from p to the grid box.
+;;   0 when p is inside it.  ins IS the lower-left (leftx, basey), so the box is
+;;   x0..x0+WIDTH by y0..y0+HEIGHT.  A nil extent leaves that side unbounded.
+(defun pfpro:box-dist (p ins ext / x0 y0 x1 y1 dx dy)
+  (setq x0 (car  ins)
+        y0 (cadr ins)
+        x1 (if (car  ext) (+ x0 (car  ext)))
+        y1 (if (cadr ext) (+ y0 (cadr ext)))
+        dx (cond ((< (car p) x0)              (- x0 (car p)))
+                 ((and x1 (> (car p) x1))     (- (car p) x1))
+                 (T 0.0))
+        dy (cond ((< (cadr p) y0)             (- y0 (cadr p)))
+                 ((and y1 (> (cadr p) y1))    (- (cadr p) y1))
+                 (T 0.0)))
+  (sqrt (+ (* dx dx) (* dy dy))))
+
 ;; (pfpro:owner pts) -> anchor ename | nil   nil = refused, reason printed.
-(defun pfpro:owner (pts / p px py best bestd copies any ins d)
-  (setq p      (pfpro:left-end pts)
-        px     (car  p)
-        py     (cadr p)
-        best   nil
-        bestd  nil
-        copies 0
-        any    nil)
+(defun pfpro:owner (pts / p best bestd ins d)
+  (setq p     (pfpro:left-end pts)
+        best  nil
+        bestd nil)
   (foreach a (pfa:all-anchors)
-    (setq any T
-          ins (cdr (assoc 10 (entget a))))
-    (if (and ins (<= (car ins) px) (<= (cadr ins) py))
-      (if (pfa:copy-p a)
-        (setq copies (1+ copies))
-        (progn
-          (setq d (distance (list px py) (list (car ins) (cadr ins))))
-          (if (or (null bestd) (< d bestd))
-            (setq best a bestd d))))))
+    (if (setq ins (cdr (assoc 10 (entget a))))
+      (progn
+        (setq d (pfpro:box-dist p ins (pfa:extents a)))
+        (if (or (null bestd) (< d bestd))
+          (setq best a bestd d)))))
   (cond
-    (best best)
-    ((> copies 0)
+    ((null best)
+     (pfpro:refuse
+       (strcat "there are no registered grids in this drawing, so there is no "
+               "station/elevation transform to read that polyline with.  Run "
+               "PFSETUP first.")))
+    ((pfa:copy-p best)
      (pfpro:refuse
        (strcat "the nearest grid to that polyline is a COPIED anchor.  A copy "
                "never resolves -- its ledger is a clone -- so binding a .pro to "
                "it would write where nothing reads.  PFREMOVE the copy, then "
                "PFSETUP that grid properly.")))
-    ((null any)
-     (pfpro:refuse
-       (strcat "there are no registered grids in this drawing, so there is no "
-               "station/elevation transform to read that polyline with.  Run "
-               "PFSETUP first.")))
     (T
-     (pfpro:refuse
-       (strcat "no registered grid lies below-left of that polyline's left end, "
-               "so there is no station/elevation transform to read it with.  "
-               "Check that it was drawn inside its grid, not beside it.")))))
+     ;; Outside every grid still RESOLVES -- nearest wins, by design -- but it is
+     ;; the shape of a polyline drawn beside its grid rather than in it, and the
+     ;; stations that lands on disk are the ones PFINVERT reads back as truth.
+     (if (> bestd 0.0)
+       (prompt (strcat "\n  Warning: that polyline's left end is not inside "
+                       (pfa:anchor-title best) " -- it is " (rtos bestd 2 2)
+                       " outside the nearest grid.  Check STA0 and the datum "
+                       "before trusting the stations.")))
+     best)))
 
 
 ;;; --------------------------------------------------------------------------
@@ -182,35 +199,102 @@
                    (pf:y->elev           (cadr p) xf)))
           pts))
 
-;; (pfpro:orient verts) -> verts ascending by station | nil (refused)
-(defun pfpro:orient (verts / asc desc prev bad)
-  (setq asc T desc T prev (car verts))
-  (foreach v (cdr verts)
-    (if (<= (car v) (car prev)) (setq asc  nil))
-    (if (>= (car v) (car prev)) (setq desc nil))
-    (setq prev v))
+;; (pfpro:same-written a b) -> T when both print alike in the file.
+;;   pfpro:write is 4 decimals, so two values that print alike ARE one value to
+;;   everything that reads the .pro back.  That makes the FILE the arbiter of
+;;   "same station" instead of an invented epsilon.
+(defun pfpro:same-written (a b)
+  (= (rtos a 2 4) (rtos b 2 4)))
+
+;; (pfpro:ptstr p) -> "(1234.500, 789.250)"   drawing coordinates, for refusals.
+(defun pfpro:ptstr (p)
+  (strcat "(" (rtos (car p) 2 3) ", " (rtos (cadr p) 2 3) ")"))
+
+;; (pfpro:orient verts pts) -> verts ascending by station | nil (refused)
+;;   pts is the DRAWN vertex list, index-aligned with verts (map-verts is a
+;;   mapcar), so a refusal can name the offending vertex where the drafter can
+;;   find it.  A station cannot do that alone: the two vertices of a vertical
+;;   segment print the SAME station.
+;;
+;;   Three faults sit at one station and the written precision separates them:
+;;     same station + same elevation -- the two output lines would be identical,
+;;       so the vertex carries nothing.  Collapsed and reported, never refused.
+;;       Left in, its zero gap reads as a STRUCTURE to pfr:groups and PFINVERT.
+;;     same station + different elevation -- a real vertical segment.  Refused:
+;;       a .pro holds one elevation per station.
+;;     a step back smaller than the written precision -- invisible in the file,
+;;       so it is not a backtrack and does not decide direction.  Comparing with
+;;       a bare <= made every such step a fault, and they are unfindable in the
+;;       drawing.
+(defun pfpro:orient (verts pts / vs ps v vp p pp pidx i keep dir d dups dupsta
+                     vbad bad nasc ndesc out)
+  (setq p     (car verts)
+        pp    (car pts)
+        pidx  1
+        keep  (list p)
+        vs    (cdr verts)
+        ps    (cdr pts)
+        i     1
+        dups  0
+        nasc  0
+        ndesc 0)
+  (while (and vs (null vbad))
+    (setq v  (car vs)
+          vp (car ps)
+          i  (1+ i))
+    (cond
+      ((pfpro:same-written (car v) (car p))
+       (if (pfpro:same-written (cdr v) (cdr p))
+         (setq dups   (1+ dups)
+               dupsta (if dupsta dupsta (car v)))
+         (setq vbad (list pidx pp i vp (car v)))))
+      (T
+       (setq d (if (> (car v) (car p)) 1 -1))
+       (if (null dir)
+         (setq dir d)
+         (if (and (/= d dir) (null bad))
+           (setq bad (list pidx (car p) i (car v)))))
+       (if (= d 1) (setq nasc (1+ nasc)) (setq ndesc (1+ ndesc)))
+       (setq keep (cons v keep)
+             p    v
+             pp   vp
+             pidx i)))
+    (setq vs (cdr vs)
+          ps (cdr ps)))
+  (setq out (reverse keep))
   (cond
-    (asc  verts)
-    (desc (reverse verts))
-    (T
-     ;; Name the first offending vertex -- "it backtracks" is not actionable.
-     (setq prev (car verts) bad nil)
-     (foreach v (cdr verts)
-       (if (and (null bad) (<= (car v) (car prev)))
-         (setq bad (list (car prev) (car v))))
-       (setq prev v))
+    (vbad
      (pfpro:refuse
-       (if (equal (car bad) (cadr bad) 1e-6)
-         (strcat "that polyline has two vertices at station "
-                 (pf:fmt-station (car bad))
-                 " -- a vertical segment.  A .pro holds one elevation per "
-                 "station; a structure drop is drawn as the short run between "
-                 "its two vertices, never as a vertical drop.")
-         (strcat "that polyline does not run monotonically along the station "
-                 "axis -- it goes from " (pf:fmt-station (car bad))
-                 " back to " (pf:fmt-station (cadr bad))
-                 ".  Fix the polyline; sorting it here would launder a "
-                 "drafting fault into a plausible .pro."))))))
+       (strcat "vertices " (itoa (nth 0 vbad)) " and " (itoa (nth 2 vbad))
+               " are both at station " (pf:fmt-station (nth 4 vbad))
+               " -- a vertical segment.  They are at "
+               (pfpro:ptstr (nth 1 vbad)) " and " (pfpro:ptstr (nth 3 vbad))
+               ".  A .pro holds one elevation per station.  Draw a structure "
+               "drop as the short run between its two vertices: any gap up to "
+               (rtos *pfi-struct-width-max* 2 0)
+               " ft still reads as ONE structure.")))
+    ((and (> nasc 0) (> ndesc 0))
+     (pfpro:refuse
+       (strcat "that polyline runs back along the station axis: vertex "
+               (itoa (nth 0 bad)) " is at " (pf:fmt-station (nth 1 bad))
+               " and vertex " (itoa (nth 2 bad)) " goes back to "
+               (pf:fmt-station (nth 3 bad))
+               ".  Fix the polyline; sorting it here would launder a drafting "
+               "fault into a plausible .pro.")))
+    ((< (length out) 2)
+     (pfpro:refuse
+       (strcat "every vertex on that polyline is at the same point -- after "
+               "dropping " (itoa dups)
+               " duplicate vertices there is nothing left to write.")))
+    (T
+     (if (> dups 0)
+       (prompt (strcat "\n  Note: collapsed " (itoa dups)
+                       (if (= dups 1)
+                         " duplicate vertex at "
+                         " duplicate vertices, first at ")
+                       (pf:fmt-station dupsta)
+                       " -- a zero station gap would read as a structure.")))
+     (if (= dir -1) (reverse out) out))))
 
 ;; (pfpro:check-range verts clfile) -> T | nil   nil = refused.
 ;;   The one gate that guards against a wrong STA0 on the anchor.  A wrong STA0
@@ -357,7 +441,7 @@
      (prompt (strcat "\n  REFUSED: " (pfa:anchor-title anchor)
                      " has no .cl bound, and the .pro name is derived from it.  "
                      "Bind the centerline in PFSETUP first.")))
-    ((null (setq verts (pfpro:orient (pfpro:map-verts pts xf)))))
+    ((null (setq verts (pfpro:orient (pfpro:map-verts pts xf) pts))))
     ((null (pfpro:check-range verts clfile)))
     (T
      (prompt (strcat "\n  Grid:  " (pfa:anchor-title anchor)

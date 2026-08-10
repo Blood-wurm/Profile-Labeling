@@ -69,10 +69,11 @@
 ;;; revert path to per-type layers) and pf:tin-load/-unload/-z (Version 5.1
 ;;; Track B consumer named).
 
-;; (pf:pro-range pro) -> (s0 s1) | nil
-(defun pf:pro-range (pro / r)
-  (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_sta_range" pro)))
-  (if (and (not (vl-catch-all-error-p r)) (listp r)) r nil))
+;; pf:pro-range RETURNED to pftools-lib 2026-08-06 -- pf:pro-outside-p needs a
+;; station range in the Road API's domain, which the .pro file's own vertex
+;; stations are not.  Quarantining it is what left that gate reaching for the
+;; vertex list, where it dropped legitimate crossings on any line whose .pro
+;; does not start at its .cl's start station.
 
 ;; (pf:remove-nth idx lst) -> lst with element idx dropped
 (defun pf:remove-nth (idx lst / i out)

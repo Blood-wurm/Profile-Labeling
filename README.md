@@ -78,12 +78,16 @@ pfsuite/
 ├── pfxlabel/      pfxlabel.lsp     + README.md      9  C:PFXLABEL
 ├── pfinvert/      pfinvert.lsp     + README.md     10  C:PFINVERT
 ├── pfreport/      pfreport.lsp     + README.md     11  C:PFREPORT
-└── pfpalette/     pfpalette.lsp    + README.md     12  C:PFPALETTE
+├── pf2sew/        pf2sew.lsp       + README.md     12  C:PF2SEW
+├── pfqty/         pfqty.lsp        + README.md     13  C:PFQTY
+└── pfpalette/     pfpalette.lsp    + README.md     14  C:PFPALETTE
 ```
 
 Load order: cfg → lib → draw → anchor → settings → setup → **pro** → label →
-xlabel → invert → report → palette; a file may only depend on files that load
-before it.
+xlabel → invert → report → 2sew → qty → palette; a file may only depend on
+files that load before it. `pf2sew` and `pfqty` both reuse `pfreport`'s gather
+and neither depends on the other, so their order between report and palette is
+free.
 
 **`pfpro` is the only command that WRITES a
 `.pro` — everywhere else in the suite a profile is authored data that is read
@@ -101,6 +105,16 @@ the drawing: it multi-selects registered profiles and writes a Hydraflow
 Storm Sewers `.stm` — a populated hydraulic model, not a plan-view import.
 It has no anchor pick, no undo group and no pass ledger. Details and the CAD
 gates are in [pfreport/README.md](pfreport/README.md).
+
+**`pfqty` (2026-08-04, untested in CAD)** is the third emitter over that same
+gather: a material takeoff written as a `.txt` — pipe LF by type, size and
+material, structure counts by type and size. It is SYSTEM-scoped and read-only
+like `pfreport`, but it builds **no network**: no outfall rule, no ordering, no
+connectivity validation, because a takeoff over disconnected lines is
+legitimate. It reads no rims, which is also why stubs are offered where
+`pfreport` refuses them. Structure type and size resolve attribute-first so the
+report starts reading hard-coded block data the day the blocks carry it.
+Details and the CAD gates are in [pfqty/README.md](pfqty/README.md).
 
 ### Palette (.odcl) structure
 

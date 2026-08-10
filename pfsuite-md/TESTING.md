@@ -40,21 +40,21 @@ accessor; `pf:pro-verts` parses the file).
 
 ## 0. Load
 
-- [ ] 0.1 `(load ".../V5/pftools-load.lsp")` → banner lists **PFSETUP,
+- [x] 0.1 `(load ".../V5/pftools-load.lsp")` → banner lists **PFSETUP,
       PFLABEL (PFL), PFXLABEL (PFX), PFINVERT (PFI), PFLABELSET, PFREMOVE,
       PFINDEX, PFREPORT, PFPALETTE** (PFROOT is retired — project root is
       native `tmpdir$`). No load errors.
-- [ ] 0.2 `*pftools-dir*` inside `pftools-load.lsp` points at THIS V5
+- [x] 0.2 `*pftools-dir*` inside `pftools-load.lsp` points at THIS V5
       folder (it ships hardcoded — fix the path first or nothing loads).
-- [ ] 0.3 Each command name autocompletes / runs from the command line.
-- [ ] 0.4 **Dialog smoke:** every dialog OPENS (a DCL syntax error kills
+- [x] 0.3 Each command name autocompletes / runs from the command line.
+- [x] 0.4 **Dialog smoke:** every dialog OPENS (a DCL syntax error kills
       the whole file — `pfsetup_registry`, `pfsetup_main`, `pf_run`,
       `pfi_run`, `pfxl_run`, `pf_confirm`, `pf_pick`, `pflabel_settings`).
       Help buttons show their text; Esc/Cancel closes clean everywhere.
 
 ## 1. Project root + AUTO registration (PFSETUP first run)
 
-- [ ] 1.1 **Native root (tmpdir$) — CHANGED 2026-07-21, re-verify.** With an
+- [x] 1.1 **Native root (tmpdir$) — CHANGED 2026-07-21, re-verify.** With an
       active Carlson project: `PFSETUP` uses the project folder with NO browse
       — reports `Project data folder: <dir>  (Carlson project)`. **Empirical
       check that gates the whole rewrite:** confirm `get-company-dir`'s
@@ -67,22 +67,22 @@ accessor; `pf:pro-verts` parses the file).
       save/reopen (no persistent root by design).
 - [x] 1.2 AUTO names every PF-NAME profile: each gets `Named <TY> '<NM>'`
       with its `.cl` + INV/TOP note. Count matches the sheet.
-- [ ] 1.3 **Skip cases report loudly, never guess:** a PF-NAME with no
+- [x] 1.3 **Skip cases report loudly, never guess:** a PF-NAME with no
       matching `.cl` → SKIPPED; two `.cl` files matching one name → SKIPPED
       (ambiguous); a `.cl` with no sheet name → NOTE.
 - [ ] 1.4 **Backtick attack:** make one PF-NAME use backticks. Expected
       (bug): silently absent from the register list — confirm, then decide
       if the fix is worth it.
-- [ ] 1.5 The **Refresh button** re-scans: idempotent — nothing re-named,
+- [x] 1.5 The **Refresh button** re-scans: idempotent — nothing re-named,
       no duplicates.
-- [ ] 1.5a **Late .pro binding:** register a line whose `_INV`/`_TOP` .pro
+- [x] 1.5a **Late .pro binding:** register a line whose `_INV`/`_TOP` .pro
       does not exist yet (AUTO reports `-- no .pro pair`). Place one such
       grid, leave another as a stub. Drop both .pro files into the profile
       folder, hit **Refresh**. Expected: `Bound <TY> '<NM>' (anchored) + INV
       <file> + TOP <file>` and the same for `(registered)`, the tail count
       reads `N late .pro binding(s) added`, both show bound in the registry.
       Refresh again → 0 bindings added (idempotent).
-- [ ] 1.5b **Refresh never overwrites:** on an anchored grid, use Edit to bind
+- [x] 1.5b **Refresh never overwrites:** on an anchored grid, use Edit to bind
       an `_INV` .pro whose name does NOT match the convention. Refresh.
       Expected: that binding is untouched, no report line for it; only the
       empty `_TOP` slot fills. Confirm the TIN pair and material survive.
@@ -107,16 +107,16 @@ accessor; `pf:pro-verts` parses the file).
       button, or a DESIGN_* tin on the Exist button → refused at pick
       time with an errtile message (wrong-role files can no longer reach
       OK).
-- [ ] 2.2 Material popup follows the Type popup; last-used material per
+- [x] 2.2 Material popup follows the Type popup; last-used material per
       type sticks across placements in the session.
 - [x] 2.3 Extents picks: **running osnaps on** — pick the corners and check
       the anchor landed where you meant (known weakness; note how bad it
       is). Top-right left/below lower-left → refused.
-- [ ] 2.4 Datum field: prefilled with the session-last value on the second
+- [x] 2.4 Datum field: prefilled with the session-last value on the second
       grid; edit prefills the stored datum.
 - [x] 2.5 Anchored profile: block visible on `PF-ANCHOR` (no-plot), attributes
       LINE/UTIL/STA0/DATUM/HPLOT/VPLOT populated and plausible.
-- [ ] 2.6 **One `U` removes exactly one grid's placement** (not the batch,
+- [x] 2.6 **One `U` removes exactly one grid's placement** (not the batch,
       not the AUTO stubs).
 - [ ] 2.7 Edit mode: `.pro` swap accepted (cheap); the **re-pick extents
       toggle** re-picks (and is greyed on a fresh placement); same-range
@@ -126,7 +126,7 @@ accessor; `pf:pro-verts` parses the file).
 
 ## 3. PFLABEL
 
-- [ ] 3.0 **Pick-first + run dialog:** target is chosen by the `pf_pick` list
+- [x] 3.0 **Pick-first + run dialog:** target is chosen by the `pf_pick` list
       BEFORE the dialog opens (no target popup); the structure list then
       matches the plan (every structure on the primary line, sorted by
       station); Label Selected with nothing selected → errtile; Settings...
@@ -134,7 +134,7 @@ accessor; `pf:pro-verts` parses the file).
       unanchored profile anchors it first (two corner picks) then lists it.
       **Ghost-dropdown check:** the list paints cleanly on open (the
       compute-before-`new_dialog` fix) — no flicker/glitch.
-- [ ] 3.1 Select the junction structure in the list → station rows primary
+- [x] 3.1 Select the junction structure in the list → station rows primary
       first then alphabetical; combined ID alphabetical (`AA-1/BB-2`); const
       row from the rule table (SMH/DMH before MH — label one of each);
       elevation row placeholder; HDWL drops the elevation row.
@@ -145,14 +145,14 @@ accessor; `pf:pro-verts` parses the file).
       merely crosses MUST NOT appear. **Re-run this after §9.5** — it is the
       test most likely to expose a bad saved record, because a wrong line set
       shows up directly in the combined ID.
-- [ ] 3.2 **Stub contribution:** with a secondary line unanchored (stub
+- [x] 3.2 **Stub contribution:** with a secondary line unanchored (stub
       only), the junction ID still includes it.
 - [x] 3.3 Stepped-top grid: labels sit on the top **at each station**, not
       the nominal top. A station past the grid edge (no MJR hit) skips with
       a report.
-- [ ] 3.4 Label All: count matches structures on the line; sorted by
+- [x] 3.4 Label All: count matches structures on the line; sorted by
       station.
-- [ ] 3.5 All re-run: prior pass replaced **by handle** (count reported);
+- [x] 3.5 All re-run: prior pass replaced **by handle** (count reported);
       hand-drawn text on the same layer untouched. List rows flip
       [LABELED] on the next run's dialog (X-proximity to tracked pass
       entities — advisory; verify it doesn't false-mark two structures at
@@ -160,10 +160,10 @@ accessor; `pf:pro-verts` parses the file).
 - [ ] 3.6 CLAYER toggle: draws on current layer; re-run All does NOT erase
       it; pass recorded (run PFXLABEL later and confirm nothing eats it);
       CLAYER output never shows [LABELED] (untracked — by design).
-- [ ] 3.7 Esc at the placement picks of an on-the-fly place-then-label:
+- [x] 3.7 Esc at the placement picks of an on-the-fly place-then-label:
       undo group unwinds, `*error*` restored (next command behaves
       normally).
-- [ ] 3.8 `U` after a full pass reverses everything in one step.
+- [x] 3.8 `U` after a full pass reverses everything in one step.
 
 ## 4. PFXLABEL
 
@@ -182,7 +182,7 @@ accessor; `pf:pro-verts` parses the file).
       dialog, Enter/Esc both mean No; Label Outstanding with everything
       labeled → errtile, dialog stays open. Change Target clears the
       sticky target (rerun offers the registry picker).
-- [ ] 4.4 Skip cases report per crossing and in the pass summary:
+- [x] 4.4 Skip cases report per crossing and in the pass summary:
       unregistered source; source with no `_INV.pro`; station outside the
       `.pro` range.
 - [ ] 4.5 Checksum short-circuit: immediate re-run reports 0 new/updated
@@ -195,7 +195,7 @@ accessor; `pf:pro-verts` parses the file).
 
 ## 5. Copy / drift / integrity attacks
 
-- [ ] 5.1 COPY a grid + its anchor: copy resolves as a COPY (registry
+- [x] 5.1 COPY a grid + its anchor: copy resolves as a COPY (registry
       excludes it; PFLABEL/PFXLABEL won't target it).
 - [ ] 5.2 `PFREMOVE` on the copy → copy-safe purge offer; accepting erases
       ONLY the copied anchor — **the original's labels survive**.
@@ -212,7 +212,7 @@ accessor; `pf:pro-verts` parses the file).
 
 ## 6. PFINVERT (the least-exercised command)
 
-- [ ] 6.1 Record checks: run on an anchor with no `_INV.pro` bound → fatal
+- [x] 6.1 Record checks: run on an anchor with no `_INV.pro` bound → fatal
       with the PFSETUP message, no undo group left open.
 - [ ] 6.2 **Drop manhole:** I.I and I.O match the `.pro`'s authored inverts
       at the structure edges (check against the profile printout). Lower
@@ -319,22 +319,22 @@ which lines were tested and missed, and only a whole-roster stamp can answer
 
 ### 9a. The order matters — do these first
 
-- [ ] 9.1 **Timing baseline, BEFORE anything else.** On the largest real job:
+- [x] 9.1 **Timing baseline, BEFORE anything else.** On the largest real job:
       time `PFLABEL` → Label All, cold (drawing just opened), then again
       without closing. Write both numbers down. Skip this and every later
       "it's faster" claim is unfalsifiable.
-- [ ] 9.2 `PFINDEX` → Enter (Report is the default) on that same untouched
+- [x] 9.2 `PFINDEX` → Enter (Report is the default) on that same untouched
       drawing. Expect **everything under "not indexed"**, 0 current, 0
       stale, and a roster string. Pure read: `DBMOD` must not move.
-- [ ] 9.3 `PFINDEX` → `Build`. Expect a count of structures indexed and
+- [x] 9.3 `PFINDEX` → `Build`. Expect a count of structures indexed and
       nothing skipped. **One `U` must reverse the whole build.**
-- [ ] 9.4 `PFINDEX` → `Report` again → all current, 0 stale, 0 not-indexed.
-- [ ] 9.5 **`PFINDEX` → `Verify`. THIS IS THE ACCEPTANCE GATE.** It computes
+- [x] 9.4 `PFINDEX` → `Report` again → all current, 0 stale, 0 not-indexed.
+- [x] 9.5 **`PFINDEX` → `Verify`. THIS IS THE ACCEPTANCE GATE.** It computes
       membership from the saved record AND the long way, then names every
       disagreement. **Empty output is the only passing result.** Anything
       else: stop, set `*pf-index-on*` nil in `pftools-cfg.lsp`, and report
       the lines it printed. Do not proceed to 9.6.
-- [ ] 9.6 Re-time `PFLABEL` Label All cold against 9.1. Labels must be
+- [x] 9.6 Re-time `PFLABEL` Label All cold against 9.1. Labels must be
       **identical**; the time should not be. Diff the two runs' command-line
       output if anything looks off.
 
@@ -385,12 +385,12 @@ and a re-run of `PFLABEL` must produce the same labels as before the change.
 
 ### 9d. Write-free contract (the palette can never write)
 
-- [ ] 9.17 `PFPDBMOD` to mark → open the palette, click through every line
+- [x] 9.17 `PFPDBMOD` to mark → open the palette, click through every line
       in the tree (which now reads the new "Checks" row via
       `pfa:status-roll`) → `PFPDBMOD` again → **UNCHANGED**. `pfa:lines-at`
       and `pfp:status-cell` are new on palette read paths; both claim
       `create` nil, and this is the only thing that proves it.
-- [ ] 9.18 Same with a drawing that has **no** `PFTOOLS` dictionary at all —
+- [x] 9.18 Same with a drawing that has **no** `PFTOOLS` dictionary at all —
       opening the palette must not create one.
 
 ## 10. Ledger rename + the STATUS split
@@ -429,45 +429,55 @@ and a re-run of `PFLABEL` must produce the same labels as before the change.
 - [ ] 11.1 `PFINVERT` → Label All, and `PFINVERT` → Label Selected. Output
       must be **identical to before** — this change removed two redundant
       membership scans, nothing else.
-- [ ] 11.2 The **leftmost structure's** invert stack still shifts right,
+- [x] 11.2 The **leftmost structure's** invert stack still shifts right,
       clear of the elevation axis. That shift depends on
       `pfi:line-min-sta`, which now reads the ticket's `'pend` instead of
       re-walking every inlet. If the shift is missing or lands on the wrong
       structure, `'pend` is not reaching the context.
-- [ ] 11.3 Time both against a pre-change run if you have one.
+- [x] 11.3 Time both against a pre-change run if you have one.
 
 ## 12. PF-ANNO — the global label layer (2026-07-29, NEVER run in CAD)
 
 In a drawing that has **never** carried a PF-ANNO layer:
 
-- [ ] 12.1 First label pass creates `PF-ANNO`: colour **green, index 80**,
+- [x] 12.1 First label pass creates `PF-ANNO`: colour **green, index 80**,
       **plot flag OFF**. Check the layer properties, not just the colour on
       screen. Console says `Created layer 'PF-ANNO' (no-plot).` once.
-- [ ] 12.2 `PFLABEL` → All: every row AND the station line land on PF-ANNO.
+- [x] 12.2 `PFLABEL` → All: every row AND the station line land on PF-ANNO.
       Nothing new appears on `STORM-TEXT_P` or any other `<TYPE>-TEXT_P`.
-- [ ] 12.3 `PFINVERT` → All: invert stacks on PF-ANNO, **and the lateral pipe
+- [x] 12.3 `PFINVERT` → All: invert stacks on PF-ANNO, **and the lateral pipe
       blocks too** — the blocks are the easiest thing to miss, they used to
       go to `<TYPE>_P`.
-- [ ] 12.4 `PFXLABEL` → Label Outstanding: station TEXT, crossing pipe block
-      and its size/material rows on PF-ANNO — but the **station LINE is still
-      on `PF-XING`**. This split is the whole risk of the change.
+- [ ] 12.4 `PFXLABEL` → Label Outstanding: the whole pass lands on PF-ANNO —
+      station TEXT, crossing pipe block, size/material rows, **and the station
+      LINE** (moved off `PF-XING` 2026-08-06). Nothing new on `PF-XING`; on a
+      fresh drawing that layer should not be created at all.
 - [ ] 12.5 **Recon still works** (this is the one that matters): re-run
       `PFXLABEL` on the same target. Already-labeled crossings must read
-      labeled, not outstanding. If everything reads outstanding, the station
-      line moved off PF-XING and `pfa:station-line-tops` has gone blind.
-- [ ] 12.6 Plot preview / `PLOT`: no label text appears. That is intended —
+      labeled, not outstanding. If everything reads outstanding,
+      `pfa:station-line-tops` is scanning the wrong layer.
+- [ ] 12.6 **Structure line must not be mistaken for a crossing** — the risk
+      the layer split used to cover. Label a structure with `PFLABEL`, then run
+      `PFXLABEL` on a crossing at the SAME station. The crossing must read
+      outstanding, not labeled: recon now separates the two by top-vertex
+      height (grid top vs text-stack top), not by layer. Then label the
+      crossing and confirm both re-read correctly.
+- [ ] 12.7 Erase the structure's label stack by hand, leaving its station line,
+      and re-run `PFXLABEL`. The crossing must still read honestly — a stray
+      structure line on PF-ANNO is now inside recon's scan.
+- [ ] 12.8 Plot preview / `PLOT`: no label text appears. That is intended —
       PF-ANNO is no-plot by design. Confirm it is what you want on a real
       sheet before this ships to anyone else.
-- [ ] 12.7 Settings → "Use current layer" ON: output goes to CLAYER, not
+- [ ] 12.9 Settings → "Use current layer" ON: output goes to CLAYER, not
       PF-ANNO, and the pass records as `LABEL-CLAYER` / `INVERT-CLAYER` with
       no handles (unchanged behaviour).
-- [ ] 12.8 `PFLABEL` → All a SECOND time: the previous pass is erased by
+- [ ] 12.10 `PFLABEL` → All a SECOND time: the previous pass is erased by
       handle and redrawn. Then repeat in a drawing labeled BEFORE this change
       — the old `<TYPE>-TEXT_P` entities must still be erased by handle and
       come back on PF-ANNO.
-- [ ] 12.9 `PFREMOVE`: clears passes regardless of which layer they landed
+- [ ] 12.11 `PFREMOVE`: clears passes regardless of which layer they landed
       on (erase-by-handle, untouched by this change).
-- [ ] 12.10 In a drawing that ALREADY has a PF-ANNO layer in some other
+- [ ] 12.12 In a drawing that ALREADY has a PF-ANNO layer in some other
       colour / plotting: it is **left alone** (`pfd:ensure-layer-c` is
       create-only). Labels still go there. Expected, not a bug.
 

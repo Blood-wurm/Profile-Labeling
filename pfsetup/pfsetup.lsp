@@ -36,14 +36,17 @@
 (defun pfs:file-display (f)
   (strcat (vl-filename-base f) (vl-filename-extension f)))
 
-;; (pfs:mat-list type) -> materials for this type | nil
-(defun pfs:mat-list (type) (cdr (assoc (strcase type) *pf-materials*)))
+;; Materials come from pf:mat-list (pftools-lib) as of 2026-08-04.  The old
+;; pfs:mat-list read *pf-materials* as a per-type alist; the table is now one
+;; row per material and the type filter lives with it.  Deliberately NOT kept
+;; as a wrapper -- pfs:mat-list and pf:mat-list differ by one character.
 
-;; (pfs:fill-materials type sel) -> nil
+;; (pfs:fill-materials ty sel) -> nil
 ;;   Repopulate the Material popup for TYPE; select SEL (name) or the default
 ;;   (first entry).  Empty list leaves the popup empty (label falls back).
-(defun pfs:fill-materials (type sel / mats idx)
-  (setq mats (pfs:mat-list type))
+;;   ty, NOT type: `type' is a subr (2026-08-06).
+(defun pfs:fill-materials (ty sel / mats idx)
+  (setq mats (pf:mat-list ty))
   (start_list "s_mat")
   (foreach m mats (add_list m))
   (end_list)
@@ -212,7 +215,7 @@
   ;; and an Architectural/Fractional drawing rejects plain decimals.  Every
   ;; other numeric read in the suite pins mode 2 -- these three now match.
   (setq ty    (nth (atoi (get_tile "s_type")) *pf-types*)
-        mlist (pfs:mat-list ty)
+        mlist (pf:mat-list ty)
         mat   (if mlist (nth (atoi (get_tile "s_mat")) mlist) "")
         res   (list (cons 'type ty)
                     (cons 'name (strcase (pf:trim (get_tile "s_name"))))
@@ -419,8 +422,10 @@
       (setq i (1+ i))))
   (reverse out))
 
-;; (pfs:cl-lookup dir type name) -> path | 'AMBIG | nil
-(defun pfs:cl-lookup (dir type name / files f base pos ty nm matches)
+;; (pfs:cl-lookup dir want-ty name) -> path | 'AMBIG | nil
+;;   want-ty, NOT type: `type' is a subr, and this one reaches pfsettings, which
+;;   calls it (2026-08-06).
+(defun pfs:cl-lookup (dir want-ty name / files f base pos ty nm matches)
   (setq files (vl-directory-files dir "*.cl" 1) matches '())
   (foreach f files
     (setq base (vl-filename-base f)
@@ -429,15 +434,17 @@
       (progn
         (setq ty (strcase (substr base 1 pos))
               nm (strcase (substr base (+ pos 2))))
-        (if (and (= ty (strcase type)) (= nm (strcase name)))
+        (if (and (= ty (strcase want-ty)) (= nm (strcase name)))
           (setq matches (cons (strcat dir f) matches))))))
   (cond ((null matches) nil)
         ((cdr matches) 'AMBIG)
         (T (car matches))))
 
-;; (pfs:pro-lookup dir type name role) -> path | nil   (exact, case-insens)
-(defun pfs:pro-lookup (dir type name role / want found f)
-  (setq want  (strcase (strcat type "_" name "_" role ".PRO"))
+;; (pfs:pro-lookup dir ty name role) -> path | nil   (exact, case-insens)
+;;   ty, NOT type: `type' is a subr, and this one reaches pfsettings, which
+;;   calls it (2026-08-06).
+(defun pfs:pro-lookup (dir ty name role / want found f)
+  (setq want  (strcase (strcat ty "_" name "_" role ".PRO"))
         found nil)
   (foreach f (vl-directory-files dir "*.pro" 1)
     (if (and (null found) (= (strcase f) want))

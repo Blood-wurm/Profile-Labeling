@@ -199,7 +199,7 @@
     (T
      (setq ty  (pf:type-of clfile)
            nm  (pf:name-of clfile)
-           sf3 (pfxl:src-files ty nm))
+           sf3 (pfa:src-files ty nm))
      (cond
        ((null sf3)       (cons nil "not registered"))
        ((null (car sf3)) (cons nil "no _INV .pro bound"))
@@ -504,8 +504,11 @@
 ;;   looks like a single half-empty label.  Merged, the node draws once and its
 ;;   blocks' memberships are unioned by pfi:node-hits, so every line at the node
 ;;   gets its row exactly once.
-;;   Entries keep pfa:pending's (sta ename blkname) shape with the mates
-;;   appended, so the leader is still (cadr) and the station still (car).
+;;   Entries keep pfa:pending's (sta ename blkname) prefix with the MATES at
+;;   position 3, so the leader is still (cadr) and the station still (car).
+;;   Position 3 is the row's HITS on the way in (pfa:pending) and the mates on
+;;   the way out -- this rebuilds the list rather than appending, so the two
+;;   never coexist, and pfi:process-structure only ever sees the mates.
 (defun pfi:merge-nodes (pend / out cur p)
   (setq out '())
   (foreach p (vl-sort pend '(lambda (a b) (< (car a) (car b))))

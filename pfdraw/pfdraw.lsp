@@ -116,21 +116,25 @@
              (cons 41 1.0) (cons 42 yscale) (cons 43 1.0)
              (cons 50 0.0))))))
 
-;; (pfd:label-pipe x y file size mat sf ht style) -> list of enames
+;; (pfd:label-pipe x ycen file size mat sf ht style) -> list of enames
 ;;   Row 1 (lower) = NN" MATERIAL, row 2 (upper) = the standard line label.
+;;   ycen is the PIPE CENTRE, not the invert: the two rows straddle it by half
+;;   the row gap, so their midpoint lands on the centre of the block.  The gap
+;;   is plotted units (sf only) while the block grows with the vertical
+;;   exaggeration -- a large pipe at a high vscale swallows both rows.
 ;;   mat is the SOURCE profile's material (resolved by the caller; may be "").
-(defun pfd:label-pipe (x y file size mat sf ht style / la dx dy gap e ents)
+(defun pfd:label-pipe (x ycen file size mat sf ht style / la dx half e ents)
   (setq la   (pfd:anno-layer)
         dx   (* *pfx-text-dx* sf)
-        dy   (* *pfx-row1-dy* sf)
-        gap  (* *pfx-row-gap* sf)
+        half (/ (* *pfx-row-gap* sf) 2.0)
         ents '())
   (if size
     (progn
-      (setq e (pfd:text (list (+ x dx) (+ y dy) 0.0)
-                        (pf:size-rowtext size mat) la style ht 0.0 'ML))
+      (setq e (pfd:text (list (+ x dx) (- ycen half) 0.0)
+                        (pf:size-rowtext size mat (pf:type-of file))
+                        la style ht 0.0 'ML))
       (if e (setq ents (cons e ents)))))
-  (setq e (pfd:text (list (+ x dx) (+ y dy gap) 0.0)
+  (setq e (pfd:text (list (+ x dx) (+ ycen half) 0.0)
                     (pf:std-label file) la style ht 0.0 'ML))
   (if e (setq ents (cons e ents)))
   ents)

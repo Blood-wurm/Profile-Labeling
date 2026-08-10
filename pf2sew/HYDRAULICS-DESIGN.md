@@ -278,9 +278,12 @@ Two guardrails, both load-bearing:
   `("CBI" "MH")` ahead of `("MH")`. A user who adds or reorders a row silently
   mislabels every CBI in the drawing, with no error. Edit the four text columns
   of existing rows; tokens and order stay firm-owned in `pftools-cfg.lsp`.
-- **A material added in the editor that is absent from `*pfr-nvalues*`**
-  silently takes Manning's n = 0.013 in the Hydraflow report. Surface the
-  n-value as a column in the same editor, or warn on add.
+- **A material added in the editor gets whatever its row says.** This used to
+  read "absent from `*pfr-nvalues*` ⇒ silently n = 0.013": that parallel list
+  is gone as of 2026-08-04 and n is a column on the material row itself, so
+  the editor cannot add a material without one. What it CAN still do is leave
+  `DIMS` empty, which is not silent — clearance reports that pipe as
+  *unknown* rather than passing it.
 
 Persistence: the settings file is flat `key=value`, and `pfset:read-settings`
 splits on the **first** `=` only, so a rule row serialises to one line with no

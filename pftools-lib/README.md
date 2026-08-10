@@ -37,7 +37,37 @@ Functions other files call (writers marked; everything else is a pure read).
   the call — see the corridor pre-filter in `pf:lines-at-point`.
 - `pf:pro-z pro sta` / `pf:pro-verts pro` — authored profile reads
   (pro-verts parses the .pro file, the suite's ONE file read; cached).
-- `pf:pipe-at inv-pro top-pro sta` → `(inv-elev . nominal-size)` | nil.
+- `pf:pro-z-verts verts sta` → elevation | nil — the same station→elevation
+  question answered off a vertex list already in hand, linear between
+  bracketing vertices, nil outside range. **Prefer it whenever one profile is
+  sampled at many stations:** `pf:pro-z` is a Road-API call each time, and a
+  missing `.pro` makes Carlson print `unable to open file` from C++ per call,
+  where `vl-catch-all-apply` cannot reach it. `pf:pro-verts` is silent on a
+  missing file, so read once and sample locally. Linear is exact for a pipe
+  profile (`.pro` column 3, vertical-curve length, is always 0.0 on a pipe
+  run); a profile with real curves must still go through `pf:pro-z`.
+- `pf:pro-range pro` → `(s0 s1)` | nil — the profile's station range from
+  `profile_sta_range`, cached on path+checksum. A missing file returns nil
+  **without calling the API**, so it never triggers Carlson's uncatchable C++
+  `unable to open file` pair. Un-quarantined from `_attic` 2026-08-06.
+- `pf:pro-outside-p pro sta` → T | nil — T **only** when the range reads AND
+  `sta` falls outside it: "there is authored profile here and the pipe does not
+  reach this station". An unbound, missing or unreadable `.pro` answers nil,
+  because unknown must not read as absent. Exists because `profile_z`
+  **extends the end tangent instead of refusing** — that is how a crossing past
+  the end of a pipe run used to get a plausible interpolated invert.
+  - **It uses `pf:pro-range`, not the vertex list.** It used the vertices for
+    half a day and that was a real defect: **`.pro` stationing need not match
+    its `.cl`'s** — a profile authored from 0+00 along its own run belongs to a
+    line starting at 5+00 — so raw vertex stations read legitimate crossings
+    near either end as outside. `pf:pro-verts` only *warns* about that domain
+    gap; the API resolves it. There is deliberately **no vertex fallback**: a
+    refused call means the range is unknown in the domain that matters, and
+    unknown keeps the crossing.
+- `pf:pipe-at inv-pro top-pro sta` → `(inv-elev . nominal-size)` | nil — nil
+  when `sta` is outside EITHER `.pro`'s range (2026-08-06), so the profile is
+  what says where the pipe exists, for every caller (pfxlabel, pfreport, pfqty,
+  pfinvert), not just crossings.
 - `pf:cl-geom clfile write-p` → `(range . verts)` | nil — THE cached .cl
   seam. **write-p is the read/write contract:** gather paths pass nil (a
   cache miss re-reads, never files); only PFSETUP registration and
@@ -100,6 +130,24 @@ single source for GEOM/TWIN keys and pair dedup), `pf:dedupe-pairs`,
 naming convention), `pf:std-label`, `pf:cross-desc`, `pf:nearest-size`,
 `pf:size-blockname`, `pf:size-rowtext`.
 
+**Materials (§7).** `*pf-materials*` is one row per material — `(KEY N DIMS
+TYPES)` — and these are its only readers. Four consumers went through three
+lists that had to agree by hand until 2026-08-04; they now go through one.
+
+- `pf:mat-for mat` → row | nil — exact key, then the leading token, so
+  `"RCP III"` resolves to the `RCP` row. **That fallback is the no-migration
+  guarantee:** anchors holding a bare `"RCP"` in FILES code 5 keep resolving
+  after class-bearing keys go on the sheet.
+- `pf:mat-n mat` → Manning's n, `*pf-nvalue-default*` when unknown. Replaces
+  `pfr:nvalue` \ `*pfr-nvalues*`, which both exports called separately.
+- `pf:mat-od mat size` / `pf:mat-wall mat size` → inches | **nil**, and nil
+  means NOT ON RECORD. The DIMS column is deliberately unpopulated until the
+  firm's material list lands. A caller that reads nil as zero or as a pass
+  defeats the point — outside-to-outside clearance must report *unknown*.
+- `pf:mat-list type` → the keys offered for a utility type, rank 1 first, so
+  the head of the list is that type's default. PFSETUP's dropdown.
+- Row accessors: `pf:mat-key` / `pf:mat-n-of` / `pf:mat-dims` / `pf:mat-types`.
+
 `pf:sym-layer` / `pf:text-layer` / `pf:align-layer` are **RETIRED** (2026-07-29)
 and have no callers: label output no longer derives a layer from the utility
 type, it goes to `PF-ANNO` via `pfd:anno-layer`. They are kept, with
@@ -113,22 +161,50 @@ it — both are dead in practice.
 `pf:fmt-station`, `pf:combine-id`, `pf:build-label-rows`, `pf:text-length`,
 `pf:strip-trailing-eq`.
 
-**Crossing geometry (§11):** `pf:poly-x`, `pf:refine-x`, `pf:sta-at`,
-`pf:sta-at-end-p`, `pf:shared-structure-p`.
+**Crossing geometry (§11):** `pf:poly-x-all`, `pf:poly-x`, `pf:pt-near-any`,
+`pf:refine-x`, `pf:sta-at`, `pf:sta-at-end-p`, `pf:shared-structure-p`.
+
+- `pf:poly-x-all vertsA vertsB` → `((x y) …)` in A's walk order — **every**
+  intersection. **Discovery must use this one.** `pf:poly-x` returns the first
+  hit and is now just its `car`, kept for `pf:refine-x`, which re-samples a ±1
+  step window around a hit already found.
+  - **Why it matters:** two lines crossing twice is ordinary, and one hit per
+    pair capped every target at one crossing per other line. It was also
+    direction-dependent — the outer walk is the *target's* vertices, so each
+    line's list showed a different one of the two and each looked like it was
+    missing a crossing the other had. Found 2026-08-06 on a storm/water pair.
+  - Hits within `*pfx-sample-step*` (2.0 ft) of one already kept collapse:
+    `inters` fires on both segment pairs at a shared vertex, and a shallow
+    crossing on sampled geometry registers on several. Two genuine crossings
+    that close do not exist.
+  - **No early exit**, unavoidably. A pair that never crosses already walked the
+    whole product and that is the common case, so only crossing pairs pay.
 
 - `pf:shared-structure-p trng tsta srng ssta` → T when a hit sits within
   `*pfx-terminus-tol*` of a terminus of **either** alignment — a junction
   manhole or a branch tying into a main, not a pipe crossing. `pf:poly-x` is a
   bounded `inters` test and cannot tell the two apart: endpoints that touch lie
   on both segments. **Either, not both** — an end-to-end junction puts both
-  lines at a terminus, but a tee puts only the branch there. `pfa:xing-scan` is
-  the only caller and it reports its skips by name rather than dropping them,
-  which is what makes the "either" side of the trade safe.
+  lines at a terminus, but a tee puts only the branch there. Callers are
+  `pfa:xing-scan` and `pfa:xing-sweep-shared`, and both report their skips by
+  name rather than dropping them, which is what makes the "either" side of the
+  trade safe.
+  - **It is the FIRST of three tests, not the filter.** It reasons about where
+    the centerlines stop, so a branch drawn a few feet past the main and two
+    mains meeting through a junction box both get past it at any tolerance.
+    `pfa:struct-shared-p` (pfanchor) is the broader one; this stays because it
+    is free and still catches the tie-in with no structure block drawn.
+    `pf:pro-outside-p` sits between them and answers a different question —
+    not "is this joint shared" but "is there a pipe here at all".
 
 **Twin matching (§12):** `pf:cl-endpoints`, `pf:cl-twin-handle`,
 `pf:twin-verts` (LIVE read via handle — never cached stale).
 
 **Sheet reads (§13):** `pf:parse-sheet-name`, `pf:sheet-type`,
+`pf:type-keyword` (token → printed words; `FORCEMAIN` → `FORCE MAIN`. Both
+sheet reads go through it, and `pf:sheet-type` takes the LONGEST matching
+keyword, never the first in `*pf-types*` — `PROPOSED SANITARY FORCE MAIN 'A'`
+contains both keywords and first-hit order would call it sanitary),
 `pf:top-lines` (ONE scan per pass) + `pf:top-at` (the top-of-grid probe:
 highest PF-GRID-MJR hit — MAX, never min).
 

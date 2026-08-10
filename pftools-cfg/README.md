@@ -8,10 +8,31 @@
 
 EVERY tunable in the suite lives here and nowhere else — Carlson API entry
 points, membership tolerances, text/label geometry scalars, the structure
-label rule table, naming conventions, per-type materials/layers/templates,
-crossing rendering constants, PFINVERT geometry, anchor/ledger names, grid
-layers, and the settings-file/NOD names. Meant to be edited in a text
-editor; no code, only `setq` constants.
+label rule table, naming conventions, the material table, per-type
+layers/templates, crossing rendering constants, PFINVERT geometry,
+anchor/ledger names, grid layers, and the settings-file/NOD names. Meant to
+be edited in a text editor; no code, only `setq` constants.
+
+### `*pf-materials*` — one row per material, 2026-08-04
+
+`(KEY N DIMS TYPES)`, read only through `pf:mat-*` in pftools-lib.
+
+- **KEY is the string that prints on the sheet** (`NN" <KEY>`) *and* the
+  lookup key — there is no separate display name. Class-bearing keys
+  (`"RCP III"`) are the intended end state; the class is drafting-visible by
+  decision, so it belongs in the key rather than being mapped at export.
+- **N absorbed `*pfr-nvalues*`**, which was a parallel list keyed on the same
+  materials and had already drifted — it carried `CMP`, which the old
+  per-type material lists could not produce. `CMP` survives here with no
+  TYPES: recognized for a legacy record, offered in no dropdown.
+- **DIMS is `((nominal OD wall) …)` in inches and is UNPOPULATED.** It cannot
+  be a formula — nominal is not the OD, and for the OD-based materials not
+  the ID either, so it is manufacturer data per class. `nil` reads as
+  *unknown*, never as a pass. Populating a row is what switches
+  outside-to-outside clearance on for that material.
+- **TYPES is `((TYPE rank) …)`**, carrying both which types offer a material
+  and the dropdown order. Rank 1 is that type's default — the contract the
+  old per-type lists held by position.
 
 Do not confuse this with pfsettings:
 
@@ -30,7 +51,13 @@ None — this file defines no functions, only `*pf-*` / `*pfx-*` / `*pfi-*` /
 - `*pf-rule-table*` — structure label rules, ORDERED, FIRST MATCH WINS
   (compounds before singles, SMH/DMH before MH). Order is load-bearing.
 - `*pf-types*` / `*pf-pro-roles*` / `*pf-tin-design-prefix*` — the naming
-  convention (identity keys).
+  convention (identity keys). `STORM` / `SANITARY` / `WATER` / `FORCEMAIN` /
+  `GAS` / `ELECTRIC` as of 2026-08-06.
+- `*pf-type-keywords*` — token → the words that PRINT, for the types where
+  those differ (`FORCEMAIN` → `FORCE MAIN`). The token is a `.cl` filename
+  prefix and cannot hold a space; the sheet text can. `pf:sheet-type` reads a
+  line's type back off PF-NAME through this table, so a type that needs a row
+  and lacks one is invisible to PFSETUP's AUTO scan, with no warning.
 - `*pfa-*` — anchor block, ledger dictionary, schema version, tolerances.
 - `*pfset-std-subfolders*` / `*pfset-std-search-depth*` — firm-standard
   project subfolder routing.

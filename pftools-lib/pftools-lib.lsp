@@ -80,7 +80,37 @@
   (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_z" pro sta)))
   (if (and (not (vl-catch-all-error-p r)) (numberp r)) r nil))
 
-;; pf:pro-range quarantined to _attic 2026-08-01 (no caller).
+;; (pf:pro-range pro) -> (s0 s1) | nil
+;;   WHERE THE PIPE EXISTS, in the SAME station domain pf:pro-z answers in --
+;;   which the .pro FILE's own vertex stations are NOT.  A profile is routinely
+;;   authored from 0+00 along its own run while its .cl starts at 5+00, so
+;;   comparing a .cl station against raw vertex stations reads real crossings
+;;   near the ends as "outside".  pf:pro-verts knows this and only warns
+;;   (station-domain mismatch); the API is the one that resolves it.
+;;   Un-quarantined from _attic 2026-08-06 for pf:pro-outside-p.
+;;   Cached on path+checksum: one API call per profile, and a missing file
+;;   never reaches the API at all -- Carlson prints an uncatchable C++
+;;   "unable to open file" pair per call, below where vl-catch-all-apply sees.
+(setq *pf-prorange-cache* '())   ; (path checksum range)*
+
+(defun pf:pro-range (pro / cur cell r)
+  (setq cur (pf:checksum-file pro))
+  (cond
+    ((null cur) nil)                                   ; unreadable/missing
+    ((and (setq cell (assoc pro *pf-prorange-cache*))
+          (= (cadr cell) cur))
+     (caddr cell))                                     ; HIT -- no API call
+    (T
+     (setq r (vl-catch-all-apply *pf-road-fn* (list "profile_sta_range" pro)))
+     (if (not (and (not (vl-catch-all-error-p r))
+                   (listp r) (numberp (car r)) (numberp (cadr r))))
+       (setq r nil))
+     (if r
+       (setq *pf-prorange-cache*
+             (cons (list pro cur r)
+                   (vl-remove-if '(lambda (c) (= (car c) pro))
+                                 *pf-prorange-cache*))))
+     r)))
 
 ;; (pf:pro-verts pro) -> ((sta . elev) ...) sorted by sta | nil
 ;;   Reads the .pro FILE directly for its EXACT vertices -- the one file read in
@@ -131,16 +161,68 @@
        (prompt (strcat "\n  Warning: no vertices parsed from " pro ".")))
      verts)))
 
+;; (pf:pro-z-verts verts sta) -> elevation | nil
+;;   Station -> elevation over a pf:pro-verts list, so a caller holding the
+;;   vertex list samples many stations without one Road-API call each.  nil
+;;   outside the profile's station range.  Linear between bracketing vertices:
+;;   column 3 of a .pro is vertical-curve length and is always 0.0 on a pipe run
+;;   (pfpro SECTION 5), the same straight-segment reading pfi:invert-bracket
+;;   already takes.  A profile carrying real curves must go through pf:pro-z.
+(defun pf:pro-z-verts (verts sta / prev hit)
+  (if (and verts sta (numberp sta)
+           (>= sta (car (car verts)))
+           (<= sta (car (last verts))))
+    (progn
+      (setq prev (car verts))
+      (foreach v verts
+        (cond
+          (hit)                                    ; found -- stop walking
+          ((>= (car v) sta)
+           (setq hit (if (equal (car v) (car prev) 1e-9)
+                       (cdr v)
+                       (+ (cdr prev)
+                          (* (- (cdr v) (cdr prev))
+                             (/ (- sta (car prev))
+                                (- (car v) (car prev))))))))
+          (T (setq prev v))))
+      hit)))
+
+;; (pf:pro-outside-p pro sta) -> T | nil
+;;   T ONLY when the profile's station range READS and sta falls outside it:
+;;   "there is authored profile here, and the pipe does not reach this station".
+;;   An unbound, missing or unreadable .pro answers nil -- unknown must not read
+;;   as absent, or one bad path silently deletes real crossings.
+;;   The Road API's profile_z extends the end tangent rather than refusing, so
+;;   without this gate a crossing past the end of a pipe run gets an invert
+;;   interpolated off a pipe that is not there.
+;;   RANGE COMES FROM pf:pro-range, NOT THE VERTEX LIST.  It was the vertices
+;;   for half a day (2026-08-06) and that was wrong: .pro stationing need not
+;;   match the .cl's, and where it does not, a legitimate crossing near either
+;;   end tests as outside and vanishes -- which is how the bug was found, a
+;;   storm/water crossing showing on one line's list and not the other's.
+;;   NO VERTEX FALLBACK, deliberately: a refused API call means the range is
+;;   unknown in the domain that matters, and guessing it from the file is the
+;;   defect this comment exists to prevent.  Unknown keeps the crossing.
+(defun pf:pro-outside-p (pro sta / rng)
+  (if (and pro sta (numberp sta) (setq rng (pf:pro-range pro)))
+    (if (or (< sta (car rng))
+            (> sta (cadr rng)))
+      T)))
+
 ;; (pf:pipe-at inv-pro top-pro sta) -> (inv-elev . nominal-size) | nil
 ;;   inv = invert (flowline) elev; size = nearest nominal to (top-inv) x 12.
 ;;   Missing/failed TOP leaves size nil (placeholder handled downstream);
 ;;   a missing/failed INV is fatal to the crossing (nil).
+;;   OUT OF RANGE IS ALSO nil (pf:pro-outside-p) -- the profile is what says
+;;   where the pipe exists, and profile_z answers past its own last vertex.
 (defun pf:pipe-at (inv-pro top-pro sta / inv top)
-  (setq inv (if inv-pro (pf:pro-z inv-pro sta)))
+  (setq inv (if (and inv-pro (not (pf:pro-outside-p inv-pro sta)))
+              (pf:pro-z inv-pro sta)))
   (if (null inv)
     nil
     (progn
-      (setq top (if top-pro (pf:pro-z top-pro sta)))
+      (setq top (if (and top-pro (not (pf:pro-outside-p top-pro sta)))
+                  (pf:pro-z top-pro sta)))
       (cons inv
             (if (and top (> top inv))
               (pf:nearest-size (* (- top inv) 12.0))
@@ -855,9 +937,82 @@
 (defun pf:size-blockname (n)
   (strcat *pfx-block-prefix* (if (< n 10) "0" "") (itoa n)))
 
-;; (pf:size-rowtext n mat) -> "NN\" MATERIAL"  (blank/nil material -> PIPE)
-(defun pf:size-rowtext (n mat)
-  (strcat (itoa n) "\" " (if (and mat (/= mat "")) (strcase mat) "PIPE")))
+;; (pf:size-rowtext n mat ty) -> "NN\" MATERIAL"  (blank/nil material -> PIPE)
+;;   A *pfx-size-suffix* row for TY overrides mat outright.
+(defun pf:size-rowtext (n mat ty / cell)
+  (strcat (itoa n) "\" "
+          (cond ((setq cell (assoc (strcase (if ty ty "")) *pfx-size-suffix*))
+                 (cdr cell))
+                ((and mat (/= mat "")) (strcase mat))
+                (T "PIPE"))))
+
+
+;;; ---- Materials  (table lives in pftools-cfg.lsp) -------------------------
+;;; One row per material: (KEY N DIMS TYPES).  Four consumers read it -- the
+;;; crossing label, PFSETUP's dropdown, the n-value in both exports, and the
+;;; OD/wall that outside-to-outside clearance needs.
+
+(defun pf:mat-key   (r) (nth 0 r))
+(defun pf:mat-n-of  (r) (nth 1 r))
+(defun pf:mat-dims  (r) (nth 2 r))
+(defun pf:mat-types (r) (nth 3 r))
+
+;; (pf:mat-for mat) -> a *pf-materials* row | nil
+;;   Exact key first, then the leading token: "RCP III" falls back to the RCP
+;;   row.  That fallback is what lets class-bearing keys onto the sheet without
+;;   migrating anchors already holding a bare "RCP" in FILES code 5.
+(defun pf:mat-for (mat / up i found)
+  (if (and mat (/= mat ""))
+    (progn
+      (setq up    (strcase mat)
+            found (assoc up *pf-materials*))
+      (if (null found)
+        (if (setq i (vl-string-search " " up))
+          (setq found (assoc (substr up 1 i) *pf-materials*))))
+      found)))
+
+;; (pf:mat-n mat) -> Manning's n; the default when the material matches no row
+(defun pf:mat-n (mat / r)
+  (if (setq r (pf:mat-for mat)) (pf:mat-n-of r) *pf-nvalue-default*))
+
+;; (pf:mat-dim mat size) -> (nominal OD wall) | nil    INCHES
+;;   nil is a REAL ANSWER meaning "not on record", not a zero and not a pass:
+;;   the DIMS column is unpopulated until the firm's material list lands, and a
+;;   caller that reads nil as compliant is the failure mode this whole seam
+;;   exists to avoid.
+(defun pf:mat-dim (mat size / r)
+  (if (and size (setq r (pf:mat-for mat)) (pf:mat-dims r))
+    (assoc size (pf:mat-dims r))))
+
+;; (pf:mat-od mat size) -> outside diameter, inches | nil
+(defun pf:mat-od (mat size / d)
+  (if (setq d (pf:mat-dim mat size)) (nth 1 d)))
+
+;; (pf:mat-wall mat size) -> wall thickness, inches | nil
+(defun pf:mat-wall (mat size / d)
+  (if (setq d (pf:mat-dim mat size)) (nth 2 d)))
+
+;; (pf:mat-list ty) -> the material KEYS offered for TYPE, in dropdown order
+;;   Rank 1 first, so the head of the list is that type's default -- the same
+;;   contract the old per-type lists had by position.
+;;   ty, NOT type: `type' is a subr (2026-08-06).
+(defun pf:mat-list (ty / up cell out res best)
+  (setq up (strcase ty) out '())
+  (foreach r *pf-materials*
+    (if (setq cell (assoc up (pf:mat-types r)))
+      (setq out (cons (cons (cadr cell) (pf:mat-key r)) out))))
+  ;; Selection sort by rank, deliberately NOT vl-sort: vl-sort DROPS elements
+  ;; that compare equal, so two rows sharing a rank for one type would lose
+  ;; one from the dropdown with no error.  A duplicate rank is a config typo;
+  ;; it must not be able to hide a material a drafter then cannot pick.
+  ;; Ties keep table order -- the comparison is strict.
+  (setq out (reverse out) res '())
+  (while out
+    (setq best (car out))
+    (foreach p (cdr out) (if (< (car p) (car best)) (setq best p)))
+    (setq res (cons (cdr best) res)
+          out (vl-remove best out)))
+  (reverse res))
 
 
 ;;; ==========================================================================
@@ -909,9 +1064,10 @@
 ;;; ==========================================================================
 
 ;; (pf:fmt-station sta) -> "X+XX.XX"
-(defun pf:fmt-station (sta / hund rem)
-  (setq hund (fix (/ sta 100.0)) rem (- sta (* hund 100.0)))
-  (strcat (itoa hund) "+" (if (< rem 10.0) "0" "") (rtos rem 2 2)))
+;;   frac, NOT rem: `rem' is a subr (2026-08-06).
+(defun pf:fmt-station (sta / hund frac)
+  (setq hund (fix (/ sta 100.0)) frac (- sta (* hund 100.0)))
+  (strcat (itoa hund) "+" (if (< frac 10.0) "0" "") (rtos frac 2 2)))
 
 ;; pf:fmt-elev quarantined to _attic 2026-08-01 (no caller).
 
@@ -1000,23 +1156,50 @@
         (setq pts (cons (pf:pt2 (car r)) pts)))
       (if (> (length pts) 1) (reverse pts)))))
 
-;; (pf:poly-x vertsA vertsB) -> first (x y) intersection | nil
+;; (pf:pt-near-any pt pts tol) -> T | nil    any of pts within tol of pt
+(defun pf:pt-near-any (pt pts tol / hit)
+  (foreach p pts (if (and (null hit) (<= (distance pt p) tol)) (setq hit T)))
+  hit)
+
+;; (pf:poly-x-all vertsA vertsB) -> ((x y) ...) in A's walk order | nil
+;;   EVERY intersection, not the first.  Two lines crossing twice is ordinary --
+;;   a waterline weaving across a storm run -- and returning one hit per pair
+;;   meant a target could never show more than one crossing per other line.
+;;   Worse, it was direction-dependent: the outer walk is the TARGET's vertices,
+;;   so "first" meant a different crossing depending on which line was being
+;;   labeled, and the two lists disagreed about which one existed (found
+;;   2026-08-06, a crossing 25 ft from a waterline's end).
+;;   DUPLICATES COLLAPSE at *pfx-sample-step*: a hit landing on a shared vertex
+;;   satisfies `inters' for both adjoining segment pairs, and on sampled
+;;   geometry a shallow crossing can register on several. Two genuine crossings
+;;   2 ft apart do not exist.
+;;   NO EARLY EXIT, necessarily -- but a pair that never crosses already walked
+;;   the whole product, and that is the common case; only crossing pairs pay.
 ;;   cdr-walked, NOT nth-indexed: nth re-walks the list from the head every
 ;;   call, which made this effectively cubic on sampled alignments (minutes
-;;   per pair at 2-ft steps).  Same scan order, same first-hit result.
-(defun pf:poly-x (vertsA vertsB / ta tb a1 a2 b1 b2 hit)
-  (setq ta vertsA hit nil)
-  (while (and (cdr ta) (null hit))
+;;   per pair at 2-ft steps).
+(defun pf:poly-x-all (vertsA vertsB / ta tb a1 a2 b1 b2 hit out)
+  (setq ta vertsA out '())
+  (while (cdr ta)
     (setq a1 (car ta)
           a2 (cadr ta)
           tb vertsB)
-    (while (and (cdr tb) (null hit))
+    (while (cdr tb)
       (setq b1 (car tb)
             b2 (cadr tb)
             hit (inters a1 a2 b1 b2))
+      (if (and hit (not (pf:pt-near-any hit out *pfx-sample-step*)))
+        (setq out (cons hit out)))
       (setq tb (cdr tb)))
     (setq ta (cdr ta)))
-  hit)
+  (reverse out))
+
+;; (pf:poly-x vertsA vertsB) -> first (x y) intersection | nil
+;;   The single-hit form, kept for pf:refine-x: that one re-samples a +/- one
+;;   step window around a hit already found, so "first in the window" IS the
+;;   hit being refined.  Discovery must use pf:poly-x-all.
+(defun pf:poly-x (vertsA vertsB)
+  (car (pf:poly-x-all vertsA vertsB)))
 
 ;; (pf:refine-x tfile tsta sfile ssta) -> (x y) | nil
 (defun pf:refine-x (tfile tsta sfile ssta / tv sv)
@@ -1145,11 +1328,22 @@
 ;;;   - the TOP-OF-GRID PROBE (the ONLY probe in the suite -- the invert
 ;;;     probe is dead; inverts come from the .pro via the Road API)
 
-;; (pf:parse-sheet-name s type) -> line name | nil
-;;   "STORM LINE 'DA'" + "STORM" -> "DA"
-(defun pf:parse-sheet-name (s type / u p1 p2)
+;; (pf:type-keyword ty) -> the words that PRINT on the sheet for TYPE
+;;   The token is a .cl filename prefix (one word, no underscore); the sheet
+;;   may say something else.  "FORCEMAIN" -> "FORCE MAIN".  No row in
+;;   *pf-type-keywords* means the token prints as itself.
+(defun pf:type-keyword (ty / cell)
+  (if (setq cell (assoc (strcase ty) *pf-type-keywords*))
+    (strcase (cdr cell))
+    (strcase ty)))
+
+;; (pf:parse-sheet-name s ty) -> line name | nil
+;;   "STORM LINE 'DA'" + "STORM" -> "DA"    ty, NOT type: `type' is a subr.
+;;   TYPE is matched by its KEYWORD, not its token -- a FORCEMAIN line's text
+;;   reads "FORCE MAIN" and the raw token would never be found.
+(defun pf:parse-sheet-name (s ty / u p1 p2)
   (setq u (strcase s))
-  (if (vl-string-search (strcase type) u)
+  (if (vl-string-search (pf:type-keyword ty) u)
     (progn
       (setq p1 (vl-string-search "'" u))
       (if (null p1) (setq p1 (vl-string-search "`" u)))
@@ -1157,11 +1351,16 @@
       (if (and p1 p2 (> p2 (1+ p1)))
         (pf:trim (substr u (+ p1 2) (- p2 p1 1)))))))
 
-;; (pf:sheet-type s) -> "STORM" | "SANITARY" | "WATER" | nil
-(defun pf:sheet-type (s / u found)
-  (setq u (strcase s) found nil)
-  (foreach k *pf-types*
-    (if (and (null found) (vl-string-search k u)) (setq found k)))
+;; (pf:sheet-type s) -> "STORM" | "FORCEMAIN" | ... | nil
+;;   LONGEST keyword wins, NOT first in *pf-types*: "PROPOSED SANITARY FORCE
+;;   MAIN 'A'" holds both SANITARY and FORCE MAIN, and a first-hit walk would
+;;   file that line as sanitary with nothing downstream ever objecting.
+(defun pf:sheet-type (s / u found flen ty kw n)
+  (setq u (strcase s) found nil flen 0)
+  (foreach ty *pf-types*
+    (setq kw (pf:type-keyword ty) n (strlen kw))
+    (if (and (> n flen) (vl-string-search kw u))
+      (setq found ty flen n)))
   found)
 
 ;; ---- geometry reads ------------------------------------------------------

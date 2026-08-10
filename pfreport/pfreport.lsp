@@ -120,6 +120,7 @@
 (defun pfr:nd-line (nd) (nth 3 nd))
 (defun pfr:nd-rim  (nd) (nth 4 nd))
 (defun pfr:nd-blk  (nd) (nth 5 nd))     ; block name -- PF2SEW only
+(defun pfr:nd-ent  (nd) (nth 6 nd))     ; the structure BLOCK -- node identity
 
 
 ;;; ==========================================================================
@@ -270,17 +271,13 @@
 ;; (pfr:struct-id ename lines index) -> "AA-1/BB-2" -- PFLABEL's combined ID
 ;;   Same composition PFLABEL draws, so the .stm's Inlet ID and the sheet's
 ;;   structure label are the same string by construction.
-(defun pfr:struct-id (ename lines index / pt hits alpha names ranks)
-  (setq pt    (cdr (assoc 10 (entget ename)))
-        hits  (pfa:lines-at ename pt lines)
-        alpha (pf:sort-line-infos-alpha hits)
-        names (mapcar 'car alpha)
-        ranks (mapcar '(lambda (li)
-                         (pf:rank-on-line (cadr li)
-                                          (cdr (assoc (car li) index))
-                                          *pf-rank-ascending* *pf-range-eps*))
-                      alpha))
-  (if names (pf:combine-id names ranks) ""))
+;;   THE COMPOSITION ITSELF moved to pfa:id-for-hits 2026-08-03 -- this was the
+;;   third hand-rolled copy of it and the palette needed a fourth.  What stays
+;;   here is the ename -> hits lookup, which is all pfreport ever had that the
+;;   primary-line paths (whose rows already carry their hits) do not.
+(defun pfr:struct-id (ename lines index / pt)
+  (setq pt (cdr (assoc 10 (entget ename))))
+  (pfa:id-for-hits (pfa:lines-at ename pt lines) index))
 
 ;; (pfr:struct-at pending sta) -> (sta ename blkname) | nil
 ;;   The nearest structure block within one structure width of the station.
@@ -316,6 +313,7 @@
         (cons 'xy  xy)
         (cons 'id  id)
         (cons 'blk (if st (caddr st)))
+        (cons 'ent (if st (cadr st)))     ; node identity -- pfr:node-index
         (cons 'rim (car rim))
         (cons 'why (if (car rim) nil (cdr rim)))))
 
@@ -329,7 +327,7 @@
         name    (cadr r)
         xf      (pfa:anchor->xform anchor)
         clfile  (pf:xf-get 'clfile xf)
-        sf3     (pfxl:src-files (car r) name)
+        sf3     (pfa:src-files (car r) name)
         inv     (car sf3)
         top     (cadr sf3)
         mat     (caddr sf3)
@@ -431,15 +429,36 @@
 ;;; elevation matching.  Direction comes from stationing.  Elevation is only
 ;;; ever the check (SECTION 9).
 
-;; (pfr:node-index tbl xy) -> index of the node within *pfr-node-tol* | nil
-(defun pfr:node-index (tbl xy / i found nd)
+;; (pfr:node-index tbl xy ent) -> index of the matching node | nil
+;;   IDENTITY FIRST.  A structure is ONE node because it is ONE BLOCK, not
+;;   because two lines computed a plan point within 2 ft of each other.  Each
+;;   line derives that point from its OWN .cl at its OWN midpoint station, so a
+;;   trunk and a branch describing the same casting routinely land further apart
+;;   than *pfr-node-tol* -- and every branch's junction then looked like a
+;;   second outfall to pfr:order.
+;;
+;;   Coincidence stays the fallback for a node with NO block: a bend, or a
+;;   terminus no structure was found within a structure width of.  Two DIFFERENT
+;;   blocks inside the tolerance no longer merge -- they are two structures, and
+;;   the identity test is the one that knows it.
+(defun pfr:node-index (tbl xy ent / i found nd)
   (setq i 0 found nil)
   (foreach nd tbl
-    (if (and (null found) (pfr:nd-xy nd) xy
-             (<= (distance (pfr:nd-xy nd) xy) *pfr-node-tol*))
+    (if (and (null found) ent (pfr:nd-ent nd)
+             (equal (pfr:nd-ent nd) ent))
       (setq found i))
     (setq i (1+ i)))
-  found)
+  (if found
+    found
+    (progn
+      (setq i 0)
+      (foreach nd tbl
+        (if (and (null found) (pfr:nd-xy nd) xy
+                 (or (null ent) (null (pfr:nd-ent nd)))
+                 (<= (distance (pfr:nd-xy nd) xy) *pfr-node-tol*))
+          (setq found i))
+        (setq i (1+ i)))
+      found)))
 
 ;; (pfr:build-nodes pipes) -> (pipes . node-table)
 ;;   Stamps 'idx (the pipe's identity) and 'dn-node / 'up-node (indices) onto
@@ -450,11 +469,12 @@
   (foreach p pipes
     (foreach k '(dn-nd up-nd)
       (setq nd  (pfr:g k p)
-            idx (pfr:node-index tbl (pfr:g 'xy nd)))
+            idx (pfr:node-index tbl (pfr:g 'xy nd) (pfr:g 'ent nd)))
       (if (null idx)
         (setq tbl (append tbl (list (list (pfr:g 'xy nd) (pfr:g 'id nd)
                                           (pfr:g 'sta nd) (pfr:g 'line p)
-                                          (pfr:g 'rim nd) (pfr:g 'blk nd)))))
+                                          (pfr:g 'rim nd) (pfr:g 'blk nd)
+                                          (pfr:g 'ent nd)))))
         (progn                                  ; merge what this line knows
           (setq e (nth idx tbl))
           (if (and (= (pfr:nd-id e) "") (/= (pfr:g 'id nd) ""))
@@ -463,10 +483,18 @@
             (setq e (pfr:set-nth 4 (pfr:g 'rim nd) e)))
           (if (and (null (pfr:nd-blk e)) (pfr:g 'blk nd))
             (setq e (pfr:set-nth 5 (pfr:g 'blk nd) e)))
+          ;; a node first seen unblocked adopts the block the second line found:
+          ;; from here on it matches by identity like any other structure
+          (if (and (null (pfr:nd-ent e)) (pfr:g 'ent nd))
+            (setq e (pfr:set-nth 6 (pfr:g 'ent nd) e)))
           (setq tbl (pfr:set-nth idx e tbl)))))
     (setq p   (pfr:p 'idx i p)
-          p   (pfr:p 'dn-node (pfr:node-index tbl (pfr:g 'xy (pfr:g 'dn-nd p))) p)
-          p   (pfr:p 'up-node (pfr:node-index tbl (pfr:g 'xy (pfr:g 'up-nd p))) p)
+          p   (pfr:p 'dn-node
+                (pfr:node-index tbl (pfr:g 'xy  (pfr:g 'dn-nd p))
+                                    (pfr:g 'ent (pfr:g 'dn-nd p))) p)
+          p   (pfr:p 'up-node
+                (pfr:node-index tbl (pfr:g 'xy  (pfr:g 'up-nd p))
+                                    (pfr:g 'ent (pfr:g 'up-nd p))) p)
           out (cons p out)
           i   (1+ i)))
   (cons (reverse out) tbl))
@@ -649,10 +677,8 @@
     "Gutter Slope = " "Inlet Cross Slope Sw = " "Inlet Cross Slope Sx = "
     "Inlet Sag = "))
 
-(defun pfr:nvalue (mat / cell)
-  (if (and mat (setq cell (assoc (strcase mat) *pfr-nvalues*)))
-    (cdr cell)
-    *pfr-nvalue-default*))
+;; n-value lookup retired 2026-08-04 -- it is pf:mat-n now, off the one
+;; material table, so this export and pf2sew cannot disagree about a material.
 
 ;; (pfr:slope p) -> the Line Slope field
 (defun pfr:slope (p / len)
@@ -699,7 +725,7 @@
         (pfr:kv "Invert Elev Up = " (pfr:g 'up-inv p))
         (pfr:kv "Rise = " rise)
         (pfr:kv "Span = " rise)
-        (pfr:kv "N-Value = " (pfr:nvalue (pfr:g 'mat p)))
+        (pfr:kv "N-Value = " (pf:mat-n (pfr:g 'mat p)))
         (pfr:kvs "Line Type = " *pfr-line-type*)
         (pfr:kv "Junction Loss Coeff = " *pfr-junction-loss*)
         (pfr:kv "Ground / Rim Elev Dn = "
@@ -758,7 +784,7 @@
       ((null (findfile cl))
        (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
                        "' -- .cl on record not found on disk: " cl)))
-      ((null (car (setq sf3 (pfxl:src-files (car r) (cadr r)))))
+      ((null (car (setq sf3 (pfa:src-files (car r) (cadr r)))))
        (prompt (strcat "\n  Not offered: " (car r) " '" (cadr r)
                        "' has no _INV .pro bound -- every invert comes from it.")))
       ((null (findfile (car sf3)))
@@ -769,7 +795,7 @@
 
 ;; (pfr:row r) -> the column-formatted list row
 (defun pfr:row (r / sf3)
-  (setq sf3 (pfxl:src-files (car r) (cadr r)))
+  (setq sf3 (pfa:src-files (car r) (cadr r)))
   (strcat (pfset:pad (car r) 11)
           (pfset:pad (cadr r) 14)
           (pfset:pad (if (cadr sf3) "yes" "NO") 9)
@@ -874,7 +900,7 @@
   (prompt "\nBuilding the line table...")
   (setq lines  (pfr:line-table sel)
         inlets (pfa:gather-inlets)
-        index  (pflabel:index-stations inlets lines)
+        index  (pfa:index-stations inlets lines)
         texts  (pfr:elev-texts))
   (prompt (strcat "\n" (itoa (length texts))
                   " elevation label row(s) in model space; "

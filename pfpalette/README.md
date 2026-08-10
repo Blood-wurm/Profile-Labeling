@@ -165,6 +165,11 @@ handlers, the refresh entry point, and the defer channel:
   Structures and Inverts list every structure with its station and whether that
   pass has labeled it; Crossings lists every line that crosses, and where. All
   rows come from one `pfa:target-items` call.
+  - **Item is the structure's DRAWN NAME (2026-08-03)** — the combined ID
+    PFLABEL puts on the sheet (`AA-1/BB-2`), not the block name it used to
+    show. A block name names the drafting symbol, so two structures a hundred
+    feet apart read identically and neither matches anything on the sheet.
+    Crossings is untouched: the crossing line's name is already the pipe's ID.
   - **Two triggers, and the second is new.** The list depends on the target
     *and* on the radio, so it refills from `tarLines` selection (through
     `pfp:show-commands`) and from `optLabel#OnSelChanged` — which until now

@@ -2,7 +2,8 @@
 
 **Load position:** 11 of 12 (after pfinvert, before pfpalette).
 **May depend on:** pftools-cfg, pftools-lib, pfanchor, pfsettings, pflabel
-(line table, structure walk, station index), pfxlabel (`pfxl:src-files`).
+(line table, structure walk, station index) — `pfa:src-files` is pfanchor's as
+of 2026-08-06, so pfxlabel is no longer a dependency.
 Does **not** depend on pfdraw or pfsetup — it draws nothing and registers
 nothing.
 **Depended on by:** **pf2sew** — `C:PF2SEW` reuses this file's whole gather
@@ -54,7 +55,7 @@ the structures and the gaps between them are the exported lines.
 | `Line Length`, `Line Slope` | derived from those stations + inverts |
 | `Rise`, `Span` | `pf:pipe-at` at the pipe MIDPOINT ÷ 12 |
 | `Ground / Rim Elev Dn` / `Up` | the drafter-filled `T.R.` / `T.G.` / `G.L.` TEXT PFLABEL drew |
-| `N-Value` | the record's material through `*pfr-nvalues*` |
+| `N-Value` | the record's material through `pf:mat-n` |
 | `Inlet ID` | `pf:combine-id` — byte-identical to PFLABEL's sheet label |
 | `Line No.` / `Downstream Line No.` | the graph builder (§ below) |
 | `Bearing`, `Deflection Angle` | plan geometry (decoded below) |
@@ -68,9 +69,20 @@ the structures and the gaps between them are the exported lines.
   **Stubs cannot be picked** — a registered line has no grid, so it has no rim
   elevations to read. `pfr:candidates` names every exclusion on the command
   line.
-- **Connectivity is X,Y coincidence** (`*pfr-node-tol*`, 2 ft), matched at each
-  structure's CENTRE station. Immune to the drop-structure problem that
-  defeats elevation matching.
+- **Connectivity is BLOCK IDENTITY, with X,Y coincidence as the fallback.** Two
+  ends are the same node when they are the same structure block (`pfr:nd-ent`,
+  node table slot 6, from `pfr:struct-at`). Only a node with no block falls back
+  to `*pfr-node-tol*` coincidence at the structure's CENTRE station — a bend, or
+  a terminus with no structure within a structure width.
+  **Why identity had to win:** every line derives its plan point from its OWN
+  `.cl` at its OWN midpoint station, so a trunk and a branch describing one
+  casting routinely land more than 2 ft apart. Each branch junction then became
+  a second node with nothing leaving it, and `pfr:order` reported every branch as
+  an extra outfall. Found 2026-08-05 on a seven-line storm system.
+  Consequence: two **different** blocks inside the tolerance no longer merge.
+  They are two structures, and the identity test is the one that knows it.
+  Both matchers are immune to the drop-structure problem that defeats elevation
+  matching.
 - **Direction is `.cl` stationing** — `*pfr-sta-upstream*`, consistent across
   projects, so direction is free. A wrong value cannot fail silently: every
   pipe on the line reads adverse and `pfr:validate` says so by name.
@@ -181,12 +193,15 @@ The per-line pending list goes through `pfa:pend-for` since 2026-08-01
 `pfa:pending` call re-walked inlets × lines once per candidate where the
 memo serves repeats from one walk.
 
-`pfr:struct-id` recomputes exactly what PFLABEL computes —
-`pf:lines-at-point` + `pf:rank-on-line` over the index, then
-`pf:combine-id`. That is deliberate (the `.stm`'s Inlet ID and the sheet
-label must be the same string by construction), but it means PFREPORT is a
-first-class consumer of the persistent membership index designed in the root
-README §11, not an afterthought to it.
+`pfr:struct-id` produces exactly what PFLABEL draws — the `.stm`'s Inlet ID
+and the sheet label must be the same string by construction. **It no longer
+recomputes it**: as of 2026-08-03 the composition itself is
+`pfa:id-for-hits`, and what stays here is the `ename` → hits lookup, which is
+all PFREPORT ever had that the primary-line paths (whose rows already carry
+their hits) do not. This was the third hand-rolled copy of that composition
+and the palette needed a fourth. It still means PFREPORT is a first-class
+consumer of the persistent membership index designed in the root README §11,
+not an afterthought to it.
 
 ## Open issues local to this file
 

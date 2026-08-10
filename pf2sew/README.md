@@ -55,7 +55,8 @@ are never stored — Carlson derives both** from the structure centres.
 | `<Elevation JunctionDrop>` | arriving − leaving invert, where they differ by more than `*pfr-invert-tol*` |
 | pipe `<Elevation Downstream/Upstream>` | the two `_INV.pro` vertices the pipe spans, **verbatim** |
 | `<Pipe Rise>` | `pf:pipe-at` at the pipe midpoint — **inches, no division** |
-| `Material`, `ManningsValue` | the record's material; n through `*pfr-nvalues*` |
+| `Material`, `ManningsValue` | the record's material; n through `pf:mat-n` |
+| `Thickness` | `pf:mat-wall` for that material + nominal; the flat `pipe-thickness` option when the material table carries no dims |
 | `Name` | `pf:combine-id` — byte-identical to PFLABEL's sheet label |
 | `Desc` | the `*pf-rule-table*` TYPE string — the sheet's own words |
 | `SwrStruct` / `HydroInlet` / `Symbol` / `Width` | `*pfsew-type-map*`, keyed on the block name |
@@ -123,15 +124,20 @@ Nothing here is called by another file. Command + engine:
 - `C:PF2SEW` — `pf:run-command "PF2SEW" nil 'pfsew:cmd`.
 - `pfsew:run sel` — the ENGINE: consumes a list of `pfa:registry` rows and does
   everything. Pure read; the `.sew` is the only write.
-- `pfsew:run-dialog rows` — `pfsew_run` (`sw_*` tiles).
+- `pfsew:run-dialog systems` — `pfsew_run` (`sw_*` tiles). Takes SYSTEMS from
+  `pfa:line-systems`, one row each, single-select; returns that system's
+  registry rows. One system per export — two systems are two hydraulic models
+  and two files, never one `.sew`.
 - `pfsew:opt key` / `pfsew:opt-num key` / `pfsew:set-opt key val` — the options
   seam, for a future settings page or palette tab.
 
 Internal, by section: options (§1), library mapping (`pfsew:type-for`,
 `pfsew:desc-for`, `pfsew:tm-*`), XML grammar (`pfsew:num`, `pfsew:xy`,
 `pfsew:elev`, `pfsew:esc`, `pfsew:att`, `pfsew:atts`, `pfsew:pad`), the node view
-(`pfsew:node-id`, `pfsew:node-invs`, `pfsew:node-base`, `pfsew:node-drop`,
+(`pfsew:node-id`, `pfsew:center-invs`, `pfsew:node-invs`, `pfsew:node-base`,
+`pfsew:node-drop`,
 `pfsew:node-order`, `pfsew:system-of`, `pfsew:name-of`), emit
+`pfsew:sys-name`, `pfsew:sys-row`), emit
 (`pfsew:settings`, `pfsew:hydro-inlet`, `pfsew:structure`, `pfsew:pipe`,
 `pfsew:graph`), the writer (`pfsew:write`), and the run
 (`pfsew:default-path`, `pfsew:untyped`, `pfsew:cmd`).
@@ -176,6 +182,18 @@ Internal, by section: options (§1), library mapping (`pfsew:type-for`,
   outgoing invert and `JunctionDrop` the positive arriving − leaving difference.
   If Carlson reads the sign the other way, it is one negation in
   `pfsew:node-drop`. Gate 5 settles it.
+- **RESOLVED 2026-08-05: the invert datum is ABSOLUTE, and PF2SEW was already
+  right.** A second Carlson-written reference (`STORM_FB-FO`, Carlson 2025) has
+  `Base="720"` against `Rim="723"` and pipe `Downstream="720"` — plain
+  elevations. `STORM_CA.sew`'s negative `Base="-4.5399"` is therefore not the
+  format's convention; that model was built with depths entered. Do not "fix"
+  the datum.
+- **The target install must be set to centre-to-centre pipe length.** It is not
+  in the file — `<SewerSettings>` carries only `NetworkType`, `Unit` and
+  `HydraulicCalc` — so PF2SEW can only match it, never set it. `pfsew:center-invs`
+  puts the inverts on the centre datum; under inside-edge they would need to sit
+  at the inside faces instead, which requires a true footprint the type map does
+  not yet have. Carlson: Sewer Network Settings → Display tab.
 - **`*pfsew-type-map*` content is provisional.** Needs the real Carlson library
   enumeration: material strings, structure IDs, inlet IDs, `Type` enum domains,
   and available symbol block names. Shape is right; names are the four known-good

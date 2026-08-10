@@ -147,17 +147,62 @@
 ;; (pfsew:node-id i) -> "CSMH3"   the SewerNodeID for node index i
 (defun pfsew:node-id (i) (strcat (pfsew:opt 'node-prefix) (itoa i)))
 
+;; (pfsew:center-invs pipes) -> pipes with 'dn-cinv / 'up-cinv stamped
+;;   Carlson stores no pipe length and no slope -- there is no such attribute on
+;;   <SewerPipe> -- so it derives both, measuring between STRUCTURE CENTRES, not
+;;   between the drafted faces the .pro vertices sit on.  Handing it face inverts
+;;   over a centre-to-centre run reports the authored slope flat by the ratio of
+;;   the two lengths.  Each end's invert is carried along the pipe's OWN slope
+;;   from its face vertex to the node's centre station, so the slope Carlson
+;;   derives is the slope that was drafted.
+;;
+;;   Length still reads half a structure long at each end.  That is the
+;;   centre-to-centre convention doing what it says, and unlike the inside-edge
+;;   reduction it needs no structure footprint -- which is why it is the setting
+;;   to hold the target install to while *pfsew-type-map*'s widths are Carlson
+;;   defaults rather than the real inlets.
+;;
+;;   THE CENTRE STATION COMES FROM THE PIPE'S OWN 'dn-nd / 'up-nd, NEVER FROM THE
+;;   MERGED NODE TABLE.  A shared node keeps the station of whichever line first
+;;   created it, and that station is in THAT line's stationing.  Reading it for a
+;;   branch pipe subtracts a trunk station from a branch station and extrapolates
+;;   the invert over hundreds of feet of phantom run -- every branch came out ten
+;;   to thirty feet high, and the downstream end read above the upstream one.
+;;   The pipe's own node alist carries the same structure's centre in the same
+;;   stationing as 'dn-sta / 'up-sta, which is the only pair that can be
+;;   subtracted.  (Found 2026-08-05, on the first CAD export.)
+(defun pfsew:center-invs (pipes / out p run s dnc upc)
+  (setq out '())
+  (foreach p pipes
+    (setq run (- (pfr:g 'up-sta p) (pfr:g 'dn-sta p))
+          s   (if (equal run 0.0 1e-8)
+                0.0
+                (/ (- (pfr:g 'up-inv p) (pfr:g 'dn-inv p)) run))
+          dnc (+ (pfr:g 'dn-inv p)
+                 (* s (- (pfr:g 'sta (pfr:g 'dn-nd p))
+                         (pfr:g 'dn-sta p))))
+          upc (+ (pfr:g 'up-inv p)
+                 (* s (- (pfr:g 'sta (pfr:g 'up-nd p))
+                         (pfr:g 'up-sta p))))
+          p   (pfr:p 'dn-cinv dnc p)
+          p   (pfr:p 'up-cinv upc p)
+          out (cons p out)))
+  (reverse out))
+
 ;; (pfsew:node-invs pipes i) -> (out-inv . in-inv)   either may be nil
 ;;   out-inv = the invert of the pipe LEAVING this structure (its upstream
-;;   end sits here).  in-inv = the LOWEST invert arriving.  Same reading as
-;;   pfr:validate, which is what proves the two agree.
+;;   end sits here).  in-inv = the LOWEST invert arriving.  Both read the
+;;   CENTRE inverts, so Base and JunctionDrop stay on the same datum as the
+;;   pipe elevations they are derived from.  pfr:validate reads the face
+;;   inverts and still agrees on which pipe is lower -- the extrapolation is
+;;   monotonic -- but the two no longer report the same NUMBER.
 (defun pfsew:node-invs (pipes i / out-up dn-in p)
   (setq out-up nil dn-in nil)
   (foreach p pipes
-    (if (= (pfr:g 'up-node p) i) (setq out-up (pfr:g 'up-inv p)))
+    (if (= (pfr:g 'up-node p) i) (setq out-up (pfr:g 'up-cinv p)))
     (if (and (= (pfr:g 'dn-node p) i)
-             (or (null dn-in) (< (pfr:g 'dn-inv p) dn-in)))
-      (setq dn-in (pfr:g 'dn-inv p))))
+             (or (null dn-in) (< (pfr:g 'dn-cinv p) dn-in)))
+      (setq dn-in (pfr:g 'dn-cinv p))))
   (cons out-up dn-in))
 
 ;; (pfsew:node-base pipes i) -> the structure's Base elevation
@@ -383,11 +428,14 @@
 ;; (pfsew:pipe p) -> the <SewerPipe> block, a list of lines
 ;;   Rise is INCHES in this format, and pf:pipe-at already returns the nominal
 ;;   size in inches -- so unlike the Hydraflow path there is no division here.
-(defun pfsew:pipe (p / size mat)
+(defun pfsew:pipe (p / size mat wall)
   (setq size (pfr:g 'size p)
         mat  (if (and (pfr:g 'mat p) (/= (pfr:g 'mat p) ""))
                (pfr:g 'mat p)
-               (pfsew:opt 'material-default)))
+               (pfsew:opt 'material-default))
+        ;; Real wall when the material table carries one for this nominal;
+        ;; the flat pipe-thickness constant is the fallback, as before.
+        wall (pf:mat-wall mat size))
   (list
     (strcat (pfsew:pad 2) "<SewerPipe"
             (pfsew:atts
@@ -405,16 +453,19 @@
                     (cons "Material"      mat)
                     (cons "Rise"          (pfsew:num (if size size 0) 0))
                     (cons "Width"         "0")
-                    (cons "Thickness"     (pfsew:opt 'pipe-thickness))
-                    (cons "ManningsValue" (rtos (pfr:nvalue mat) 2 4))
+                    (cons "Thickness"     (if wall
+                                            (pfsew:num wall 2)
+                                            (pfsew:opt 'pipe-thickness)))
+                    (cons "ManningsValue" (rtos (pf:mat-n mat) 2 4))
                     (cons "BarrelNum"     (pfsew:opt 'barrel-num))))
             "/>")
-    ;; The .pro vertices, unmodified -- the decision in pf2sew.md section 4.
-    ;; Length and slope are NOT stored: Carlson derives both.
+    ;; The .pro vertices carried to the STRUCTURE CENTRES -- pfsew:center-invs.
+    ;; Length and slope are NOT stored: Carlson derives both, and it measures
+    ;; from the centres, so that is the datum the inverts have to be on.
     (strcat (pfsew:pad 3) "<Elevation"
             (pfsew:atts
-              (list (cons "Downstream" (pfsew:elev (pfr:g 'dn-inv p)))
-                    (cons "Upstream"   (pfsew:elev (pfr:g 'up-inv p)))))
+              (list (cons "Downstream" (pfsew:elev (pfr:g 'dn-cinv p)))
+                    (cons "Upstream"   (pfsew:elev (pfr:g 'up-cinv p)))))
             "/>")
     (strcat (pfsew:pad 2) "</SewerPipe>")))
 
@@ -447,6 +498,9 @@
   (if (null (setq f (open file "w")))
     (progn (prompt (strcat "\nCould not open " file " for writing.")) nil)
     (progn
+      ;; Once, before anything reads an invert: every consumer below wants the
+      ;; centre datum, and pfr's records carry the faces.
+      (setq pipes (pfsew:center-invs pipes))
       (foreach l (pfsew:settings) (write-line l f))
       (write-line (strcat "<SewerNetwork"
                           (pfsew:atts
@@ -478,21 +532,30 @@
 ;;; _INV .pro.  Same rule, same exclusions, named on the command line -- a
 ;;; line that cannot be exported is never silently missing.
 
-(defun pfsew:rd-sel ( / s idxs i out)
+;; (pfsew:sys-name sys) -> "CA-CB"   the joined member names
+(defun pfsew:sys-name (sys)
+  (pf:join (mapcar 'cadr sys) "-"))
+
+;; (pfsew:sys-row sys) -> the list_box line for one system
+(defun pfsew:sys-row (sys)
+  (strcat (pfset:pad (car (car sys)) 11)
+          (pfset:pad (pfsew:sys-name sys) 32)
+          (itoa (length sys))))
+
+(defun pfsew:rd-sel ( / s i)
   (setq s (get_tile "sw_list"))
   (if (or (null s) (= s ""))
-    (set_tile "error" "Select the profiles that make up ONE system.")
+    (set_tile "error" "Select a system to export.")
     (progn
-      (setq idxs (read (strcat "(" s ")")) out '())
-      (foreach i idxs (setq out (cons (nth i sw-rows) out)))
-      (setq sw-res (reverse out))
+      (setq i (car (read (strcat "(" s ")"))))
+      (setq sw-res (nth i sw-rows))
       (done_dialog 1))))
 
-(defun pfsew:rd-all ()
-  (setq sw-res sw-rows)
-  (done_dialog 1))
-
-;; (pfsew:run-dialog sw-rows) -> list of chosen registry rows | nil
+;; (pfsew:run-dialog sw-rows) -> the chosen system's registry rows | nil
+;;   sw-rows is a list of SYSTEMS (pfa:line-systems), each itself a list of
+;;   registry rows.  One system per export, so the list is single-select and
+;;   the old Export All is gone: two systems are two hydraulic models and two
+;;   files, never one .sew.
 (defun pfsew:run-dialog (sw-rows / dcl_id sw-res r result)
   (setq sw-res nil dcl_id (load_dialog (pfset:dcl-file)))
   (if (< dcl_id 0)
@@ -503,20 +566,20 @@
       (progn
         (set_tile "sw_title" "PF2SEW -- Carlson Hydrology (.sew) export")
         (start_list "sw_list")
-        (foreach r sw-rows (add_list (pfr:row r)))
+        (foreach r sw-rows (add_list (pfsew:sys-row r)))
         (end_list)
         (set_tile "sw_count"
                   (strcat (itoa (length sw-rows))
-                          " profile(s) ready.  Pick every line in the system."))
+                          " system(s) found.  Pick one."))
         (set_tile "error" "")
         (action_tile "sw_sel" "(pfsew:rd-sel)")
-        (action_tile "sw_all" "(pfsew:rd-all)")
         (action_tile "cancel" "(done_dialog 0)")
         (action_tile "help"
-          (strcat "(pfset:help \"Pick the registered profiles that form ONE "
-                  "storm system -- trunk plus every branch.  They must "
-                  "connect: the export stops and names the offender if the "
-                  "picked set is not one network with exactly one outfall."
+          (strcat "(pfset:help \"Each row is ONE hydraulic system -- trunk plus "
+                  "every branch -- grouped automatically from the structures "
+                  "the lines share.  A line that shares no structure is a "
+                  "system of one and is still listed.  Storm and sanitary "
+                  "never merge, so a shared casting appears in both."
                   "\\n\\nStructures, pipes and inverts come from each line's "
                   "bound _INV .pro; pipe sizes from its _TOP .pro (the Crown "
                   "column above); plan coordinates from its .cl; rim "
@@ -581,7 +644,7 @@
   (prompt "\nBuilding the line table...")
   (setq lines  (pfr:line-table sel)
         inlets (pfa:gather-inlets)
-        index  (pflabel:index-stations inlets lines)
+        index  (pfa:index-stations inlets lines)
         texts  (pfr:elev-texts))
   (prompt (strcat "\n" (itoa (length texts))
                   " elevation label row(s) in model space; "
@@ -606,7 +669,13 @@
      (setq pipes (pfr:order pipes nodes))
      (cond
        ((null pipes)
-        (prompt "\n\nPF2SEW ABORTED -- the picked set is not one system:")
+        ;; No longer a picking mistake: pfa:line-systems groups by shared
+        ;; structures, so the members ARE connected.  Failing here means the
+        ;; connectivity in the data disagrees with itself -- two outfalls, or a
+        ;; break the shared structure implied but the profiles do not carry.
+        (prompt (strcat "\n\nPF2SEW ABORTED -- this system does not resolve to "
+                        "one network with one outfall.  The lines share a "
+                        "structure but their pipe runs disagree:"))
         (pfr:report))
        (T
         (pfr:validate pipes nodes)
@@ -640,14 +709,18 @@
   (princ))
 
 ;; (pfsew:cmd) -> nil   The command body, run under pf:run-command.
-(defun pfsew:cmd ( / rows sel)
+(defun pfsew:cmd ( / rows systems sel)
   (setq rows (pfr:candidates))
   (if (null rows)
     (prompt (strcat "\nNo profile is ready to export.  PF2SEW needs an ANCHORED "
                     "registry entry with both a .cl and an _INV .pro bound -- "
                     "run PFSETUP."))
     (progn
-      (setq sel (pfsew:run-dialog rows))
+      (prompt "\nGrouping profiles into systems...")
+      (setq systems (pfa:line-systems rows))
+      (prompt (strcat "\n" (itoa (length systems)) " system(s) from "
+                      (itoa (length rows)) " profile(s)."))
+      (setq sel (pfsew:run-dialog systems))
       (if (null sel)
         (prompt "\nPF2SEW cancelled.")
         (pfsew:run sel))))

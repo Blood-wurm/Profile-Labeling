@@ -44,10 +44,20 @@ any undo group, one day from a modeless handler):
   This completes the migration begun 2026-07-27 with `pfa:build-lines` /
   `pfa:gather-inlets`; same precedent as `pfa:entry-cl` out of pfxlabel.
   Contracts moved unchanged — see `pfanchor/README.md`.
-- `pflabel:index-stations inlets line-table` → `(name . sorted-stations)*` —
-  **stayed**, because it is combined-ID RANKING rather than membership. Its
-  only consumers are this file and pfreport. Still the largest unmemoised
-  consumer of membership in the suite.
+- **`index-stations` followed them**, 2026-08-03, as `pfa:index-stations` /
+  `pfa:index-for`. It had stayed on the grounds that it was combined-ID
+  RANKING rather than membership, but the palette's Item column needs the
+  ranked NAME and position 11 cannot reach position 7 — the same forcing
+  reason as the gather move, and pfreport and pf2sew were already reaching
+  across for it. It is also no longer the largest unmemoised consumer of
+  membership: on the primary-line paths `pfa:pending` now folds the index out
+  of the walk it was already making, and the gather memo holds it. No alias
+  left behind.
+- **`ranks-for` retired**, 2026-08-03 — rank, alpha-sort and
+  `pf:combine-id` are one step, and they live together in `pfa:id-for-hits`,
+  which `process-structure`, `rd-fill` and the palette all call. There were
+  three hand-rolled copies of that composition (here, `pfr:struct-id`, and
+  nearly a fourth for the palette) and now there is one.
 - `pflabel:label-fmt settings util` — `[util]` token substitution for the four
   affix keys.
 - `pflabel:show-dialog` — the PFLABELSET dialog (pfinvert's run dialog
@@ -113,9 +123,11 @@ and replaces, so a re-run is the exact fix.
   membership replaces it — the parser removed the blocker, not the bug.
 - **Per-run cost — largely addressed 2026-07-27.** The gather still rebuilds
   the line table every run (cheap, O(lines), and it keeps the twin verts
-  LIVE). Membership itself no longer re-derives: `index-stations`, `pending`
-  and `process-structure` all read the saved index through `pfa:lines-at`,
-  and `process-structure` tops the record up inside the undo group. What is
+  LIVE). Membership itself no longer re-derives: `pfa:index-stations`,
+  `pfa:pending` and `process-structure` all read the saved index through
+  `pfa:lines-at`, and since 2026-08-03 the first two are ONE walk on the
+  primary-line paths rather than two.
+  `process-structure` tops the record up inside the undo group. What is
   left is the cold case — the first run on a drawing that has never been
   indexed still pays in full, by design. `C:PFINDEX Build` removes it;
   `C:PFINDEX Verify` is what proves the saved answers match fresh ones.

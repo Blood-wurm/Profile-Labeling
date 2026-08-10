@@ -290,14 +290,17 @@ constants named as missing below.
 
 ### Gaps on our side
 
-- **`*pf-materials*` are placeholders.** The config says so outright. Bare
-  `RCP`/`HDPE`/`PVC`/`DI`/`COPPER`; `*pfr-nvalues*` adds `CMP`, which
-  `*pf-materials*` cannot even produce. Needs Bryant's real list regardless of
-  Carlson.
-- **No material class.** Carlson says `RCP III`; we say `RCP`. Either the class
-  goes on the sheet (`12" RCP III` — a **drafting-visible** change, since labels
-  print `NN" <MATERIAL>`) or the sheet stays coarse and we map to a class at
-  export. **Jake's call.**
+- **`*pf-materials*` keys are still placeholders.** Needs Bryant's real list
+  regardless of Carlson. The *shape* is no longer a gap: as of 2026-08-04 it is
+  one row per material carrying n, dims and the types that offer it, so the
+  `*pfr-nvalues*` drift this bullet used to describe (it carried `CMP`, which
+  the per-type lists could not produce) cannot recur — that list is gone and
+  `CMP` is a row with no TYPES.
+- **Material class — ANSWERED 2026-08-04: it goes on the sheet.** `12" RCP III`
+  prints, and the class-bearing string is the material table's key, so the same
+  string reaches Carlson's free-text `Material` with no export-time mapping.
+  `pf:mat-for` falls back to the leading token, so records holding a bare `RCP`
+  keep working and no anchor needs migrating.
 - **No structure `Height` / `Thick`.** Width comes from real data (the measured
   vertex-pair gap); height and wall thickness would be firm-standard constants
   per type. New config, not new drafting.
@@ -402,7 +405,7 @@ element**. Consumes the hoisted node/pipe model:
 | `JunctionDrop` | the in/out difference where a node's two inverts differ |
 | pipe `<Elevation Downstream/Upstream>` | the `.pro` vertices, verbatim (§4) |
 | `<Pipe Rise>` | (`_TOP` − `_INV`) × 12, inches |
-| `Material`, `ManningsValue` | the record's material; n from `*pfr-nvalues*` |
+| `Material`, `ManningsValue` | the record's material; n from `pf:mat-n` |
 | `SwrStruct` / `HydroInlet` / `Symbol` / `Width` | `*pfh-type-map*` |
 | `Down/UpstreamStructureID` | the graph builder, unchanged |
 | `<Graph>` | one `<LINE>` per pipe, from the two centres |

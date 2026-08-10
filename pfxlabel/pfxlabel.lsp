@@ -22,27 +22,13 @@
 ;;; SECTION 1  --  Pure helpers
 ;;; ==========================================================================
 
-(defun pfxl:nz (s) (if (and s (/= s "")) s))
-
 ;; pfxl:split and pfxl:scope-read MOVED to pfanchor 2026-07-30 as pfa:split /
 ;; pfa:scope-read, with the discovery scan itself (pfa:xing-scan).  They are
 ;; SCOPE-record knowledge, and pfanchor -- four load positions above this file
 ;; -- is the reader that now needs them.  No aliases left behind.
-
-;; (pfxl:src-files type name) -> (inv-pro top-pro material) | nil
-;;   Anchor first (carries material), then stub (no material).  nz-guarded.
-(defun pfxl:src-files (type name / a f stub)
-  (cond
-    ((setq a (pfa:find-anchor name type))
-     (setq f (pfa:files-get a))
-     (list (pfxl:nz (cdr (assoc 1 f)))
-           (pfxl:nz (cdr (assoc 2 f)))
-           (pfxl:nz (cdr (assoc 5 f)))))
-    ((setq stub (pfa:stub-get type name))
-     (list (pfxl:nz (cdr (assoc 4 stub)))
-           (pfxl:nz (cdr (assoc 5 stub)))
-           nil))
-    (T nil)))
+;; pfxl:src-files and pfxl:nz FOLLOWED THEM 2026-08-06, as pfa:src-files /
+;; pfa:nz: the scan's .pro range filter needs a source line's _INV, and it
+;; cannot call downward into position 9.  Same rule, no aliases.
 
 ;; (registry row -> .cl resolution is pfa:entry-cl, pfanchor SECTION 4 --
 ;;  moved there 2026-07-26 so pflabel shares the single resolver.)
@@ -69,7 +55,7 @@
   (if (and *pfxl-undo-open* *pfxl-run-anchor* *pfxl-run-newh*)
     (progn
       (setq oldh (pfa:pass-handles *pfxl-run-anchor* *pfxl-pass-name*))
-      (pfa:pass-put *pfxl-run-anchor* *pfxl-pass-name* *pfa-xing-layer* nil
+      (pfa:pass-put *pfxl-run-anchor* *pfxl-pass-name* *pf-anno-layer* nil
                     (append oldh *pfxl-run-newh*))
       (setq *pfxl-run-newh* nil *pfxl-run-anchor* nil)))
   (princ))
@@ -92,8 +78,19 @@
 ;;   The scan's short-circuit means `found` holds only pairs whose .cl changed
 ;;   since the last run, so the counters report movement, not the size of the
 ;;   line set.
-(defun pfxl:discover (anchor / res found newscope skips nnew nupd nmov f st sk)
+(defun pfxl:discover (anchor / res found newscope skips nnew nupd nmov
+                             f st sk)
   (prompt "\nChecking for crossings...")
+  ;; BEFORE the scan: retract rows filed before today's filters existed -- a
+  ;; tie-in, or a hit past the end of the source's pipe.  The scan can only
+  ;; decline to file one; the ledger is what the dialog reads, and nothing else
+  ;; ever deletes from it.  Each row names its own grounds.
+  ;; Reported here rather than beside the scan's skips: a retraction is a
+  ;; record LEAVING the ledger and stands whether or not the scan then runs.
+  (foreach sk (pfa:xing-sweep-shared anchor)
+    (prompt (strcat "\n  Removed -- " (nth 3 sk) ": "
+                    (car sk) " at " (pf:fmt-station (cadr sk))
+                    " (source " (pf:fmt-station (caddr sk)) ").")))
   (if (null (setq res (pfa:xing-scan anchor T)))
     (prompt (strcat "\nTarget has no readable .cl on record"
                     " -- discovery skipped."))
@@ -118,14 +115,14 @@
       (if (> (+ nnew nupd nmov) 0)
         (prompt (strcat "\nDiscovery: " (itoa nnew) " new, " (itoa nupd)
                         " updated, " (itoa nmov) " moved.")))
-      ;; NAMED, one line each, and unconditionally -- a skipped tie-in is the
-      ;; one case where the operator has to be able to tell "not a crossing"
-      ;; from "missed a crossing", and the tolerance that decides it is a
-      ;; config value (*pfx-terminus-tol*) they may need to argue with.
+      ;; NAMED, one line each, and unconditionally -- a skipped intersection is
+      ;; the one case where the operator has to be able to tell "not a crossing"
+      ;; from "missed a crossing", and what decides it is either a config value
+      ;; (*pfx-terminus-tol*) or the station range of a .pro they authored.
       (foreach sk skips
-        (prompt (strcat "\n  Shared structure, not a crossing: " (car sk)
+        (prompt (strcat "\n  Skipped -- " (nth 3 sk) ": " (car sk)
                         " at " (pf:fmt-station (cadr sk))
-                        " (source " (pf:fmt-station (caddr sk)) ") -- skipped.")))))
+                        " (source " (pf:fmt-station (caddr sk)) ").")))))
   (princ))
 
 
@@ -133,17 +130,18 @@
 ;;; SECTION 4  --  Label one crossing on the TARGET grid
 ;;; ==========================================================================
 
-;; (pfxl:label-one anchor xf e style sf ht toplines)
+;; (pfxl:label-one anchor xf e style sf ht toplines tverts)
 ;;   -> (handles . nil)  on success  |  (nil . "REASON")  on skip
-(defun pfxl:label-one (anchor xf e style sf ht toplines / srcfile ty nm sf3
+;;   tverts is the TARGET's own invert vertices, read once per pass by pfxl:run.
+(defun pfxl:label-one (anchor xf e style sf ht toplines tverts / srcfile ty nm sf3
                        invpro toppro mat pipe inv size tsta ssta x gtop ybot y
-                       ents en telev)
+                       ycen ents en telev)
   (setq tsta    (pfa:xr-tsta e)
         ssta    (pfa:xr-ssta e)
         srcfile (pfa:xr-sfile e)
         ty      (pf:type-of srcfile)
         nm      (pf:name-of srcfile)
-        sf3     (pfxl:src-files ty nm))
+        sf3     (pfa:src-files ty nm))
   (cond
     ((null sf3)        (cons nil "SOURCE NOT REGISTERED"))
     ((null (car sf3))  (cons nil "NO INVERT .PRO BOUND"))
@@ -151,6 +149,13 @@
      (setq invpro (car sf3) toppro (cadr sf3) mat (caddr sf3)
            pipe   (pf:pipe-at invpro toppro ssta))
      (cond
+       ;; the two ways pipe comes back nil are different facts and the operator
+       ;; acts on them differently: one is a broken file, the other is a pipe
+       ;; that legitimately does not reach this station.  Discovery already
+       ;; declines to file the second, so reaching it here means a ledger row
+       ;; that predates the filter, or a .pro shortened since.
+       ((pf:pro-outside-p invpro ssta)
+        (cons nil "NO PIPE ON THE SOURCE AT THAT STATION"))
        ((null pipe) (cons nil "SOURCE INVERT UNREADABLE (profile z)"))
        (T
         (setq inv  (car pipe)
@@ -164,17 +169,14 @@
           (T
            (setq ybot (- (pf:xf-basey xf) (* *pfx-line-ext* sf))
                  ents '())
-           (pfd:ensure-layer *pfa-xing-layer* nil)
-           ;; station line (LWPOLYLINE on PF-XING -- recon scans this).  THE
-           ;; one piece of label output that does NOT go to PF-ANNO: this layer
-           ;; is a data channel, not styling.  pfa:station-line-tops finds a
-           ;; crossing's "labeled" mark by scanning PF-XING BY NAME, so the line
-           ;; has to stay where that scan looks.
-           (if (setq en (pfd:station-line x ybot gtop *pfa-xing-layer*))
+           ;; station line (LWPOLYLINE on PF-ANNO with the rest of the output).
+           ;; Recon still separates it from a STRUCTURE station line by geometry,
+           ;; not by layer: this line's top vertex is the grid top, a structure
+           ;; line's is its text-stack top, a full text height higher.  The
+           ;; intended long-term marker is an XDATA tag, not either layer name.
+           (if (setq en (pfd:station-line x ybot gtop (pfd:anno-layer)))
              (setq ents (cons en ents)))
-           ;; vertical station text -- PF-ANNO like every other label (moved off
-           ;; PF-XING 2026-07-29).  Recon never read it: that scan filters
-           ;; (0 . "LWPOLYLINE"), so text was invisible to it on either layer.
+           ;; vertical station text
            (if (setq en (pfd:text (list x ybot 0.0)
                                   (strcat (pf:fmt-station tsta) " "
                                           (pf:cross-desc srcfile))
@@ -187,12 +189,17 @@
                                          (pfd:anno-layer)
                                          (pf:xf-vscale xf) sf))
              (setq ents (cons en ents)))
-           ;; size + material + standard line label
-           (foreach en (pfd:label-pipe x y srcfile size mat sf ht style)
+           ;; size + material + standard line label, straddling the pipe CENTRE.
+           ;; Half a nominal diameter is added as an ELEVATION so the transform
+           ;; applies the same vscale the block insert above was given.
+           (setq ycen (if size
+                        (pf:elev->profile-y (+ inv (/ size 24.0)) xf)
+                        y))
+           (foreach en (pfd:label-pipe x ycen srcfile size mat sf ht style)
              (setq ents (cons en ents)))
-           ;; persist: target invert (own .pro) + source invert
-           (setq telev (if (pf:xf-get 'pro-inv xf)
-                         (pf:pro-z (pf:xf-get 'pro-inv xf) tsta)))
+           ;; persist: target invert (own .pro, sampled off the once-read
+           ;; vertices) + source invert
+           (setq telev (pf:pro-z-verts tverts tsta))
            (pfa:xing-put-elevs anchor (pfa:xr-key e) telev inv)
            (cons (mapcar 'pfxl:handle-of ents) nil))))))))
 
@@ -321,21 +328,33 @@
 ;;   cannot do itself and will reuse via its deferred command.  style/sf/ht/
 ;;   toplines derive here from xf.  Caller owns the *error*/echo wrapper and the
 ;;   undo group; body is unchanged from the old inline loop.
-(defun pfxl:run (anchor xf sel / style sf ht toplines res drawn skips
-                                  oldh lay e)
+(defun pfxl:run (anchor xf sel / style sf ht toplines tpro tverts res drawn
+                                  skips oldh lay e)
   (setq style    (pfset:active-style)
         sf       (pf:xf-sf xf)
         ht       (* *pf-text-base-height* sf)
         toplines (pf:top-lines)
         drawn    0
         skips    '())
+  ;; The target's own invert profile, read ONCE for the whole pass.  telev is a
+  ;; per-station value but the .pro is ONE file: pf:pro-z asks the Road API per
+  ;; crossing, and a missing file makes Carlson print an "unable to open file"
+  ;; pair from C++ per call -- below LISP, where vl-catch-all-apply cannot reach
+  ;; it (same defence as the corridor pre-filter: don't make the call).
+  ;; pf:pro-verts is the file read, cached on path+checksum, and silent when the
+  ;; file is gone, so the one honest line below is the only report.
+  (setq tpro   (pf:xf-get 'pro-inv xf)
+        tverts (if tpro (pf:pro-verts tpro)))
+  (if (and tpro (null tverts))
+    (prompt (strcat "\n  Target invert profile unreadable (" tpro
+                    ") -- crossing elevations will not be stored.")))
   ;; run-scoped globals (not locals): the Esc flush ledgers the partial pass
   (setq *pfxl-run-anchor* anchor
         *pfxl-run-newh*   nil)
   (pf:zoom-resolve T)                  ; PFXLABEL parades by default (palette override wins)
   (pf:zoom-begin sf)                   ; snapshot the pre-run view + frame floor
   (foreach e sel
-    (setq res (pfxl:label-one anchor xf e style sf ht toplines))
+    (setq res (pfxl:label-one anchor xf e style sf ht toplines tverts))
     (if (car res)
       (progn
         (setq *pfxl-run-newh* (append *pfxl-run-newh* (car res))
@@ -348,12 +367,8 @@
   ;; append this pass's handles to the crossing pass ledger
   (if *pfxl-run-newh*
     (progn
-      ;; The pass now SPANS two layers -- station lines on PF-XING, everything
-      ;; else on PF-ANNO -- and the record holds one DXF 8.  It stays PF-XING:
-      ;; the field is informational (erase is by handle, always was), and the
-      ;; station line is what identifies a crossing pass.
       (setq oldh (pfa:pass-handles anchor *pfxl-pass-name*)
-            lay  *pfa-xing-layer*)
+            lay  *pf-anno-layer*)
       (pfa:pass-put anchor *pfxl-pass-name* lay nil
                     (append oldh *pfxl-run-newh*))))
   (setq *pfxl-run-newh* nil *pfxl-run-anchor* nil)  ; normal exit: flush disarms

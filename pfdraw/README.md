@@ -27,9 +27,9 @@ open undo group.
   green 80) and returns its name. **Every label pass writes here**, and this
   is the only place the suite decides that: callers ask for the layer, they
   never build a layer name. Create-only, so a drawing that already carries
-  PF-ANNO keeps its own colour and plot flag. The one exception in the suite
-  is PFXLABEL's crossing station LINE, which stays on `PF-XING` because
-  `pfa:station-line-tops` scans that layer by name.
+  PF-ANNO keeps its own colour and plot flag. No exceptions as of 2026-08-06
+  — PFXLABEL's crossing station LINE was the last holdout and now writes here
+  too.
 - `pfd:style-or-fallback style` → a style that exists (firm default →
   Standard → ""). Pure read; used internally by `pfd:text`.
 - `pfd:text pt str layer style ht rot just` → ename | nil — just `'ML` =
@@ -42,8 +42,9 @@ open undo group.
 - `pfd:circle pt r layer` → ename | nil.
 - `pfd:insert-pipe pt size layer yscale sf` → ename | nil — size nil or
   block undefined → placeholder circle (with a warning).
-- `pfd:label-pipe x y file size mat sf ht style` → list of enames — row 1
-  = NN" MATERIAL, row 2 = the standard line label.
+- `pfd:label-pipe x ycen file size mat sf ht style` → list of enames — row 1
+  = NN" MATERIAL, row 2 = the standard line label. The rows straddle `ycen`
+  (the pipe centre, not the invert) by half the row gap.
 
 ## Invariants
 

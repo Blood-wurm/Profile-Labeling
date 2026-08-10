@@ -2,8 +2,8 @@
 
 **Load position:** 10 of 12 (after pfxlabel, before pfreport).
 **May depend on:** pftools-cfg, pftools-lib, pfdraw, pfanchor, pfsettings,
-pfsetup, pflabel (structure walk + shared builders), pfxlabel
-(`pfxl:src-files` registry file resolution).
+pfsetup, pflabel (structure walk + shared builders). No longer depends on
+pfxlabel: `src-files` moved to pfanchor 2026-08-06.
 **Depended on by:** pfpalette only transitively (nothing calls pfi:).
 
 ## What it owns

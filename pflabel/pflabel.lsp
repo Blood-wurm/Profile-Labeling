@@ -129,23 +129,14 @@
 ;; all pfa:.  It is membership-and-ledger knowledge, and the palette at position
 ;; 11 needs per-target counts that pfanchor at 4 can serve and this file at 7
 ;; cannot.  No aliases left behind.
-;; index-stations stays: it is combined-ID RANKING, not membership, and its only
-;; consumers are this file and pfreport.
-
-;; (pflabel:index-stations inlets line-table) -> (name . sorted-stations)*
-;;   The ranking input: every station on every line, so pf:rank-on-line can
-;;   count how many structures precede one.  THE LARGEST UNMEMOISED consumer of
-;;   membership in the suite -- it runs on every PFLABEL and every PFREPORT, and
-;;   unlike the gather it has no session memo behind it.  Reads the saved index
-;;   through pfa:lines-at.
-(defun pflabel:index-stations (inlets line-table / idx pt hits e h)
-  (setq idx '())
-  (foreach e inlets
-    (setq pt   (cdr (assoc 10 (entget e)))
-          hits (pfa:lines-at e pt line-table))
-    (foreach h hits
-      (setq idx (pf:idx-add idx (car h) (cadr h)))))
-  (mapcar '(lambda (pair) (cons (car pair) (vl-sort (cdr pair) '<))) idx))
+;; index-stations followed them on 2026-08-03, as pfa:index-stations /
+;; pfa:index-for.  It was kept back as combined-ID RANKING rather than
+;; membership, but the palette needs the ranked NAME for its Item column and
+;; position 11 cannot reach position 7; pfreport and pf2sew were already
+;; reaching across for it too.  It is no longer the largest unmemoised consumer
+;; of membership: on the primary-line paths pfa:pending folds the index out of
+;; the walk it was already making, and the gather memo holds it.
+;; No alias left behind.
 
 (defun pflabel:label-fmt (settings util)
   (mapcar
@@ -168,11 +159,14 @@
 ;; ---- Run dialog: RENDER + handlers (rd-* live in pflabel:run-dialog) -------
 ;; rd-fill only PAINTS; rd-compute does the heavy work BEFORE new_dialog.
 
+;; Column 1 is the DRAWN NAME, not the block name -- the same string the label
+;; will carry and the same one the palette's Item column shows, off the row's
+;; own hits (pfa:pending position 3) so painting costs no membership work.
 (defun pflabel:rd-fill ( / i p v ndone)
   (setq i 0)
   (start_list "run_list")
   (foreach p rd-pend
-    (add_list (strcat (pfset:pad (caddr p) 22)
+    (add_list (strcat (pfset:pad (pfa:id-for-hits (nth 3 p) rd-index) 22)
                       (pfset:pad (pf:fmt-station (car p)) 16)
                       (if (nth i rd-status) "[LABELED]" "")))
     (setq i (1+ i)))
@@ -204,10 +198,13 @@
   (setq g (pfa:gather-compute rd-anchor rd-pass rd-primary
                                   rd-lines rd-inlets))
   (if (null g)
-    (progn (setq rd-pend '() rd-status '() rd-orphans '()) nil)
+    (progn (setq rd-pend '() rd-status '() rd-orphans '() rd-index '()) nil)
     (progn (setq rd-pend    (car g)
                  rd-status  (cadr g)
-                 rd-orphans (caddr g))
+                 rd-orphans (caddr g)
+                 ;; memo hit off the gather that just ran -- rd-fill needs it to
+                 ;; name the rows, and pflabel:setup reads the same entry later
+                 rd-index   (pfa:index-for rd-primary rd-lines rd-inlets))
            T)))
 
 (defun pflabel:rd-sel ( / s idxs out i)
@@ -242,8 +239,8 @@
 ;;   the same build pfi:run-dialog and both setups use.
 (defun pflabel:run-dialog (title passname anchor
                            / rd-anchor rd-primary rd-pass rd-lines rd-inlets
-                             rd-pend rd-status rd-orphans rd-res dcl_id xf cl
-                             pairs result)
+                             rd-pend rd-status rd-orphans rd-index rd-res
+                             dcl_id xf cl pairs result)
   (setq rd-anchor anchor rd-pass passname rd-res nil
         xf        (pfa:anchor->xform anchor))
   (cond
@@ -361,7 +358,9 @@
            (T
             (prompt "\nIndexing structures for ranking...")
             (setq inlets (if preinlets preinlets (pfa:gather-inlets))
-                  index  (pflabel:index-stations inlets lines))
+                  ;; memo hit whenever the run dialog got here first, which is
+                  ;; every path but a caller handing us its own line table
+                  index  (pfa:index-for primary lines inlets))
             (list (cons 'xform    xf)
                   (cons 'anchor   anchor)
                   (cons 'lines    lines)
@@ -380,18 +379,13 @@
 ;;; SECTION 4  --  Per-structure labeling  (engine unchanged from v3)
 ;;; ==========================================================================
 
-(defun pflabel:ranks-for (line-infos context / index)
-  (setq index (cdr (assoc 'index context)))
-  (mapcar
-    '(lambda (li)
-       (pf:rank-on-line (cadr li)
-                        (cdr (assoc (car li) index))
-                        *pf-rank-ascending* *pf-range-eps*))
-    line-infos))
+;; ranks-for retired 2026-08-03 -- rank + alpha-sort + combine-id are one step
+;; and live together in pfa:id-for-hits, which the palette and the run dialog
+;; call as well.
 
 (defun pflabel:process-structure (block-ename context
                                    / ed pt name xf gtop primary hits primhit
-                                     others sta-infos alpha-infos names ranks
+                                     others sta-infos
                                      rule size id px basey topy res e2
                                      offset gapn)
   (setq ed      (entget block-ename)
@@ -422,15 +416,12 @@
                      " top found at sta "
                      (pf:fmt-station (cadr primhit)) "; skipped.")))
     (T
-     (setq others      (vl-remove primhit hits)
-           sta-infos   (cons primhit
-                             (pf:sort-line-infos-alpha others))
-           alpha-infos (pf:sort-line-infos-alpha hits)
-           names       (mapcar 'car alpha-infos)
-           ranks       (pflabel:ranks-for alpha-infos context)
-           rule        (pf:rule-for name *pf-rule-table*)
-           size        (pf:rule-size name rule)
-           id          (pf:combine-id names ranks))
+     (setq others    (vl-remove primhit hits)
+           sta-infos (cons primhit
+                           (pf:sort-line-infos-alpha others))
+           rule      (pf:rule-for name *pf-rule-table*)
+           size      (pf:rule-size name rule)
+           id        (pfa:id-for-hits hits (cdr (assoc 'index context))))
      (if (null rule)
        (prompt (strcat "\n  " name " matches no label rule -- skipped."))
        (progn

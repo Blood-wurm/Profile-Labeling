@@ -115,19 +115,60 @@
 ;;; --------------------------------------------------------------------------
 (setq *pf-pro-roles*        '("INV" "TOP"))  ; positive role suffixes; neither = ERROR
 (setq *pf-tin-design-prefix* "DESIGN_")      ; TIN prefix => proposed; else existing
-(setq *pf-types*            '("STORM" "SANITARY" "WATER"))
+(setq *pf-types*            '("STORM" "SANITARY" "WATER"
+                              "FORCEMAIN" "GAS" "ELECTRIC"))
+
+;;; A type token is a .cl FILENAME prefix -- one word, no underscore -- but the
+;;; sheet says "FORCE MAIN".  This maps token -> the words that PRINT, and
+;;; pf:sheet-type reads a line's type back off PF-NAME through it.  A type
+;;; whose printed wording matches its token needs no row.  Omitting a row that
+;;; IS needed is silent: the AUTO scan simply never sees those lines.
+(setq *pf-type-keywords*
+  '(("FORCEMAIN" . "FORCE MAIN")))
 
 ;;; --------------------------------------------------------------------------
-;;; Pipe materials, PER UTILITY TYPE.  Asserted in the PFSETUP dialog (a
-;;; dropdown that follows the selected type) and stored on the anchor; the
-;;; crossing label reads the SOURCE profile's material -> NN" <MATERIAL>.
-;;; First entry is the per-type default.  PLACEHOLDERS -- edit to the firm's
-;;; real material lists.  Keys must match *pf-types*.
+;;; Pipe materials -- ONE ROW PER MATERIAL, read by four consumers.
+;;;
+;;;   (KEY  N  DIMS  TYPES)
+;;;
+;;; KEY      the string that PRINTS on the sheet (NN" <KEY>) and the lookup
+;;;          key -- no separate display name.  Class-bearing keys ("RCP III")
+;;;          are legal and intended; pf:mat-for falls back to the leading
+;;;          token, so a record still holding a bare "RCP" resolves to the RCP
+;;;          row and keeps labeling as it always did.  No migration needed.
+;;; N        Manning's n.  Was *pfr-nvalues*, a PARALLEL list that could and
+;;;          did drift -- it carried CMP, which the old per-type material
+;;;          lists could not produce.
+;;; DIMS     ((nominal OD wall) ...), INCHES, for outside-to-outside clearance
+;;;          and pf2sew's pipe Thickness.  nil = NOT ON RECORD, and every
+;;;          reader must treat that as UNKNOWN, never as a pass.  Nominal is
+;;;          not the OD and for the OD-based materials not the ID either, so
+;;;          this cannot be a formula -- it is manufacturer data, per class.
+;;;          UNPOPULATED: awaiting the firm's real material list.
+;;; TYPES    ((TYPE rank) ...) -- which *pf-types* offer this material in the
+;;;          PFSETUP dropdown, and in what order.  Rank 1 is that type's
+;;;          default.  nil = recognized but never offered: CMP resolves an n
+;;;          for a legacy record without appearing in any dropdown.
+;;;
+;;; The KEYS are still PLACEHOLDERS -- edit to the firm's real material list.
 ;;; --------------------------------------------------------------------------
+(setq *pf-nvalue-default* 0.013)   ; n when the material matches no row
+
 (setq *pf-materials*
-  '(("STORM"    . ("RCP" "HDPE" "PVC"))
-    ("SANITARY" . ("PVC" "DI"))
-    ("WATER"    . ("DI" "PVC" "COPPER"))))
+  ;;  KEY             N     DIMS  TYPES
+  '(("RCP"          0.013   nil   (("STORM" 1)))
+    ("HDPE"         0.012   nil   (("STORM" 2) ("FORCEMAIN" 3)))
+    ("PVC"          0.010   nil   (("STORM" 3) ("SANITARY" 1) ("WATER" 2)
+                                   ("FORCEMAIN" 2)))
+    ("DI"           0.013   nil   (("SANITARY" 2) ("WATER" 1) ("FORCEMAIN" 1)))
+    ("COPPER"       0.011   nil   (("WATER" 3)))
+    ("CMP"          0.024   nil   nil)
+    ;; Dry utilities.  N is required by the row shape and is MEANINGLESS here --
+    ;; nothing routes gas or electric through the hydraulics path.
+    ("PE"           0.010   nil   (("GAS" 1)))
+    ("STEEL"        0.012   nil   (("GAS" 2)))
+    ("PVC CONDUIT"  0.010   nil   (("ELECTRIC" 1)))
+    ("DUCT BANK"    0.013   nil   (("ELECTRIC" 2)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Utility-type derived layers & templates
@@ -142,14 +183,36 @@
   '(("WATER"    . "ALIGN-WATER_P")
     ("SANITARY" . "ALIGN-SAN_P")
     ("STORM"    . "ALIGN-STM_P")))
+;;; The wording here is what lands on PF-NAME, and pf:sheet-type reads it back
+;;; through *pf-type-keywords* -- keep a type's keyword present in its own
+;;; template.
 (setq *pfx-label-templates*
-  '(("WATER"    . "PROPOSED WATER MAIN '[name]'")
-    ("SANITARY" . "PROPOSED SANITARY LINE '[name]'")
-    ("STORM"    . "STORM LINE '[name]'")))
+  '(("WATER"     . "PROP. WATER MAIN '[name]'")
+    ("SANITARY"  . "PROP. SANITARY LINE '[name]'")
+    ("STORM"     . "PROP. STORM LINE '[name]'")
+    ("FORCEMAIN" . "PROP. FORCE MAIN '[name]'")
+    ("GAS"       . "PROP. GAS LINE '[name]'")
+    ("ELECTRIC"  . "PROP. ELECTRIC LINE '[name]'")))
+;;; Crossings are abbreviated "PROP.", matching *pf-rule-table*'s "CONST."
+;;; prefix -- EVERY type, no exceptions.  pf:cross-desc falls back to
+;;; "<TYPE> CROSSING" with no warning, so a missing row here reads as a
+;;; wording problem rather than the config miss it is.
 (setq *pfx-cross-templates*
-  '(("WATER"    . "PROPOSED WATER CROSSING")
-    ("SANITARY" . "PROPOSED SANITARY CROSSING")
-    ("STORM"    . "STORM CROSSING")))
+  '(("WATER"     . "PROP. WATER CROSSING")
+    ("SANITARY"  . "PROP. SANITARY CROSSING")
+    ("STORM"     . "PROP. STORM CROSSING")
+    ("FORCEMAIN" . "PROP. FORCE MAIN CROSSING")
+    ("GAS"       . "PROP. GAS CROSSING")
+    ("ELECTRIC"  . "PROP. ELECTRIC CROSSING")))
+
+;;; TEMP -- test drawing only.  A row here REPLACES the material-table material
+;;; in the NN" row (pf:size-rowtext); a type with no row keeps table wording.
+;;; Delete this whole form to revert.
+(setq *pfx-size-suffix*
+  '(("FORCEMAIN" . "PVC C900")
+    ("WATER"     . "C900 DR 14 PVC")
+    ("STORM"     . "ADS HP STORM (PP)")
+    ("SANITARY"  . "PVC SDR 26")))
 
 ;;; --------------------------------------------------------------------------
 ;;; Crossing / pipe rendering
@@ -198,6 +261,14 @@
 (setq *pfx-sample-step* 2.0)   ; ft -- .cl walk interval (arcs followed)
 (setq *pfx-refine-step* 0.1)   ; ft -- re-sample interval near a hit
 
+;; SCOPE record schema.  The scan short-circuits any source pair whose
+;; checksums match SCOPE, so a change to WHAT THE SCAN ANSWERS -- a new filter,
+;; a different hit set -- is invisible on an unchanged drawing: the pair is
+;; never re-cut and the old answer stands forever.  BUMP THIS IN THE SAME EDIT
+;; and every SCOPE record ages out, costing one full rescan per target.
+;; "2" = 2026-08-06, every intersection per pair rather than the first.
+(setq *pfx-scan-schema* "2")   ; see pfa:scope-read / pfa:xing-scan
+
 ;; Terminus band, EITHER alignment -- a hit this close to a .cl's first or last
 ;; station is two lines meeting at a SHARED STRUCTURE (junction manhole, or a
 ;; branch tying into a main mid-run), not a pipe crossing over or under one.
@@ -207,6 +278,28 @@
 ;; if a genuine crossing near a line end is being skipped (discovery names its
 ;; skips, so that case reports rather than vanishing).
 (setq *pfx-terminus-tol* 2.0)  ; ft -- see pf:shared-structure-p
+
+;; How close a STRUCTURE block has to sit to an intersection to be the structure
+;; the two lines share -- see pfa:struct-shared-p, the second and broader test.
+;; The terminus band above only catches a tie-in whose .cl STOPS at the joint;
+;; a branch drawn a few feet past the main, or two mains meeting through a
+;; junction box mid-run, terminate nowhere near it and no tolerance on that test
+;; can reach them.  A structure that sits on BOTH .cl files is the physical fact
+;; underneath, and where a centerline happens to stop does not enter into it.
+;; Generous ON PURPOSE: this is only "which structure is at this crossing", and
+;; the discriminator is the on-both-lines test, which uses *pf-offset-tol*
+;; (0.15 ft) and is what actually keeps a real crossing UNDER a manhole -- that
+;; manhole is on one .cl, not two.
+(setq *pfx-struct-tol* 5.0)    ; ft -- see pfa:struct-shared-p
+
+;; Minimum vertical separation at a crossing, measured OUTSIDE-to-OUTSIDE (the
+;; lower pipe's outside crown to the upper pipe's outside invert), not
+;; invert-to-invert.  18 in, stored in FEET to match the two tolerances above
+;; and the elevation units the compare runs in.  One number for every pair of
+;; utility types for now; the regulated separations differ by pair
+;; (water-over-sanitary is the usual outlier) and this becomes a pair-keyed
+;; table when that matters.
+(setq *pfx-min-clear* 1.5)     ; ft -- see pfa:xing-clearance
 
 ;; Corridor pre-filter distance for a SAMPLED .cl shape (pflabel:build-lines'
 ;; last-resort verts).  A station walk lands ON the centerline, but the chords
@@ -325,7 +418,9 @@
 ;;; scalars, which were authored at a different scale.  Using it here would
 ;;; draw the icon 2.5x too big.
 (setq *pfa-icon-ref-hplot* 50.0)
-(setq *pfa-xing-layer*  "PF-XING")        ; crossing station lines (recon scans this)
+(setq *pfa-xing-layer*  "PF-XING")        ; RETIRED 2026-08-06 -- crossing station
+                                          ; lines now draw on PF-ANNO with every
+                                          ; other label; kept for compatibility
 (setq *pfa-recon-eps*   1.0e-4)           ; float round-trip tolerance
 (setq *pfa-key-tol*     2.0)              ; content-key station drift tolerance
 (setq *pfa-probe-tol*   0.05)             ; grid-LINE-near-corner sanity probe
@@ -411,14 +506,9 @@
 (setq *pfr-sigfigs* 7)             ; Hydraflow writes ~7 significant digits
 (setq *pfr-line-type* "Cir")       ; circular; Rise = Span = size / 12
 (setq *pfr-junction-loss* 0.15)    ; inert: the header turns auto-compute ON
-(setq *pfr-nvalue-default* 0.013)
-(setq *pfr-nvalues*                ; Manning's n by the record's material
-  '(("RCP"    . 0.013)
-    ("HDPE"   . 0.012)
-    ("PVC"    . 0.010)
-    ("DI"     . 0.013)
-    ("CMP"    . 0.024)
-    ("COPPER" . 0.011)))
+;;; Manning's n moved to *pf-materials* (one row per material) 2026-08-04 --
+;;; *pfr-nvalues* and *pfr-nvalue-default* were the drifting half of a pair.
+;;; Read it through pf:mat-n.
 
 ;;; The global-settings block, verbatim file lines.  <NLINES> is the only
 ;;; substitution.  These are Hydraflow DESIGN settings, not model data --
@@ -589,6 +679,27 @@
   '(NIL "MH1" "2" "4"
     "<Manhole TaperFormat=\"0\" BottomDia=\"4\" TopDia=\"4\" TaperOffset=\"0\" FixedTaperHeight=\"0\" Thick=\"8\"/>"
     nil nil ""))
+
+;;; --------------------------------------------------------------------------
+;;; PFQTY  --  the quantities takeoff
+;;; --------------------------------------------------------------------------
+;;; THE SEAM.  Structure type and size are resolved attribute-first, so the day
+;;; the firm's blocks carry the tags below the report starts reading them with
+;;; no code change; *pf-rule-table* is only the fallback.  Retag here if the
+;;; blocks end up using different attribute names.
+(setq *pfq-attr-type* "TYPE")     ; block ATTRIB tag holding the structure type
+(setq *pfq-attr-size* "SIZE")     ; block ATTRIB tag holding the structure size
+
+;;; Printed instead of a value nobody asserted.  A takeoff never guesses: an
+;;; unbound material is NOT the per-type default, because a quantity sheet is
+;;; the wrong place to discover the assumption.
+(setq *pfq-material-unknown* "UNSPECIFIED")
+(setq *pfq-size-unknown*     "-")
+(setq *pfq-struct-unknown*   "UNIDENTIFIED")
+
+(setq *pfq-lf-decimals* 1)        ; decimals on every LF figure in the report
+(setq *pfq-rule*                  ; the report's horizontal rule
+  "----------------------------------------------------------------------")
 
 (princ "\npftools-cfg.lsp loaded (V4 configuration).")
 (princ)

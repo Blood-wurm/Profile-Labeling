@@ -21,11 +21,10 @@ exact inverses of the transform PFLABEL draws with, which is the whole point: a
 No Carlson command is driven, no dialog is scripted — the file is composed and
 written directly.
 
-**Which grid** resolves from the pick itself (`pfpro:owner`): the anchor nearest
-the polyline's **leftmost endpoint**. No bounding box, no containment test, and
-`pfa:extents` is never consulted — so a legacy anchor with no `WIDTH` recorded
-resolves like any other, and there is never a second prompt. Zero candidates is
-a refusal, never a guess.
+**Which grid** resolves from the pick itself (`pfpro:owner`): the anchor whose
+**box** is nearest the polyline's **leftmost endpoint** — zero when the endpoint
+is inside the grid, growing with how far outside it is. No directional rule, no
+second prompt. Zero candidates is a refusal, never a guess.
 
 **Naming comes from the `.cl` basename**, with the **TYPE segment upcased**:
 `Storm_BA.cl` → `STORM_BA_INV.pro`. `*pf-types*` are `STORM` / `SANITARY` /
@@ -93,22 +92,44 @@ first, so it can only ever run from a command context.
 - **Order is never sorted into place.** A polyline drawn right-to-left is
   normal and is reversed whole; one that genuinely backtracks is a drafting
   fault and is refused by name. Sorting would launder the fault into a
-  plausible `.pro`. Two vertices at one station (a vertical segment) get their
-  own message — a structure drop is the short run between a vertex PAIR, which
-  is what the reference file shows.
-- **Nearest-anchor resolution carries two guards**, neither of which costs a
-  prompt:
-  - **The insert must be at or below-left of the left endpoint.** The insert
-    *is* the grid's lower-left `(leftx, basey)`, and a profile always draws up
-    and to the right of it. Without this, stacked grids — the normal sheet
-    layout — steal each other's polylines: a pipe drawn high in its own grid is
-    nearer to the insert of the grid ABOVE it than to its own. Deleting the two
-    `<=` tests gives pure nearest-insert.
-  - **COPIES are excluded** (`pfa:copy-p`), because `pfa:all-anchors` does not
-    filter them — only `pfa:find-anchor` does. A copy sits elsewhere in the
-    drawing and would win outright for a polyline drawn inside it, and
-    `pfa:files-put` would bind into a cloned ledger nothing else resolves. A
-    polyline whose nearest grid is a copy gets its own refusal naming PFREMOVE.
+  plausible `.pro`.
+- **The written precision decides what "one station" means.** `pfpro:write` is
+  4 decimals, so `pfpro:orient` compares vertices as `pfpro:same-written` — the
+  file, not an epsilon, is the arbiter. That separates three faults that all
+  look alike at one station:
+  - **Same station, same elevation** = a duplicate vertex. The two output lines
+    would be identical, so it is collapsed and reported, never refused. Left
+    in, its zero station gap reads as a STRUCTURE to `pfr:groups` and PFINVERT —
+    a phantom manhole on every report.
+  - **Same station, different elevation** = a real vertical segment, refused. A
+    structure drop is the short run between a vertex PAIR, which is what the
+    reference file shows, and anything up to `*pfi-struct-width-max*` still
+    reads as one structure.
+  - **A step back smaller than the written precision** is invisible in the file,
+    so it is not a backtrack and does not decide direction. The old bare `<=`
+    made every such step a fault and then mislabelled it a vertical segment;
+    a sub-micron blip from a snapped pick is unfindable in the drawing.
+  Refusals name the offending vertex INDEX and its drawing point, because a
+  station alone cannot locate a vertical segment — both vertices print the same
+  station.
+- **Ownership is distance to the grid BOX, not to the insert.** The insert is a
+  *corner*, and measuring to a corner breaks the normal stacked sheet: grids at
+  `(0,0)` and `(0,300)`, a polyline drawn high in the lower grid with its left
+  end at `(20,240)`, is 240.8 from its own insert and 63.2 from the grid above —
+  the wrong grid wins outright. The box makes that impossible instead of
+  needing a below-left guard to compensate. Extents come from `pfa:extents`; a
+  missing `WIDTH` leaves that side unbounded rather than refusing, so a pre-icon
+  anchor still resolves.
+- **Outside every grid still resolves, with a warning.** Nearest wins by design
+  — there is no containment refusal — but a left end outside every box is the
+  shape of a polyline drawn beside its grid, and the stations it writes are what
+  PFINVERT reads back as truth, so it says so.
+- **COPIES are candidates, then refused if one wins** (`pfa:copy-p`).
+  `pfa:all-anchors` does not filter them; only `pfa:find-anchor` does. Skipping
+  them during the scan is worse than useless — a polyline drawn inside a copy
+  would silently go to whatever real grid is next-nearest, and `pfa:files-put`
+  would bind a `.pro` to a grid it was never cut from. A polyline whose nearest
+  grid is a copy gets its own refusal naming PFREMOVE.
 - **`pfpro:check-range` guards a wrong `STA0`.** Mapped stations disjoint from
   `pf:cl-range` = refusal; partially outside = warning, written anyway. This is
   stricter than the label engines on purpose: a wrong `STA0` only misplaces
